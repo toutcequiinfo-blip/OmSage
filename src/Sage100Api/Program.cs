@@ -41,7 +41,10 @@ var v1 = app.MapGroup("/api/v1");
 // ---------- Santé (sans clé) ----------
 v1.MapGet("/sante", async (IWorkerClient worker, CancellationToken ct) =>
 {
-    var ping = await worker.Envoyer(Operations.Ping, null, ct);
+    // Réponse rapide même si le worker est occupé ou ouvre encore Sage : la borne s'en sert pour savoir si elle est en ligne.
+    using var delai = CancellationTokenSource.CreateLinkedTokenSource(ct);
+    delai.CancelAfter(TimeSpan.FromSeconds(5));
+    var ping = await worker.Envoyer(Operations.Ping, null, delai.Token);
     return Results.Ok(new { api = "ok", worker = ping.Ok ? (object?)ping.Resultat : new { erreur = ping.MessageErreur } });
 }).WithTags("Santé");
 
