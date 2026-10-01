@@ -30,6 +30,10 @@ builder.Services.ConfigureHttpJsonOptions(o => o.SerializerOptions.PropertyNamin
 var app = builder.Build();
 app.UseSwagger();
 app.UseSwaggerUI();
+// Application tablette de la borne (wwwroot/borne). Toujours revalidée : c'est son service worker qui la garde hors ligne.
+app.UseDefaultFiles();
+app.UseStaticFiles(new StaticFileOptions { OnPrepareResponse = f => f.Context.Response.Headers.CacheControl = "no-cache" });
+app.MapGet("/", () => Results.Redirect("/borne/")).ExcludeFromDescription();
 app.UseMiddleware<CleApi>();
 
 var v1 = app.MapGroup("/api/v1");

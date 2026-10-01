@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+  <meta name="theme-color" content="#1f4e79">
+  <title>Borne Sage 100</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <div class="marque">Borne <span id="nom-borne"></span></div>
+    <div id="client-actuel" class="client-actuel"></div>
+    <button id="etat" class="etat" type="button" title="État de la connexion et file d'envoi">…</button>
+    <button id="btn-reglages" class="icone" type="button" aria-label="Réglages">⚙</button>
+  </header>
+
+  <div id="bandeau" class="bandeau" hidden></div>
+
+  <!-- 1. Choix du client -->
+  <main id="ecran-client" class="ecran">
+    <h1>Quel client ?</h1>
+    <input id="recherche-client" class="recherche" type="search" placeholder="Rechercher un client (code ou nom)" autocomplete="off">
+    <ul id="liste-clients" class="liste-clients"></ul>
+  </main>
+
+  <!-- 2. Vente : articles et panier -->
+  <main id="ecran-vente" class="ecran vente" hidden>
+    <section class="catalogue">
+      <input id="recherche-article" class="recherche" type="search" placeholder="Rechercher un article ou scanner un code-barres" autocomplete="off">
+      <div id="familles" class="familles"></div>
+      <div id="articles" class="articles"></div>
+    </section>
+    <aside class="panier">
+      <h2>Commande</h2>
+      <ul id="lignes" class="lignes"></ul>
+      <div class="totaux">
+        <div><span>Total HT</span><span id="total-ht">0</span></div>
+        <div><span>TVA estimée (<span id="taux-tva"></span> %)</span><span id="total-tva">0</span></div>
+        <div class="ttc"><span>Total TTC estimé</span><span id="total-ttc">0</span></div>
+      </div>
+      <div class="actions">
+        <button id="btn-annuler-vente" class="secondaire" type="button">Annuler</button>
+        <button id="btn-valider" class="principal" type="button" disabled>Valider la commande</button>
+      </div>
+    </aside>
+  </main>
+
+  <!-- 3. Paiement -->
+  <main id="ecran-paiement" class="ecran paiement" hidden>
+    <h1>Encaissement <span id="paiement-numero" class="discret"></span></h1>
+    <div class="montants">
+      <div><span>Total TTC estimé</span><strong id="p-total">0</strong></div>
+      <div><span>Déjà encaissé</span><strong id="p-paye">0</strong></div>
+      <div class="reste"><span>Reste à payer</span><strong id="p-reste">0</strong></div>
+    </div>
+    <div id="modes" class="modes"></div>
+    <div id="saisie-paiement" class="saisie-paiement" hidden>
+      <label>Montant reçu <input id="p-montant" type="number" inputmode="decimal" min="0" step="0.01"></label>
+      <label id="lbl-reference">Référence <input id="p-reference" type="text" maxlength="20" placeholder="N° de chèque, transaction…"></label>
+      <div id="p-rendu" class="rendu"></div>
+      <button id="btn-encaisser" class="principal" type="button">Encaisser</button>
+    </div>
+    <ul id="paiements" class="paiements"></ul>
+    <div class="actions">
+      <button id="btn-terminer" class="principal" type="button">Terminer</button>
+    </div>
+  </main>
+
+  <!-- 4. Fin de vente -->
+  <main id="ecran-fin" class="ecran fin" hidden>
+    <h1>Merci !</h1>
+    <div id="recap" class="recap"></div>
+    <button id="btn-nouvelle" class="principal grand" type="button">Nouvelle vente</button>
+  </main>
+
+  <!-- 5. Réglages et file d'envoi -->
+  <main id="ecran-reglages" class="ecran reglages" hidden>
+    <h1>Réglages</h1>
+    <form id="form-reglages" class="form">
+      <label>Nom de la borne (10 caractères max.) <input name="borne" maxlength="10" required pattern="[A-Za-z0-9_]+"></label>
+      <label>Clé d'API <input name="cle" type="password" required autocomplete="off"></label>
+      <label>Taux de TVA pour l'estimation (%) <input name="tauxTva" type="number" step="0.01" min="0" required></label>
+      <label>Client par défaut (facultatif) <input name="clientDefaut" maxlength="17"></label>
+      <div class="actions">
+        <button type="submit" class="principal">Enregistrer</button>
+        <button id="btn-catalogue" type="button" class="secondaire">Recharger le catalogue</button>
+        <button id="btn-fermer-reglages" type="button" class="secondaire">Fermer</button>
+      </div>
+    </form>
+    <p id="info-catalogue" class="discret"></p>
+    <h2>File d'envoi vers Sage</h2>
+    <p class="discret">Les ventes sont enregistrées sur la tablette, puis envoyées à Sage dès que le serveur répond.</p>
+    <button id="btn-synchroniser" type="button" class="secondaire">Envoyer maintenant</button>
+    <ul id="file" class="file"></ul>
+  </main>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>

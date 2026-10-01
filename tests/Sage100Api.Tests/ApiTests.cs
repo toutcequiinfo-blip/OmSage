@@ -64,6 +64,20 @@ public sealed class ApiTests : IDisposable
     }
 
     [Fact]
+    public async Task L_application_borne_est_servie_sans_cle()
+    {
+        var anonyme = _usine.CreateClient();
+        var page = await anonyme.GetAsync("/borne/");
+        var manifeste = await anonyme.GetAsync("/borne/manifest.webmanifest");
+        var api = await anonyme.GetAsync("/api/v1/catalogue");
+
+        Assert.Equal(HttpStatusCode.OK, page.StatusCode);
+        Assert.Contains("Borne Sage 100", await page.Content.ReadAsStringAsync());
+        Assert.Equal(HttpStatusCode.OK, manifeste.StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, api.StatusCode);
+    }
+
+    [Fact]
     public async Task Une_commande_invalide_renvoie_422_sans_appeler_Sage()
     {
         var c = Commande();

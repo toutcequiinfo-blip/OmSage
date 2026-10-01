@@ -6,7 +6,10 @@ using Sage100Api.Ecritures;
 
 namespace Sage100Api;
 
-/// <summary>Contrôle de l'en-tête X-Api-Key (une clé par application cliente). Santé et Swagger restent publics.</summary>
+/// <summary>
+/// Contrôle de l'en-tête X-Api-Key (une clé par application cliente) sur les routes /api.
+/// Santé, Swagger et les fichiers de l'application borne restent publics : la borne saisit sa clé dans ses réglages.
+/// </summary>
 public sealed class CleApi(RequestDelegate suivant, IOptionsMonitor<SageOptions> options)
 {
     public const string Entete = "X-Api-Key";
@@ -15,7 +18,7 @@ public sealed class CleApi(RequestDelegate suivant, IOptionsMonitor<SageOptions>
     public async Task InvokeAsync(HttpContext http)
     {
         var chemin = http.Request.Path;
-        if (chemin.StartsWithSegments("/swagger") || chemin.StartsWithSegments("/api/v1/sante"))
+        if (!chemin.StartsWithSegments("/api") || chemin.StartsWithSegments("/api/v1/sante"))
         {
             await suivant(http);
             return;

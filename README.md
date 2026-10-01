@@ -17,6 +17,7 @@ Borne / applications ──HTTPS + X-Api-Key──► Sage100Api (.NET 8, 64 bit
 | `src/Sage100Api` | API REST, Swagger, clés d'API, lectures SQL, journal des opérations |
 | `src/Sage100Api.Worker` | Seul processus qui charge les Objets Métiers (DLL 32 bits). Exécute les écritures une par une. |
 | `src/Sage100Api.Contracts` | Objets échangés (commande, encaissement), validation, protocole API ↔ worker |
+| `src/Sage100Api/wwwroot/borne` | Application tablette de la borne (PWA), servie par l'API sur `/borne/` |
 | `tests/Sage100Api.Tests` | Tests de l'API avec un faux worker (sans Sage) |
 
 **Règles de base :**
@@ -82,20 +83,41 @@ POST /api/v1/commandes/BORNE1-20260929-0001/encaissements
 
 **Sur la copie de la base uniquement** tant que la recette n'est pas terminée.
 
+## Application tablette (borne)
+
+L'API sert l'application sur **http://<serveur>:5080/borne/**. Il n'y a rien à installer à part : c'est une page web installable (PWA).
+
+**Parcours :** choix du client, puis articles et panier, puis encaissement (plusieurs modes possibles pour une même vente, avec la monnaie à rendre en espèces), puis fin.
+
+**Hors ligne :**
+- Chaque commande et chaque encaissement est d'abord enregistré sur la tablette (IndexedDB), puis envoyé à Sage. L'envoi se fait toutes les 20 secondes, au retour du réseau, ou avec le bouton « Envoyer maintenant ».
+- Les renvois ne créent jamais de doublon, grâce à l'`idExterne` et à l'anti-doublon de l'API.
+- Un encaissement attend toujours que sa commande soit dans Sage avant de partir.
+- Un refus de Sage (422 : stock, client bloqué…) est affiché dans **Réglages > File d'envoi**, avec les boutons Réessayer et Abandonner.
+- Le catalogue (clients, articles, prix, stock, modes de règlement) est gardé sur la tablette et rafraîchi toutes les 10 minutes.
+
+**Montants :** la borne affiche un TTC **estimé** avec le taux de TVA des réglages. Le net à payer réel est celui calculé par Sage, visible dans la file d'envoi une fois la commande envoyée.
+
+**Première utilisation :** l'écran Réglages s'ouvre. Saisis le nom de la borne (par exemple `BORNE1`), la clé d'API et le taux de TVA. Le numéro de vente `BORNE1-000001` devient la référence de la pièce dans Sage.
+
+**Sur la tablette :** le cache hors ligne (service worker) n'est activé par le navigateur qu'en **HTTPS** ou sur `localhost`.
+- En `http://` depuis la tablette, la file d'envoi fonctionne quand même. En revanche, la page ne peut pas être rouverte si le serveur est coupé.
+- Pour les tests, dans Chrome Android : `chrome://flags`, option « Insecure origins treated as secure », ajouter `http://SQ-SOFT:5080`.
+- La solution définitive est HTTPS : voir « Reste à faire ».
+
 ## Tests
 
 ```
 dotnet test tests/Sage100Api.Tests
 ```
 
-8 tests couvrent la clé d'API, la validation, les doublons de commandes et d'encaissements, et la conversion des erreurs Sage et du worker en codes HTTP. Ils tournent sans Sage.
+9 tests couvrent la clé d'API, l'accès à l'application borne, la validation, les doublons de commandes et d'encaissements, et la conversion des erreurs Sage et du worker en codes HTTP. Ils tournent sans Sage.
 
 ## Reste à faire
 
 - Exécuter l'API et le worker en **services Windows** sur le serveur Sage, avec HTTPS.
 - Faire la **synchronisation incrémentale** du catalogue : aujourd'hui, `/catalogue` renvoie un instantané complet.
 - Créer un **compte SQL en lecture seule** dédié à l'API.
-- Développer l'**application tablette** (PWA hors ligne).
 - Choisir le **journal** des acomptes par mode de règlement : aujourd'hui, Sage prend le journal par défaut du mode, par exemple BEU pour Espèces au lieu de CAIS.
 
 ## Recette
