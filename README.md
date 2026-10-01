@@ -109,6 +109,37 @@ L'API sert l'application sur **http://<serveur>:5080/borne/**. Il n'y a rien à 
 - Pour les tests, dans Chrome Android : `chrome://flags`, option « Insecure origins treated as secure », ajouter `http://SQ-SOFT:5080`.
 - La solution définitive est HTTPS : voir « Reste à faire ».
 
+## Installation sur le serveur (services Windows et HTTPS)
+
+L'API et le worker deviennent deux services Windows qui démarrent avec le PC : **Sage100Api** et **Sage100Api.Worker**. Ils redémarrent seuls en cas de plantage. Plus besoin de Visual Studio ni de F5 pour faire tourner la borne.
+
+Dans **PowerShell ouvert en tant qu'administrateur**, depuis le dossier du dépôt (par exemple `C:\Dev\OmSage`) :
+
+1. Arrête l'exécution dans Visual Studio. L'API et le worker lancés par F5 occupent le port 5080 et le canal du worker.
+2. Crée le certificat HTTPS :
+   ```
+   powershell -ExecutionPolicy Bypass -File deploy\creer-certificats.ps1
+   ```
+3. Installe les services :
+   ```
+   powershell -ExecutionPolicy Bypass -File deploy\installer.ps1
+   ```
+   Le script demande le compte Windows des services : prends celui qui a accès à SQL Server et à Sage, par exemple ton compte. Ce compte doit avoir un mot de passe.
+4. Sur chaque tablette, installe une seule fois `C:\Sage100Api\certificats\autorite-sage100api.cer` : Paramètres > Sécurité > Chiffrement et identifiants > Installer un certificat > **Certificat CA**.
+5. Ouvre la borne sur **https://SQ-SOFT:5443/borne/**, ou avec l'adresse IP du serveur. Avec le cadenas, l'application se rouvre même serveur coupé.
+
+Ce qui est installé dans `C:\Sage100Api` :
+- `api\` : l'API. Ses réglages sont dans `appsettings.Local.json`, copié depuis le dépôt à la première installation, et dans `appsettings.Https.json`, écrit par le script des certificats.
+- `worker\` : le worker. Son `worker.json` est gardé lors des mises à jour, et son journal est dans `logs\`.
+- `certificats\` : l'autorité pour les tablettes et le certificat du serveur.
+
+**Mise à jour après un Git > Tirer :** relance `deploy\installer.ps1`. Il arrête les services, recompile, puis redémarre.
+
+À savoir :
+- **Passage de http:// à https:// :** pour la tablette, c'est une nouvelle adresse. Vérifie d'abord que la file d'envoi de l'ancienne adresse est vide, puis ressaisis les réglages de la borne (nom, clé) sur la nouvelle.
+- **Adresse IP :** le certificat couvre le nom et les adresses IP actuelles du serveur. Réserve l'adresse IP du serveur dans la box ou le routeur. Si elle change, relance le script des certificats et réinstalle l'autorité sur les tablettes.
+- **Développement :** pour retravailler dans Visual Studio, arrête d'abord les services avec `Stop-Service Sage100Api, Sage100Api.Worker`.
+
 ## Tests
 
 ```
@@ -119,7 +150,6 @@ dotnet test tests/Sage100Api.Tests
 
 ## Reste à faire
 
-- Exécuter l'API et le worker en **services Windows** sur le serveur Sage, avec HTTPS.
 - Faire la **synchronisation incrémentale** du catalogue : aujourd'hui, `/catalogue` renvoie un instantané complet.
 - Afficher le **stock par valeur de gamme** (F_GAMSTOCK) ; la borne montre aujourd'hui le stock total de l'article.
 - Créer un **compte SQL en lecture seule** dédié à l'API.
