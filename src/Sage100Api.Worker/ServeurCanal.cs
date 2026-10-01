@@ -32,11 +32,13 @@ namespace Sage100Api.Worker
 
         void Servir(NamedPipeServerStream canal)
         {
-            using (canal)
-            using (var lecteur = new StreamReader(canal, new UTF8Encoding(false)))
-            using (var ecrivain = new StreamWriter(canal, new UTF8Encoding(false)) { AutoFlush = true })
+            // Tout est dans le try : si l'API abandonne l'appel (délai dépassé), le canal est coupé et
+            // l'écriture de la réponse, comme la fermeture des flux, lève une IOException sans conséquence.
+            try
             {
-                try
+                using (canal)
+                using (var lecteur = new StreamReader(canal, new UTF8Encoding(false)))
+                using (var ecrivain = new StreamWriter(canal, new UTF8Encoding(false)) { AutoFlush = true })
                 {
                     string? ligne;
                     while ((ligne = lecteur.ReadLine()) != null)
@@ -55,10 +57,10 @@ namespace Sage100Api.Worker
                         ecrivain.WriteLine(JsonSerializer.Serialize(reponse, WorkerProtocol.Json));
                     }
                 }
-                catch (IOException)
-                {
-                    // Client déconnecté : rien à faire.
-                }
+            }
+            catch (Exception ex) when (ex is IOException || ex is ObjectDisposedException)
+            {
+                // Client déconnecté avant la réponse : rien à faire.
             }
         }
     }
