@@ -20,7 +20,7 @@ public static class CodesApi
 }
 
 /// <summary>Enchaîne : journal (anti-doublon) -> worker Objets Métiers -> journal.</summary>
-public sealed class ServiceEcritures(JournalOperations journal, IWorkerClient worker, ILecturesSage lectures)
+public sealed class ServiceEcritures(JournalOperations journal, IWorkerClient worker, ILecturesSage lectures, ControleStock stock)
 {
     public const string TypeCommande = "commande";
     public const string TypeEncaissement = "encaissement";
@@ -30,6 +30,14 @@ public sealed class ServiceEcritures(JournalOperations journal, IWorkerClient wo
         var cle = JournalOperations.Cle(TypeCommande, c.IdExterne);
         var existante = journal.Reserver(cle, TypeCommande, application);
         if (existante != null) return DejaVue<CommandeResult>(existante, r => r.DejaExistante = true);
+
+        // Une commande déjà dans Sage (renvoi après perte du journal) a déjà réservé son stock : pas de contrôle,
+        // le worker la retrouvera par DO_RefExterne.
+        if (await lectures.PieceCommande(c.IdExterne) is null && await stock.Verifier(c) is { } manque)
+        {
+            journal.Terminer(cle, StatutOperation.Erreur, null, manque);
+            return ResultatEcriture<CommandeResult>.Echec(CodesErreur.SageMetier, manque);
+        }
 
         var reponse = await worker.Envoyer(Operations.CreerCommande, c, ct);
         return Conclure<CommandeResult>(cle, reponse, r => r.Piece);
