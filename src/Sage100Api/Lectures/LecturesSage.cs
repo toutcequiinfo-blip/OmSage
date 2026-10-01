@@ -6,14 +6,20 @@ namespace Sage100Api.Lectures;
 
 public sealed record Client(string Numero, string Intitule, string? Ville, string? Telephone, string? Email);
 
-public sealed record Article(string Reference, string Designation, string? Famille, string? CodeBarre, decimal PrixVenteHT, decimal Stock, decimal StockReserve)
+/// <summary>Gamme1 / Gamme2 : intitulés des gammes (par exemple « Taille »), null si l'article n'est pas à gamme.</summary>
+public sealed record Article(string Reference, string Designation, string? Famille, string? CodeBarre, decimal PrixVenteHT, decimal Stock, decimal StockReserve,
+    string? Gamme1 = null, string? Gamme2 = null)
 {
     public decimal StockDisponible => Stock - StockReserve;
 }
 
 public sealed record ModeReglement(string Intitule, string? Code);
 
-public sealed record Catalogue(DateTime GenereLe, IReadOnlyList<Client> Clients, IReadOnlyList<Article> Articles, IReadOnlyList<ModeReglement> ModesReglement);
+/// <summary>Valeur (ou couple de valeurs) de gamme vendable pour un article : à renvoyer dans gamme1 / gamme2 de la ligne de commande.</summary>
+public sealed record EnumereGamme(string Article, string Gamme1, string? Gamme2, string? CodeBarre);
+
+public sealed record Catalogue(DateTime GenereLe, IReadOnlyList<Client> Clients, IReadOnlyList<Article> Articles, IReadOnlyList<ModeReglement> ModesReglement,
+    IReadOnlyList<EnumereGamme> Gammes);
 
 /// <summary>Lectures directes en SQL. Codes et champs : « Structure des bases Sage 100 ».</summary>
 public interface ILecturesSage
@@ -23,6 +29,7 @@ public interface ILecturesSage
     Task<IReadOnlyList<Article>> Articles(string? recherche, string? famille, int page, int taille);
     Task<Article?> Article(string reference);
     Task<IReadOnlyList<ModeReglement>> ModesReglement();
+    Task<IReadOnlyList<EnumereGamme>> Gammes(string? article = null);
     Task<string?> PieceCommande(string idExterne);
 }
 
@@ -35,10 +42,13 @@ public sealed class LecturesSql(IOptions<SageOptions> options) : ILecturesSage
     const string SelectArticle =
         "SELECT a.AR_Ref AS Reference, a.AR_Design AS Designation, a.FA_CodeFamille AS Famille, a.AR_CodeBarre AS CodeBarre, " +
         "CAST(a.AR_PrixVen AS decimal(18,6)) AS PrixVenteHT, " +
-        "CAST(ISNULL(SUM(s.AS_QteSto), 0) AS decimal(18,6)) AS Stock, CAST(ISNULL(SUM(s.AS_QteRes), 0) AS decimal(18,6)) AS StockReserve " +
+        "CAST(ISNULL(SUM(s.AS_QteSto), 0) AS decimal(18,6)) AS Stock, CAST(ISNULL(SUM(s.AS_QteRes), 0) AS decimal(18,6)) AS StockReserve, " +
+        // AR_Gamme1 / AR_Gamme2 : indice dans P_GAMME (0 = pas de gamme).
+        "(SELECT TOP 1 G_Intitule FROM P_GAMME WHERE cbIndice = a.AR_Gamme1 AND a.AR_Gamme1 > 0) AS Gamme1, " +
+        "(SELECT TOP 1 G_Intitule FROM P_GAMME WHERE cbIndice = a.AR_Gamme2 AND a.AR_Gamme2 > 0) AS Gamme2 " +
         "FROM F_ARTICLE a LEFT JOIN F_ARTSTOCK s ON s.AR_Ref = a.AR_Ref";
 
-    const string GroupArticle = " GROUP BY a.AR_Ref, a.AR_Design, a.FA_CodeFamille, a.AR_CodeBarre, a.AR_PrixVen";
+    const string GroupArticle = " GROUP BY a.AR_Ref, a.AR_Design, a.FA_CodeFamille, a.AR_CodeBarre, a.AR_PrixVen, a.AR_Gamme1, a.AR_Gamme2";
 
     SqlConnection Cnx() => new(options.Value.ChaineSql);
 
@@ -82,6 +92,21 @@ public sealed class LecturesSql(IOptions<SageOptions> options) : ILecturesSage
         using var c = Cnx();
         var r = await c.QueryAsync<ModeReglement>(
             "SELECT R_Intitule AS Intitule, NULLIF(R_Code, '') AS Code FROM P_REGLEMENT WHERE R_Intitule <> ''");
+        return r.AsList();
+    }
+
+    public async Task<IReadOnlyList<EnumereGamme>> Gammes(string? article = null)
+    {
+        // F_ARTENUMREF : une ligne par valeur (ou couple de valeurs) ; AG_No1 / AG_No2 renvoient à F_ARTGAMME.
+        using var c = Cnx();
+        var r = await c.QueryAsync<EnumereGamme>(
+            "SELECT e.AR_Ref AS Article, g1.EG_Enumere AS Gamme1, g2.EG_Enumere AS Gamme2, NULLIF(e.AE_CodeBarre, '') AS CodeBarre " +
+            "FROM F_ARTENUMREF e JOIN F_ARTICLE a ON a.AR_Ref = e.AR_Ref " +
+            "JOIN F_ARTGAMME g1 ON g1.AG_No = e.AG_No1 " +
+            "LEFT JOIN F_ARTGAMME g2 ON g2.AG_No = e.AG_No2 AND e.AG_No2 <> 0 " +
+            "WHERE a.AR_Sommeil = 0 AND e.AE_Sommeil = 0 AND (@article IS NULL OR e.AR_Ref = @article) " +
+            "ORDER BY e.AR_Ref, g1.AG_No, g2.AG_No",
+            new { article });
         return r.AsList();
     }
 

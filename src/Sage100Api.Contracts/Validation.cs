@@ -13,6 +13,7 @@ namespace Sage100Api.Contracts
         public const int LongueurArticle = 18;
         public const int LongueurReference = 17;
         public const int LongueurMode = 35;
+        public const int LongueurEnumere = 35;
 
         public static List<string> Verifier(CommandeRequest c)
         {
@@ -31,6 +32,9 @@ namespace Sage100Api.Contracts
                 var l = c.Lignes[i];
                 Texte(e, $"lignes[{i}].article", l.Article, LongueurArticle);
                 if (!(l.Quantite > 0)) e.Add($"lignes[{i}].quantite : doit être supérieure à 0.");
+                if (l.Gamme1 != null && l.Gamme1.Length > LongueurEnumere) e.Add($"lignes[{i}].gamme1 : {LongueurEnumere} caractères maximum.");
+                if (l.Gamme2 != null && l.Gamme2.Length > LongueurEnumere) e.Add($"lignes[{i}].gamme2 : {LongueurEnumere} caractères maximum.");
+                if (!string.IsNullOrEmpty(l.Gamme2) && string.IsNullOrEmpty(l.Gamme1)) e.Add($"lignes[{i}].gamme2 : renseigner aussi gamme1.");
             }
             return e;
         }

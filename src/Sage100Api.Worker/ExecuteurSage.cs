@@ -127,6 +127,39 @@ namespace Sage100Api.Worker
 
         // ---------- Commande (processus IPMDocument, manuel OM p.110 + annexe) ----------
 
+        /// <summary>Un article à gamme doit passer par AddArticleMonoGamme / AddArticleDoubleGamme avec ses énumérés.</summary>
+        static IBODocumentLigne3 AjouterLigne(IPMDocument pm, IBOArticle3 article, LigneCommande l)
+        {
+            var gamme1 = (IBOArticleGammeEnumFactory)article.FactoryArticleGammeEnum1;
+            if (string.IsNullOrEmpty(l.Gamme1))
+            {
+                if (gamme1.List.Count > 0)
+                    throw new ErreurMetier(CodesErreur.SageMetier,
+                        $"L'article {l.Article} est géré en gamme : précisez la valeur ({Enumeres(gamme1)}).");
+                return pm.AddArticle(article, l.Quantite);
+            }
+
+            var e1 = LireEnumere(gamme1, l.Article, l.Gamme1!);
+            if (string.IsNullOrEmpty(l.Gamme2))
+                return pm.AddArticleMonoGamme(e1, l.Quantite);
+            var e2 = LireEnumere((IBOArticleGammeEnumFactory)article.FactoryArticleGammeEnum2, l.Article, l.Gamme2!);
+            return pm.AddArticleDoubleGamme(e1, e2, l.Quantite);
+        }
+
+        static IBOArticleGammeEnum3 LireEnumere(IBOArticleGammeEnumFactory f, string article, string valeur)
+        {
+            if (!f.ExistEnumere(valeur))
+                throw new ErreurMetier(CodesErreur.SageMetier, $"Gamme « {valeur} » inconnue pour l'article {article} ({Enumeres(f)}).");
+            return f.ReadEnumere(valeur);
+        }
+
+        static string Enumeres(IBOArticleGammeEnumFactory f)
+        {
+            var valeurs = new List<string>();
+            foreach (IBOArticleGammeEnum3 e in f.List) valeurs.Add(e.EG_Enumere);
+            return string.Join(", ", valeurs);
+        }
+
         CommandeResult CreerCommande(CommandeRequest c)
         {
             var existante = PieceParRefExterne(c.IdExterne);
@@ -152,7 +185,7 @@ namespace Sage100Api.Worker
 
             for (int i = 0; i < c.Lignes.Count; i++)
             {
-                var ligne = (IBODocumentVenteLigne3)pm.AddArticle(cial.FactoryArticle.ReadReference(c.Lignes[i].Article), c.Lignes[i].Quantite);
+                var ligne = (IBODocumentVenteLigne3)AjouterLigne(pm, cial.FactoryArticle.ReadReference(c.Lignes[i].Article), c.Lignes[i]);
                 ligne.DL_RefExterne = Tronquer($"{c.IdExterne}-{i + 1}", Validation.LongueurIdExterne);
             }
 

@@ -63,11 +63,14 @@ lectures.MapGet("/articles", (ILecturesSage l, string? recherche, string? famill
 lectures.MapGet("/articles/{reference}", async (ILecturesSage l, string reference) =>
     await l.Article(reference) is { } a ? Results.Ok(a) : Results.NotFound());
 
+lectures.MapGet("/articles/{reference}/gammes", (ILecturesSage l, string reference) => l.Gammes(reference));
+
 lectures.MapGet("/modes-reglement", (ILecturesSage l) => l.ModesReglement());
 
-// Instantané complet pour le mode hors ligne de la borne (clients, articles avec prix et stock, modes de règlement).
+// Instantané complet pour le mode hors ligne de la borne (clients, articles avec prix et stock, modes de règlement, valeurs de gamme).
 lectures.MapGet("/catalogue", async (ILecturesSage l) =>
-    new Catalogue(DateTime.UtcNow, await l.Clients(null, 1, 100_000), await l.Articles(null, null, 1, 100_000), await l.ModesReglement()));
+    new Catalogue(DateTime.UtcNow, await l.Clients(null, 1, 100_000), await l.Articles(null, null, 1, 100_000), await l.ModesReglement(),
+        await l.Gammes()));
 
 // ---------- Écritures (worker Objets Métiers, idempotentes) ----------
 var ecritures = v1.MapGroup("/commandes").WithTags("Commandes et encaissements");
