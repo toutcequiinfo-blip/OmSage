@@ -26,6 +26,11 @@ namespace Sage100Api.Worker
             {
                 var serveur = new ServeurCanal(executeur);
                 Console.WriteLine($"Worker prêt sur le canal '{WorkerProtocol.NomCanal}' (base {config.BaseCial} sur {config.Serveur}). Ctrl+C pour arrêter.");
+                // Ouvre la session Sage dès le démarrage : la première vente n'attend pas l'ouverture des bases.
+                executeur.Soumettre(new WorkerRequest { Operation = Operations.Ping }).ContinueWith(t =>
+                    Console.WriteLine(t.Status == System.Threading.Tasks.TaskStatus.RanToCompletion && t.Result.Ok
+                        ? "Session Sage ouverte."
+                        : "Ouverture de la session Sage impossible : " + (t.Exception?.GetBaseException().Message ?? t.Result.MessageErreur)));
                 serveur.Executer();
             }
             return 0;

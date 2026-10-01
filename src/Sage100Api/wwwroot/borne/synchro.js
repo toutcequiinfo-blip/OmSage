@@ -3,14 +3,16 @@
 
 import { lireReglages, lireFile, majOperation, ecrireCatalogue } from "./stockage.js";
 
-const DELAI_MS = 15000;
+// La santé doit répondre vite ; le catalogue et les écritures peuvent attendre Sage (le worker a 60 s).
+const DELAI_SANTE_MS = 10000;
+const DELAI_MS = 90000;
 
 export class ErreurReseau extends Error {}
 
-async function appeler(methode, chemin, corps) {
+async function appeler(methode, chemin, corps, delaiMs = DELAI_MS) {
   const { cle } = lireReglages();
   const controle = new AbortController();
-  const minuteur = setTimeout(() => controle.abort(), DELAI_MS);
+  const minuteur = setTimeout(() => controle.abort(), delaiMs);
   try {
     const r = await fetch(`/api/v1${chemin}`, {
       method: methode,
@@ -32,7 +34,7 @@ async function appeler(methode, chemin, corps) {
 /** "sage" : tout fonctionne ; "serveur" : API joignable mais Sage indisponible ; "hors-ligne". */
 export async function etatConnexion() {
   try {
-    const { statut, donnees } = await appeler("GET", "/sante");
+    const { statut, donnees } = await appeler("GET", "/sante", null, DELAI_SANTE_MS);
     if (statut !== 200) return "hors-ligne";
     return donnees?.worker && !donnees.worker.erreur ? "sage" : "serveur";
   } catch {
