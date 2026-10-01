@@ -148,10 +148,13 @@ function dessinerPanier() {
 }
 
 async function validerCommande() {
+  // Un double appui ne doit pas créer deux commandes.
+  if (vente.validee) return;
+  vente.validee = true;
+  $("#btn-valider").disabled = true;
   const r = lireReglages();
   vente.id = nouvelIdVente(r.borne);
   vente.numero = prochainNumeroVente();
-  vente.validee = true;
   const t = totaux();
   await ajouterOperation({
     cle: `commande:${vente.id}`,
@@ -214,7 +217,15 @@ function majRendu() {
   $("#p-rendu").textContent = MODES_ESPECES.test(modeChoisi || "") && rendu > 0 ? `Monnaie à rendre : ${euros.format(rendu)}` : "";
 }
 
+let encaissementEnCours = false;
+
 async function encaisser() {
+  if (encaissementEnCours) return;
+  encaissementEnCours = true;
+  try { await enregistrerEncaissement(); } finally { encaissementEnCours = false; }
+}
+
+async function enregistrerEncaissement() {
   const recu = arrondi(Number($("#p-montant").value) || 0);
   const t = totaux();
   if (recu <= 0) return bandeau("Saisissez un montant.", "erreur");
