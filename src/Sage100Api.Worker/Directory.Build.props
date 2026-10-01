@@ -1,0 +1,7 @@
+<Project>
+  <!-- Ajouts au projet du worker, gardés hors du .csproj : celui-ci porte la référence COM Objets Métiers,
+       ajoutée localement dans Visual Studio (voir README), et ne doit pas entrer en conflit avec Git. -->
+  <ItemGroup>
+    <Reference Include="System.ServiceProcess" />
+  </ItemGroup>
+</Project>

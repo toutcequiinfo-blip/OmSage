@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Microsoft.Extensions.Hosting.WindowsServices;
 using Microsoft.Extensions.Options;
 using Sage100Api;
 using Sage100Api.Contracts;
@@ -7,8 +8,22 @@ using Sage100Api.Journal;
 using Sage100Api.Lectures;
 using Sage100Api.Worker;
 
-var builder = WebApplication.CreateBuilder(args);
+// En service Windows, le dossier courant est C:\Windows\System32 : la configuration et le journal se lisent à côté de l'exécutable.
+var builder = WebApplication.CreateBuilder(new WebApplicationOptions
+{
+    Args = args,
+    ContentRootPath = WindowsServiceHelpers.IsWindowsService() ? AppContext.BaseDirectory : null,
+});
+builder.Host.UseWindowsService(o => o.ServiceName = "Sage100Api");
 builder.Configuration.AddJsonFile("appsettings.Local.json", optional: true, reloadOnChange: true);
+// Écrit par deploy/creer-certificats.ps1 : point d'écoute HTTPS (Kestrel) et certificat du serveur.
+builder.Configuration.AddJsonFile("appsettings.Https.json", optional: true, reloadOnChange: false);
+
+builder.Services.PostConfigure<SageOptions>(o =>
+{
+    if (!Path.IsPathRooted(o.CheminJournal))
+        o.CheminJournal = Path.Combine(builder.Environment.ContentRootPath, o.CheminJournal);
+});
 
 builder.Services.Configure<SageOptions>(builder.Configuration.GetSection("Sage"));
 builder.Services.AddSingleton<ILecturesSage, LecturesSql>();
