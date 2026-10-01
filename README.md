@@ -41,6 +41,8 @@ Borne / applications ──HTTPS + X-Api-Key──► Sage100Api (.NET 8, 64 bit
 | GET | `/api/v1/commandes/{idExterne}` | Pièce Sage d'une commande |
 | POST | `/api/v1/commandes/{idExterne}/encaissements` | Encaissement, enregistré comme acompte. Idempotent sur son propre `idExterne`. |
 
+**Journal des encaissements :** un acompte n'a pas de journal. Sage le donne au règlement qu'il crée : c'est le journal par défaut du mode, par exemple BEU pour Espèces. Pour imposer un journal de trésorerie par mode, renseigne `journauxParMode` dans `worker.json`, par exemple `{ "Espèces": "CAIS", "Carte bancaire": "BQ1" }`, puis redémarre le worker. Un mode absent garde le journal de Sage. Un code de journal inconnu fait refuser l'encaissement avant qu'il soit créé.
+
 Codes d'erreur :
 - 401 : clé d'API absente ou invalide.
 - 404 : client, article, mode ou commande inconnu.
@@ -160,7 +162,6 @@ dotnet test tests/Sage100Api.Tests
 - Faire la **synchronisation incrémentale** du catalogue : aujourd'hui, `/catalogue` renvoie un instantané complet.
 - Afficher le **stock par valeur de gamme** (F_GAMSTOCK) ; la borne montre aujourd'hui le stock total de l'article.
 - Créer un **compte SQL en lecture seule** dédié à l'API.
-- Choisir le **journal** des acomptes par mode de règlement : aujourd'hui, Sage prend le journal par défaut du mode, par exemple BEU pour Espèces au lieu de CAIS.
 
 ## Recette
 
