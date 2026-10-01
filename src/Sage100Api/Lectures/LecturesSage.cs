@@ -6,10 +6,14 @@ namespace Sage100Api.Lectures;
 
 public sealed record Client(string Numero, string Intitule, string? Ville, string? Telephone, string? Email);
 
-/// <summary>Gamme1 / Gamme2 : intitulés des gammes (par exemple « Taille »), null si l'article n'est pas à gamme.</summary>
+/// <summary>
+/// Gamme1 / Gamme2 : intitulés des gammes (par exemple « Taille »), null si l'article n'est pas à gamme.
+/// SuiviStock : faux pour un article sans suivi de stock (AR_SuiviStock = 0), jamais bloqué par le contrôle de stock.
+/// </summary>
 public sealed record Article(string Reference, string Designation, string? Famille, string? CodeBarre, decimal PrixVenteHT, decimal Stock, decimal StockReserve,
-    string? Gamme1 = null, string? Gamme2 = null)
+    string? Gamme1 = null, string? Gamme2 = null, bool SuiviStock = true)
 {
+    /// <summary>Stock réel moins les quantités réservées par les commandes clients (les commandes fournisseurs ne comptent pas).</summary>
     public decimal StockDisponible => Stock - StockReserve;
 }
 
@@ -18,8 +22,9 @@ public sealed record ModeReglement(string Intitule, string? Code);
 /// <summary>Valeur (ou couple de valeurs) de gamme vendable pour un article : à renvoyer dans gamme1 / gamme2 de la ligne de commande.</summary>
 public sealed record EnumereGamme(string Article, string Gamme1, string? Gamme2, string? CodeBarre);
 
+/// <summary>ControleStock : vrai si une commande dépassant le stock disponible est refusée (voir Sage:ControleStock).</summary>
 public sealed record Catalogue(DateTime GenereLe, IReadOnlyList<Client> Clients, IReadOnlyList<Article> Articles, IReadOnlyList<ModeReglement> ModesReglement,
-    IReadOnlyList<EnumereGamme> Gammes);
+    IReadOnlyList<EnumereGamme> Gammes, bool ControleStock);
 
 /// <summary>Lectures directes en SQL. Codes et champs : « Structure des bases Sage 100 ».</summary>
 public interface ILecturesSage
@@ -29,6 +34,8 @@ public interface ILecturesSage
     Task<IReadOnlyList<Article>> Articles(string? recherche, string? famille, int page, int taille);
     Task<Article?> Article(string reference);
     Task<IReadOnlyList<ModeReglement>> ModesReglement();
+    /// <summary>Option « Autoriser la gestion des stocks négatifs » de Sage (P_PREFERENCES.PR_StockNeg).</summary>
+    Task<bool> StockNegatifAutorise();
     Task<IReadOnlyList<EnumereGamme>> Gammes(string? article = null);
     Task<string?> PieceCommande(string idExterne);
 }
@@ -45,10 +52,11 @@ public sealed class LecturesSql(IOptions<SageOptions> options) : ILecturesSage
         "CAST(ISNULL(SUM(s.AS_QteSto), 0) AS decimal(18,6)) AS Stock, CAST(ISNULL(SUM(s.AS_QteRes), 0) AS decimal(18,6)) AS StockReserve, " +
         // AR_Gamme1 / AR_Gamme2 : indice dans P_GAMME (0 = pas de gamme).
         "(SELECT TOP 1 G_Intitule FROM P_GAMME WHERE cbIndice = a.AR_Gamme1 AND a.AR_Gamme1 > 0) AS Gamme1, " +
-        "(SELECT TOP 1 G_Intitule FROM P_GAMME WHERE cbIndice = a.AR_Gamme2 AND a.AR_Gamme2 > 0) AS Gamme2 " +
+        "(SELECT TOP 1 G_Intitule FROM P_GAMME WHERE cbIndice = a.AR_Gamme2 AND a.AR_Gamme2 > 0) AS Gamme2, " +
+        "CAST(CASE WHEN a.AR_SuiviStock <> 0 THEN 1 ELSE 0 END AS bit) AS SuiviStock " +
         "FROM F_ARTICLE a LEFT JOIN F_ARTSTOCK s ON s.AR_Ref = a.AR_Ref";
 
-    const string GroupArticle = " GROUP BY a.AR_Ref, a.AR_Design, a.FA_CodeFamille, a.AR_CodeBarre, a.AR_PrixVen, a.AR_Gamme1, a.AR_Gamme2";
+    const string GroupArticle = " GROUP BY a.AR_Ref, a.AR_Design, a.FA_CodeFamille, a.AR_CodeBarre, a.AR_PrixVen, a.AR_Gamme1, a.AR_Gamme2, a.AR_SuiviStock";
 
     SqlConnection Cnx() => new(options.Value.ChaineSql);
 
@@ -93,6 +101,12 @@ public sealed class LecturesSql(IOptions<SageOptions> options) : ILecturesSage
         var r = await c.QueryAsync<ModeReglement>(
             "SELECT R_Intitule AS Intitule, NULLIF(R_Code, '') AS Code FROM P_REGLEMENT WHERE R_Intitule <> ''");
         return r.AsList();
+    }
+
+    public async Task<bool> StockNegatifAutorise()
+    {
+        using var c = Cnx();
+        return await c.QueryFirstOrDefaultAsync<int?>("SELECT TOP 1 PR_StockNeg FROM P_PREFERENCES") == 1;
     }
 
     public async Task<IReadOnlyList<EnumereGamme>> Gammes(string? article = null)

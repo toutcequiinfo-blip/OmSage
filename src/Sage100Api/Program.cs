@@ -29,6 +29,7 @@ builder.Services.Configure<SageOptions>(builder.Configuration.GetSection("Sage")
 builder.Services.AddSingleton<ILecturesSage, LecturesSql>();
 builder.Services.AddSingleton<IWorkerClient, WorkerClient>();
 builder.Services.AddSingleton<JournalOperations>();
+builder.Services.AddSingleton<ControleStock>();
 builder.Services.AddSingleton<ServiceEcritures>();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(o =>
@@ -83,9 +84,9 @@ lectures.MapGet("/articles/{reference}/gammes", (ILecturesSage l, string referen
 lectures.MapGet("/modes-reglement", (ILecturesSage l) => l.ModesReglement());
 
 // Instantané complet pour le mode hors ligne de la borne (clients, articles avec prix et stock, modes de règlement, valeurs de gamme).
-lectures.MapGet("/catalogue", async (ILecturesSage l) =>
+lectures.MapGet("/catalogue", async (ILecturesSage l, ControleStock stock) =>
     new Catalogue(DateTime.UtcNow, await l.Clients(null, 1, 100_000), await l.Articles(null, null, 1, 100_000), await l.ModesReglement(),
-        await l.Gammes()));
+        await l.Gammes(), await stock.Actif()));
 
 // ---------- Écritures (worker Objets Métiers, idempotentes) ----------
 var ecritures = v1.MapGroup("/commandes").WithTags("Commandes et encaissements");

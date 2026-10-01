@@ -103,7 +103,8 @@ function dessinerArticles() {
       aGamme(a) ? element("span", { class: "discret" }, `Choix : ${[a.gamme1, a.gamme2].filter(Boolean).join(" / ") || "gamme"}`) : null,
       element("span", { class: "discret" }, a.reference),
       element("span", { class: "prix" }, `${euros.format(a.prixVenteHT)} HT`),
-      element("span", { class: dispo > 0 ? "stock" : "stock rupture" }, dispo > 0 ? `Stock ${dispo}` : "Rupture")));
+      a.suiviStock === false ? null
+        : element("span", { class: dispo > 0 ? "stock" : "stock rupture" }, dispo > 0 ? `Stock ${dispo}` : "Rupture")));
   }
   if (articles.length === 0) zone.append(element("p", { class: "vide" }, "Aucun article."));
 }
@@ -116,6 +117,7 @@ const libelleGamme = (e) => (e ? [e.gamme1, e.gamme2].filter(Boolean).join(" / "
 
 function toucherArticle(article) {
   if (!aGamme(article)) return ajouterArticle(article);
+  if (stockControle(article) && quantiteAuPanier(article) + 1 > article.stockDisponible) return ajouterArticle(article, 1); // affiche le refus
   const valeurs = enumeres(article);
   if (valeurs.length === 0) {
     bandeau(`${article.designation || article.reference} est géré en gamme : rechargez le catalogue (Réglages) pour voir ses valeurs.`, "erreur");
@@ -128,7 +130,16 @@ function toucherArticle(article) {
   d.showModal();
 }
 
+// Même règle que la fenêtre « Indisponibilité en stock » de Sage : l'API refuse aussi la commande, la borne prévient avant.
+const stockControle = (article) => !!catalogue.controleStock && article.suiviStock !== false;
+const quantiteAuPanier = (article) =>
+  [...vente.lignes.values()].filter((l) => l.article.reference === article.reference).reduce((s, l) => s + l.quantite, 0);
+
 function ajouterArticle(article, delta = 1, enumere = null) {
+  if (delta > 0 && stockControle(article) && quantiteAuPanier(article) + delta > article.stockDisponible) {
+    bandeau(`Stock insuffisant pour ${article.designation || article.reference} : ${Math.max(0, article.stockDisponible)} disponible(s).`, "erreur");
+    return;
+  }
   const cle = enumere ? `${article.reference}|${enumere.gamme1}|${enumere.gamme2 || ""}` : article.reference;
   const l = vente.lignes.get(cle) || { article, enumere, quantite: 0 };
   l.quantite += delta;
@@ -149,7 +160,7 @@ function dessinerPanier() {
   const ul = $("#lignes");
   ul.replaceChildren();
   for (const l of vente.lignes.values()) {
-    const alerte = l.quantite > l.article.stockDisponible;
+    const alerte = l.article.suiviStock !== false && quantiteAuPanier(l.article) > l.article.stockDisponible;
     ul.append(element("li", { class: alerte ? "alerte" : "" },
       element("div", { class: "libelle" },
         element("strong", {}, l.article.designation || l.article.reference, l.enumere ? ` · ${libelleGamme(l.enumere)}` : ""),

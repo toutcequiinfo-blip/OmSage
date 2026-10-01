@@ -108,6 +108,39 @@ public sealed class ApiTests : IDisposable
     }
 
     [Fact]
+    public async Task Une_commande_au_dela_du_stock_est_refusee_sans_appeler_Sage()
+    {
+        _lectures.Stocks["CHORFA"] = new Article("CHORFA", "Chaîne forçat", null, null, 1071, 3, 2);
+        var c = Commande("BORNE1-000005");
+        c.Lignes[0].Quantite = 2;
+
+        var r = await _http.PostAsJsonAsync("/api/v1/commandes", c);
+
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, r.StatusCode);
+        Assert.Contains("Stock insuffisant", await r.Content.ReadAsStringAsync());
+        Assert.Equal(0, _worker.Appels(Operations.CreerCommande));
+        // Une fois le stock réapprovisionné, la même commande passe.
+        _lectures.Stocks["CHORFA"] = new Article("CHORFA", "Chaîne forçat", null, null, 1071, 10, 2);
+        Assert.Equal(HttpStatusCode.Created, (await _http.PostAsJsonAsync("/api/v1/commandes", c)).StatusCode);
+    }
+
+    [Fact]
+    public async Task Le_controle_de_stock_suit_l_option_stocks_negatifs_de_Sage()
+    {
+        _lectures.Stocks["CHORFA"] = new Article("CHORFA", "Chaîne forçat", null, null, 1071, 0, 0);
+        _lectures.NegatifAutorise = true;
+        var r1 = await _http.PostAsJsonAsync("/api/v1/commandes", Commande("BORNE1-000006"));
+        _lectures.NegatifAutorise = false;
+        _lectures.Stocks["CHORFA"] = new Article("CHORFA", "Chaîne forçat", null, null, 1071, 0, 0, SuiviStock: false);
+        var r2 = await _http.PostAsJsonAsync("/api/v1/commandes", Commande("BORNE1-000007"));
+
+        Assert.Equal(HttpStatusCode.Created, r1.StatusCode); // stocks négatifs autorisés
+        Assert.Equal(HttpStatusCode.Created, r2.StatusCode); // article sans suivi de stock
+        var catalogue = await _http.GetFromJsonAsync<JsonElement>("/api/v1/catalogue");
+        Assert.True(catalogue.GetProperty("controleStock").GetBoolean());
+    }
+
+    [Fact]
     public async Task Renvoyer_la_meme_commande_ne_cree_pas_de_doublon()
     {
         var r1 = await _http.PostAsJsonAsync("/api/v1/commandes", Commande());
@@ -207,12 +240,15 @@ public sealed class ApiTests : IDisposable
 
     sealed class FaussesLectures : ILecturesSage
     {
+        public readonly Dictionary<string, Article> Stocks = new();
+        public bool NegatifAutorise;
+        public Task<bool> StockNegatifAutorise() => Task.FromResult(NegatifAutorise);
         public Task<IReadOnlyList<Client>> Clients(string? recherche, int page, int taille) =>
             Task.FromResult<IReadOnlyList<Client>>(new[] { new Client("CISEL", "Ciselure", null, null, null) });
         public Task<Client?> Client(string numero) => Task.FromResult<Client?>(null);
         public Task<IReadOnlyList<Article>> Articles(string? recherche, string? famille, int page, int taille) =>
             Task.FromResult<IReadOnlyList<Article>>(Array.Empty<Article>());
-        public Task<Article?> Article(string reference) => Task.FromResult<Article?>(null);
+        public Task<Article?> Article(string reference) => Task.FromResult(Stocks.GetValueOrDefault(reference));
         public Task<IReadOnlyList<ModeReglement>> ModesReglement() => Task.FromResult<IReadOnlyList<ModeReglement>>(Array.Empty<ModeReglement>());
         public Task<IReadOnlyList<EnumereGamme>> Gammes(string? article = null) =>
             Task.FromResult<IReadOnlyList<EnumereGamme>>(new[] { new EnumereGamme("BAOR01", "52", null, null) });

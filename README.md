@@ -59,6 +59,13 @@ X-Api-Key: changer-cette-cle
               { "article": "BAOR01", "quantite": 1, "gamme1": "52" } ] }
 ```
 
+**Contrôle du stock :** la fenêtre « Indisponibilité en stock » de la saisie Sage n'existe pas dans les Objets Métiers, donc c'est l'API qui contrôle. Une commande qui dépasse le stock disponible (stock réel moins réservé, tous dépôts confondus) est refusée en 422, avec le détail par article. Les articles sans suivi de stock ne sont pas contrôlés. Le réglage `Sage:ControleStock` vaut :
+- `Auto` (par défaut) : refus si l'option « Autoriser la gestion des stocks négatifs » est décochée dans Sage ;
+- `Bloquer` : refus dans tous les cas ;
+- `Aucun` : aucun contrôle.
+
+La borne applique la même règle au moment d'ajouter un article au panier.
+
 Un article géré en gamme (taille, couleur…) doit recevoir sa valeur dans `gamme1`, et `gamme2` pour une double gamme. Sans valeur, Sage refuse la ligne ; l'API renvoie alors 422 avec la liste des valeurs possibles.
 
 Exemple d'encaissement :
@@ -146,7 +153,7 @@ Ce qui est installé dans `C:\Sage100Api` :
 dotnet test tests/Sage100Api.Tests
 ```
 
-11 tests couvrent la clé d'API, l'accès à l'application borne, la validation (dont les gammes), le catalogue, les doublons de commandes et d'encaissements, et la conversion des erreurs Sage et du worker en codes HTTP. Ils tournent sans Sage.
+13 tests couvrent la clé d'API, l'accès à l'application borne, la validation (dont les gammes), le contrôle du stock, le catalogue, les doublons de commandes et d'encaissements, et la conversion des erreurs Sage et du worker en codes HTTP. Ils tournent sans Sage.
 
 ## Reste à faire
 
