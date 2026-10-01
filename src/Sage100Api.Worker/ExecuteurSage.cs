@@ -80,8 +80,9 @@ namespace Sage100Api.Worker
             {
                 // Les exceptions levées par les Objets Métiers sont en général des refus métier
                 // (champ invalide, stock insuffisant, période clôturée...). On garde la connexion.
-                Console.WriteLine($"[{requete.Operation}] {ex.Message}");
-                return Erreur(CodesErreur.SageMetier, ex.Message);
+                // Code HRESULT et pile complets dans la console pour le diagnostic ; le code seul est renvoyé à la borne.
+                Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] [{requete.Operation}] {ex.GetType().Name} 0x{ex.HResult:X8} : {ex.Message}{Environment.NewLine}{ex.StackTrace}");
+                return Erreur(CodesErreur.SageMetier, $"{ex.Message} (0x{ex.HResult:X8})");
             }
         }
 
