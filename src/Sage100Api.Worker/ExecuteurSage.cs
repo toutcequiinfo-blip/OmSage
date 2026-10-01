@@ -24,6 +24,9 @@ namespace Sage100Api.Worker
             new BlockingCollection<(WorkerRequest, TaskCompletionSource<WorkerResponse>)>();
         readonly Thread _thread;
         BSCIALApplication100c? _cial;
+        // Référence gardée côté .NET : sinon le ramasse-miettes peut libérer l'objet compta alors que la session
+        // Gescom s'en sert encore, et l'appel suivant à CptaApplication plante (0xC0000005, « Accès refusé »).
+        BSCPTAApplication100c? _cpta;
 
         public ExecuteurSage(WorkerConfig config)
         {
@@ -47,8 +50,21 @@ namespace Sage100Api.Worker
             Fermer();
         }
 
+        const int ViolationAcces = unchecked((int)0xC0000005);
+
         WorkerResponse Traiter(WorkerRequest requete)
         {
+            var reponse = TraiterUneFois(requete, out var violation);
+            if (!violation) return reponse;
+            // Session COM abîmée : elle vient d'être fermée, on rejoue une fois sur une session neuve.
+            // Sans risque de doublon : commande et encaissement vérifient d'abord s'ils existent déjà dans Sage.
+            Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] [{requete.Operation}] nouvel essai sur une session Sage neuve.");
+            return TraiterUneFois(requete, out _);
+        }
+
+        WorkerResponse TraiterUneFois(WorkerRequest requete, out bool violation)
+        {
+            violation = false;
             try
             {
                 object resultat;
@@ -85,6 +101,7 @@ namespace Sage100Api.Worker
                 // Une erreur inattendue peut laisser la session COM dans un état instable (0xC0000005 = violation
                 // d'accès dans la DLL) : on la ferme, la prochaine requête rouvre une session propre.
                 Fermer();
+                violation = ex.HResult == ViolationAcces;
                 return Erreur(CodesErreur.SageMetier, $"{ex.Message} (0x{ex.HResult:X8})");
             }
         }
@@ -116,6 +133,7 @@ namespace Sage100Api.Worker
                 throw new ErreurMetier(CodesErreur.Technique, "Connexion Sage impossible : " + ex.Message);
             }
             _cial = cial;
+            _cpta = cpta;
             return cial;
         }
 
@@ -123,6 +141,7 @@ namespace Sage100Api.Worker
         {
             try { if (_cial != null && _cial.IsOpen) _cial.Close(); } catch { /* arrêt */ }
             _cial = null;
+            _cpta = null;
         }
 
         // ---------- Commande (processus IPMDocument, manuel OM p.110 + annexe) ----------
@@ -170,7 +189,7 @@ namespace Sage100Api.Worker
                 return new CommandeResult { IdExterne = c.IdExterne, Piece = existante, NetAPayer = doc.DO_NetAPayer, DejaExistante = true };
             }
 
-            var cpta = cial.CptaApplication;
+            var cpta = _cpta!;
             if (!cpta.FactoryClient.ExistNumero(c.Client))
                 throw new ErreurMetier(CodesErreur.Introuvable, $"Client inconnu : {c.Client}");
             foreach (var l in c.Lignes)
@@ -230,14 +249,14 @@ namespace Sage100Api.Worker
                     return new EncaissementResult { IdExterne = e.IdExterne, PieceCommande = r.PieceCommande, Montant = existant.DR_Montant, DejaExistant = true };
             }
 
-            if (!cial.CptaApplication.FactoryReglement.ExistIntitule(e.Mode))
+            if (!_cpta!.FactoryReglement.ExistIntitule(e.Mode))
                 throw new ErreurMetier(CodesErreur.Introuvable, $"Mode de règlement inconnu dans Sage : {e.Mode}");
 
             var ac = (IBODocumentAcompte3)bc.FactoryDocumentAcompte.Create();
             ac.DR_Date = DateTime.Today;
             ac.DR_Libelle = Tronquer($"{marque} {e.ReferencePaiement}".TrimEnd(), 35);
             ac.DR_Montant = e.Montant;
-            ac.Reglement = cial.CptaApplication.FactoryReglement.ReadIntitule(e.Mode);
+            ac.Reglement = _cpta!.FactoryReglement.ReadIntitule(e.Mode);
             ac.WriteDefault();
 
             Console.WriteLine($"Encaissement {e.IdExterne} ({e.Mode} {e.Montant}) -> acompte sur {r.PieceCommande}");
