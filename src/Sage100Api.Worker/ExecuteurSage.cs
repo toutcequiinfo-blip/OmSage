@@ -55,7 +55,7 @@ namespace Sage100Api.Worker
                 switch (requete.Operation)
                 {
                     case Operations.Ping:
-                        resultat = new { sage = Session().IsOpen, version = VersionOm() };
+                        resultat = new { sage = Session().IsOpen };
                         break;
                     case Operations.CreerCommande:
                         resultat = CreerCommande(Lire<CommandeRequest>(requete));
@@ -82,6 +82,9 @@ namespace Sage100Api.Worker
                 // (champ invalide, stock insuffisant, période clôturée...). On garde la connexion.
                 // Code HRESULT et pile complets dans la console pour le diagnostic ; le code seul est renvoyé à la borne.
                 Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] [{requete.Operation}] {ex.GetType().Name} 0x{ex.HResult:X8} : {ex.Message}{Environment.NewLine}{ex.StackTrace}");
+                // Une erreur inattendue peut laisser la session COM dans un état instable (0xC0000005 = violation
+                // d'accès dans la DLL) : on la ferme, la prochaine requête rouvre une session propre.
+                Fermer();
                 return Erreur(CodesErreur.SageMetier, $"{ex.Message} (0x{ex.HResult:X8})");
             }
         }
@@ -114,11 +117,6 @@ namespace Sage100Api.Worker
             }
             _cial = cial;
             return cial;
-        }
-
-        string VersionOm()
-        {
-            try { return Session().Licence.Version; } catch { return "inconnue"; }
         }
 
         void Fermer()
