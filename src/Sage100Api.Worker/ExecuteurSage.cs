@@ -251,6 +251,8 @@ namespace Sage100Api.Worker
 
             if (!_cpta!.FactoryReglement.ExistIntitule(e.Mode))
                 throw new ErreurMetier(CodesErreur.Introuvable, $"Mode de règlement inconnu dans Sage : {e.Mode}");
+            // Contrôlé avant de créer l'acompte : une erreur de réglage ne doit pas laisser un acompte à moitié traité.
+            var journal = JournalDuMode(e.Mode);
 
             var ac = (IBODocumentAcompte3)bc.FactoryDocumentAcompte.Create();
             ac.DR_Date = DateTime.Today;
@@ -258,9 +260,51 @@ namespace Sage100Api.Worker
             ac.DR_Montant = e.Montant;
             ac.Reglement = _cpta!.FactoryReglement.ReadIntitule(e.Mode);
             ac.WriteDefault();
+            if (journal != null) ChangerJournal(ac, journal, e.IdExterne);
 
             Console.WriteLine($"Encaissement {e.IdExterne} ({e.Mode} {e.Montant}) -> acompte sur {r.PieceCommande}");
             return new EncaissementResult { IdExterne = e.IdExterne, PieceCommande = r.PieceCommande, Montant = e.Montant };
+        }
+
+        // ---------- Journal par mode de règlement (worker.json : journauxParMode) ----------
+
+        /// <summary>Journal de trésorerie demandé pour ce mode, ou null pour garder celui que Sage choisit.</summary>
+        IBOJournal3? JournalDuMode(string mode)
+        {
+            string? code = null;
+            foreach (var paire in _config.JournauxParMode)
+                if (string.Equals(paire.Key.Trim(), mode.Trim(), StringComparison.OrdinalIgnoreCase)) code = paire.Value?.Trim();
+            if (string.IsNullOrEmpty(code)) return null;
+            if (!_cpta!.FactoryJournal.ExistNumero(code))
+                throw new ErreurMetier(CodesErreur.SageMetier, $"Journal {code} (réglé pour le mode {mode} dans worker.json) inconnu dans Sage.");
+            return _cpta.FactoryJournal.ReadNumero(code);
+        }
+
+        /// <summary>
+        /// L'acompte n'a pas de journal : Sage le donne au règlement qu'il crée (journal par défaut du mode).
+        /// On corrige ce règlement, modifiable tant qu'il n'est pas comptabilisé (manuel OM, IBODocumentReglement).
+        /// Le compte général suit le journal de trésorerie.
+        /// </summary>
+        static void ChangerJournal(IBODocumentAcompte3 ac, IBOJournal3 journal, string idExterne)
+        {
+            try
+            {
+                if (!ac.HasDocumentReglement)
+                {
+                    Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] Encaissement {idExterne} : pas de règlement lié à l'acompte, journal inchangé.");
+                    return;
+                }
+                var rg = ac.DocumentReglement;
+                if (rg.Journal != null && rg.Journal.JO_Num == journal.JO_Num) return;
+                rg.Journal = journal;
+                if (journal.CompteG != null) rg.CompteG = journal.CompteG;
+                rg.Write();
+            }
+            catch (Exception ex)
+            {
+                // L'acompte est créé : on ne le fait pas échouer (un renvoi le retrouverait sans corriger le journal).
+                Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] Encaissement {idExterne} : journal {journal.JO_Num} non appliqué (0x{ex.HResult:X8}) : {ex.Message}");
+            }
         }
 
         /// <summary>« BRN » + 12 caractères hexadécimaux du SHA-1 de l'identifiant externe (15 caractères, stable).</summary>

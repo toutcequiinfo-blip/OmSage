@@ -2,6 +2,7 @@
 // Lancement : Sage100Api.Worker.exe (lit worker.json à côté de l'exécutable), en console ou en service Windows.
 
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.ServiceProcess;
 using System.Text;
@@ -73,6 +74,11 @@ namespace Sage100Api.Worker
         public string BaseCpta { get; set; } = "";
         public string Utilisateur { get; set; } = "<Administrateur>";
         public string MotDePasse { get; set; } = "";
+        /// <summary>
+        /// Journal de trésorerie par mode de règlement, par exemple { "Espèces": "CAIS" }.
+        /// Mode absent : Sage garde son journal par défaut.
+        /// </summary>
+        public Dictionary<string, string> JournauxParMode { get; set; } = new Dictionary<string, string>();
         /// <summary>Vide = sécurité intégrée Windows sur BaseCial.</summary>
         public string ChaineSql { get; set; } = "";
 
