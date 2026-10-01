@@ -96,4 +96,8 @@ dotnet test tests/Sage100Api.Tests
 - Faire la **synchronisation incrémentale** du catalogue : aujourd'hui, `/catalogue` renvoie un instantané complet.
 - Créer un **compte SQL en lecture seule** dédié à l'API.
 - Développer l'**application tablette** (PWA hors ligne).
-- Les appels Objets Métiers suivants sont nouveaux par rapport au POC et doivent être confirmés au premier lancement : `FactoryClient.ExistNumero`, `FactoryArticle.ExistReference`, `FactoryDocumentVente.ExistPiece`, `FactoryReglement.ExistIntitule`, `Refresh()`, le parcours de `FactoryDocumentAcompte.List`, et `Licence.Version`.
+- Choisir le **journal** des acomptes par mode de règlement : aujourd'hui, Sage prend le journal par défaut du mode, par exemple BEU pour Espèces au lieu de CAIS.
+
+## Recette
+
+- **01/10/2026, base Bijou, PC SQ-SOFT** : lectures SQL OK. Commande BC00034 créée par l'API (CISEL / CHORFA, 1 303,20). Acompte de 500 en espèces créé sur BC00034, avec le libellé `BRN…`. Les appels Objets Métiers nouveaux par rapport au POC sont tous validés.
