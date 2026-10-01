@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Worker Objets Métiers : seul processus qui charge la DLL COM Sage (32 bits => x86 obligatoire, manuel OM p.21).
+       Référence COM à ajouter dans Visual Studio : "Objets métiers Sage 100c 12.0 Type Library" (voir README). -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <PlatformTarget>x86</PlatformTarget>
+    <Prefer32Bit>true</Prefer32Bit>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <RootNamespace>Sage100Api.Worker</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Sage100Api.Contracts\Sage100Api.Contracts.csproj" />
+    <Reference Include="System.Data" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Update="worker.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>
