@@ -89,6 +89,25 @@ public sealed class ApiTests : IDisposable
     }
 
     [Fact]
+    public async Task Une_gamme2_sans_gamme1_renvoie_422()
+    {
+        var c = Commande("BORNE1-000004");
+        c.Lignes[0].Gamme2 = "Or jaune";
+        var r = await _http.PostAsJsonAsync("/api/v1/commandes", c);
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, r.StatusCode);
+        Assert.Equal(0, _worker.Appels(Operations.CreerCommande));
+    }
+
+    [Fact]
+    public async Task Le_catalogue_contient_les_valeurs_de_gamme()
+    {
+        var json = await _http.GetFromJsonAsync<JsonElement>("/api/v1/catalogue");
+        var g = json.GetProperty("gammes")[0];
+        Assert.Equal("BAOR01", g.GetProperty("article").GetString());
+        Assert.Equal("52", g.GetProperty("gamme1").GetString());
+    }
+
+    [Fact]
     public async Task Renvoyer_la_meme_commande_ne_cree_pas_de_doublon()
     {
         var r1 = await _http.PostAsJsonAsync("/api/v1/commandes", Commande());
@@ -195,6 +214,8 @@ public sealed class ApiTests : IDisposable
             Task.FromResult<IReadOnlyList<Article>>(Array.Empty<Article>());
         public Task<Article?> Article(string reference) => Task.FromResult<Article?>(null);
         public Task<IReadOnlyList<ModeReglement>> ModesReglement() => Task.FromResult<IReadOnlyList<ModeReglement>>(Array.Empty<ModeReglement>());
+        public Task<IReadOnlyList<EnumereGamme>> Gammes(string? article = null) =>
+            Task.FromResult<IReadOnlyList<EnumereGamme>>(new[] { new EnumereGamme("BAOR01", "52", null, null) });
         public Task<string?> PieceCommande(string idExterne) => Task.FromResult<string?>(null);
     }
 }

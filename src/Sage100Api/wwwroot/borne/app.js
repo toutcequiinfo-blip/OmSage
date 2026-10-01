@@ -14,7 +14,7 @@ const MODES_ESPECES = /esp[eè]ce/i;
 
 let catalogue = null;
 let connexion = "hors-ligne";
-let vente = null; // { id, numero, client, lignes: Map(ref -> {article, quantite}), paiements: [], validee }
+let vente = null; // { id, numero, client, lignes: Map(cle -> {article, enumere, quantite}), paiements: [], validee }
 let famille = null;
 let modeChoisi = null;
 
@@ -98,8 +98,9 @@ function dessinerArticles() {
     .slice(0, 120);
   for (const a of articles) {
     const dispo = a.stockDisponible;
-    zone.append(element("button", { type: "button", class: "tuile", onclick: () => ajouterArticle(a) },
+    zone.append(element("button", { type: "button", class: "tuile", onclick: () => toucherArticle(a) },
       element("span", { class: "designation" }, a.designation || a.reference),
+      aGamme(a) ? element("span", { class: "discret" }, `Choix : ${[a.gamme1, a.gamme2].filter(Boolean).join(" / ") || "gamme"}`) : null,
       element("span", { class: "discret" }, a.reference),
       element("span", { class: "prix" }, `${euros.format(a.prixVenteHT)} HT`),
       element("span", { class: dispo > 0 ? "stock" : "stock rupture" }, dispo > 0 ? `Stock ${dispo}` : "Rupture")));
@@ -107,11 +108,32 @@ function dessinerArticles() {
   if (articles.length === 0) zone.append(element("p", { class: "vide" }, "Aucun article."));
 }
 
-function ajouterArticle(article, delta = 1) {
-  const l = vente.lignes.get(article.reference) || { article, quantite: 0 };
+// ---------- Gammes (taille, couleur...) : Sage exige la valeur pour un article à gamme ----------
+
+const enumeres = (article) => (catalogue.gammes || []).filter((g) => g.article === article.reference);
+const aGamme = (article) => !!article.gamme1 || enumeres(article).length > 0;
+const libelleGamme = (e) => (e ? [e.gamme1, e.gamme2].filter(Boolean).join(" / ") : "");
+
+function toucherArticle(article) {
+  if (!aGamme(article)) return ajouterArticle(article);
+  const valeurs = enumeres(article);
+  if (valeurs.length === 0) {
+    bandeau(`${article.designation || article.reference} est géré en gamme : rechargez le catalogue (Réglages) pour voir ses valeurs.`, "erreur");
+    return;
+  }
+  const d = $("#choix-gamme");
+  $("#gamme-titre").textContent = `${article.designation || article.reference} : ${[article.gamme1, article.gamme2].filter(Boolean).join(" / ") || "choisir"}`;
+  $("#gamme-valeurs").replaceChildren(...valeurs.map((e) =>
+    element("button", { type: "button", class: "valeur", onclick: () => { d.close(); ajouterArticle(article, 1, e); } }, libelleGamme(e))));
+  d.showModal();
+}
+
+function ajouterArticle(article, delta = 1, enumere = null) {
+  const cle = enumere ? `${article.reference}|${enumere.gamme1}|${enumere.gamme2 || ""}` : article.reference;
+  const l = vente.lignes.get(cle) || { article, enumere, quantite: 0 };
   l.quantite += delta;
-  if (l.quantite <= 0) vente.lignes.delete(article.reference);
-  else vente.lignes.set(article.reference, l);
+  if (l.quantite <= 0) vente.lignes.delete(cle);
+  else vente.lignes.set(cle, l);
   dessinerPanier();
 }
 
@@ -130,12 +152,12 @@ function dessinerPanier() {
     const alerte = l.quantite > l.article.stockDisponible;
     ul.append(element("li", { class: alerte ? "alerte" : "" },
       element("div", { class: "libelle" },
-        element("strong", {}, l.article.designation || l.article.reference),
+        element("strong", {}, l.article.designation || l.article.reference, l.enumere ? ` · ${libelleGamme(l.enumere)}` : ""),
         element("span", { class: "discret" }, `${euros.format(l.article.prixVenteHT)} HT${alerte ? " · stock insuffisant" : ""}`)),
       element("div", { class: "quantite" },
-        element("button", { type: "button", "aria-label": "Retirer un", onclick: () => ajouterArticle(l.article, -1) }, "−"),
+        element("button", { type: "button", "aria-label": "Retirer un", onclick: () => ajouterArticle(l.article, -1, l.enumere) }, "−"),
         element("span", {}, String(l.quantite)),
-        element("button", { type: "button", "aria-label": "Ajouter un", onclick: () => ajouterArticle(l.article, 1) }, "+")),
+        element("button", { type: "button", "aria-label": "Ajouter un", onclick: () => ajouterArticle(l.article, 1, l.enumere) }, "+")),
       element("span", { class: "montant" }, euros.format(l.article.prixVenteHT * l.quantite))));
   }
   if (vente.lignes.size === 0) ul.append(element("li", { class: "vide" }, "Touchez un article pour l'ajouter."));
@@ -164,7 +186,11 @@ async function validerCommande() {
       idExterne: vente.id,
       client: vente.client.numero,
       reference: vente.numero,
-      lignes: [...vente.lignes.values()].map((l) => ({ article: l.article.reference, quantite: l.quantite })),
+      lignes: [...vente.lignes.values()].map((l) => ({
+        article: l.article.reference,
+        quantite: l.quantite,
+        ...(l.enumere ? { gamme1: l.enumere.gamme1, gamme2: l.enumere.gamme2 || null } : {}),
+      })),
     },
     vente: { numero: vente.numero, client: vente.client.intitule || vente.client.numero, totalTtcEstime: t.ttc },
   });
@@ -255,7 +281,7 @@ function terminer() {
   const recap = $("#recap");
   recap.replaceChildren(
     element("p", {}, element("strong", {}, vente.numero), ` · ${vente.client.intitule || vente.client.numero}`),
-    element("ul", {}, ...[...vente.lignes.values()].map((l) => element("li", {}, `${l.quantite} × ${l.article.designation || l.article.reference}`))),
+    element("ul", {}, ...[...vente.lignes.values()].map((l) => element("li", {}, `${l.quantite} × ${l.article.designation || l.article.reference}${l.enumere ? ` (${libelleGamme(l.enumere)})` : ""}`))),
     element("p", {}, `Total TTC estimé : ${euros.format(t.ttc)} · Encaissé : ${euros.format(t.paye)}`),
     element("p", { class: "discret" }, connexion === "sage"
       ? "La vente est envoyée à Sage."
@@ -378,10 +404,17 @@ function brancher() {
     // Une douchette code-barres tape le code puis Entrée.
     if (e.key !== "Enter") return;
     const code = e.target.value.trim();
-    const a = catalogue.articles.find((x) => x.codeBarre === code || x.reference === code.toUpperCase());
-    if (a) { ajouterArticle(a); e.target.value = ""; dessinerArticles(); }
+    // Le code-barres d'une valeur de gamme désigne directement l'article et sa valeur.
+    const g = (catalogue.gammes || []).find((x) => x.codeBarre && x.codeBarre === code);
+    const a = catalogue.articles.find((x) => (g ? x.reference === g.article : x.codeBarre === code || x.reference === code.toUpperCase()));
+    if (!a) return;
+    if (g) ajouterArticle(a, 1, g);
+    else toucherArticle(a);
+    e.target.value = "";
+    dessinerArticles();
   });
   $("#btn-valider").addEventListener("click", validerCommande);
+  $("#btn-fermer-gamme").addEventListener("click", () => $("#choix-gamme").close());
   $("#btn-annuler-vente").addEventListener("click", () => { if (vente.lignes.size === 0 || confirm("Annuler cette commande ?")) { vente = null; afficher("client"); } });
   $("#p-montant").addEventListener("input", majRendu);
   $("#btn-encaisser").addEventListener("click", encaisser);

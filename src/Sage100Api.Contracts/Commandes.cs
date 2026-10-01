@@ -19,6 +19,10 @@ namespace Sage100Api.Contracts
         /// <summary>Référence article (AR_Ref, 18 caractères max).</summary>
         public string Article { get; set; } = "";
         public double Quantite { get; set; }
+        /// <summary>Énuméré de gamme 1 (EG_Enumere, par exemple « 52 »), obligatoire si l'article est à gamme.</summary>
+        public string? Gamme1 { get; set; }
+        /// <summary>Énuméré de gamme 2, pour un article à double gamme.</summary>
+        public string? Gamme2 { get; set; }
     }
 
     public sealed class CommandeResult

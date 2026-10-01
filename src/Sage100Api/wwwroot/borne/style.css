@@ -108,3 +108,10 @@ label input { font: inherit; color: var(--texte); min-height: 52px; padding: 0 1
   .panier { border-left: 0; border-top: 1px solid var(--bord); }
   .form, .saisie-paiement, .montants { grid-template-columns: 1fr; }
 }
+
+/* Choix de la valeur de gamme */
+.dialogue { border: none; border-radius: 14px; padding: 20px; width: min(560px, 92vw); background: var(--carte); color: var(--texte); }
+.dialogue::backdrop { background: rgba(0, 0, 0, .45); }
+.dialogue h2 { margin: 0 0 12px; font-size: 1.15rem; }
+.valeurs { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 10px; margin-bottom: 16px; max-height: 60vh; overflow: auto; }
+.valeur { min-height: 64px; font-weight: 600; }

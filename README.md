@@ -33,7 +33,8 @@ Borne / applications ──HTTPS + X-Api-Key──► Sage100Api (.NET 8, 64 bit
 | GET | `/api/v1/clients?recherche=&page=&taille=` | Clients actifs |
 | GET | `/api/v1/clients/{numero}` | Un client |
 | GET | `/api/v1/articles?recherche=&famille=&page=&taille=` | Articles actifs, prix HT, stock et stock réservé |
-| GET | `/api/v1/articles/{reference}` | Un article |
+| GET | `/api/v1/articles/{reference}` | Un article (`gamme1` / `gamme2` : intitulés des gammes, ou null) |
+| GET | `/api/v1/articles/{reference}/gammes` | Valeurs de gamme vendables d'un article |
 | GET | `/api/v1/modes-reglement` | Modes de règlement Sage |
 | GET | `/api/v1/catalogue` | Instantané complet pour le mode hors ligne de la borne |
 | POST | `/api/v1/commandes` | Crée un bon de commande. **Idempotent** sur `idExterne` : 201 à la création, 200 si déjà reçu. |
@@ -54,8 +55,11 @@ POST /api/v1/commandes
 X-Api-Key: changer-cette-cle
 
 { "idExterne": "BORNE1-20260929-0001", "client": "CISEL",
-  "lignes": [ { "article": "CHORFA", "quantite": 1 } ] }
+  "lignes": [ { "article": "CHORFA", "quantite": 1 },
+              { "article": "BAOR01", "quantite": 1, "gamme1": "52" } ] }
 ```
+
+Un article géré en gamme (taille, couleur…) doit recevoir sa valeur dans `gamme1`, et `gamme2` pour une double gamme. Sans valeur, Sage refuse la ligne ; l'API renvoie alors 422 avec la liste des valeurs possibles.
 
 Exemple d'encaissement :
 
@@ -87,7 +91,7 @@ POST /api/v1/commandes/BORNE1-20260929-0001/encaissements
 
 L'API sert l'application sur **http://<serveur>:5080/borne/**. Il n'y a rien à installer à part : c'est une page web installable (PWA).
 
-**Parcours :** choix du client, puis articles et panier, puis encaissement (plusieurs modes possibles pour une même vente, avec la monnaie à rendre en espèces), puis fin.
+**Parcours :** choix du client, puis articles et panier (un article à gamme ouvre le choix de sa valeur ; le code-barres d'une valeur l'ajoute directement), puis encaissement (plusieurs modes possibles pour une même vente, avec la monnaie à rendre en espèces), puis fin.
 
 **Hors ligne :**
 - Chaque commande et chaque encaissement est d'abord enregistré sur la tablette (IndexedDB), puis envoyé à Sage. L'envoi se fait toutes les 20 secondes, au retour du réseau, ou avec le bouton « Envoyer maintenant ».
@@ -111,12 +115,13 @@ L'API sert l'application sur **http://<serveur>:5080/borne/**. Il n'y a rien à 
 dotnet test tests/Sage100Api.Tests
 ```
 
-9 tests couvrent la clé d'API, l'accès à l'application borne, la validation, les doublons de commandes et d'encaissements, et la conversion des erreurs Sage et du worker en codes HTTP. Ils tournent sans Sage.
+11 tests couvrent la clé d'API, l'accès à l'application borne, la validation (dont les gammes), le catalogue, les doublons de commandes et d'encaissements, et la conversion des erreurs Sage et du worker en codes HTTP. Ils tournent sans Sage.
 
 ## Reste à faire
 
 - Exécuter l'API et le worker en **services Windows** sur le serveur Sage, avec HTTPS.
 - Faire la **synchronisation incrémentale** du catalogue : aujourd'hui, `/catalogue` renvoie un instantané complet.
+- Afficher le **stock par valeur de gamme** (F_GAMSTOCK) ; la borne montre aujourd'hui le stock total de l'article.
 - Créer un **compte SQL en lecture seule** dédié à l'API.
 - Choisir le **journal** des acomptes par mode de règlement : aujourd'hui, Sage prend le journal par défaut du mode, par exemple BEU pour Espèces au lieu de CAIS.
 
