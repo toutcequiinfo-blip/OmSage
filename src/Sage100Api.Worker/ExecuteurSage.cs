@@ -74,7 +74,10 @@ namespace Sage100Api.Worker
                         resultat = new { sage = Session().IsOpen };
                         break;
                     case Operations.CreerCommande:
-                        resultat = CreerCommande(Lire<CommandeRequest>(requete));
+                        resultat = CreerCommande(Lire<CommandeWorkerRequest>(requete));
+                        break;
+                    case Operations.VerifierUtilisateur:
+                        resultat = VerifierUtilisateur(Lire<ConnexionRequest>(requete));
                         break;
                     case Operations.CreerEncaissement:
                         resultat = CreerEncaissement(Lire<EncaissementCommandeRequest>(requete));
@@ -137,6 +140,48 @@ namespace Sage100Api.Worker
             return cial;
         }
 
+        /// <summary>
+        /// Vérifie un login Sage en ouvrant une session séparée avec ce nom et ce mot de passe, refermée aussitôt :
+        /// c'est Sage qui contrôle le mot de passe. La session du worker (compte de worker.json) n'est pas touchée.
+        /// </summary>
+        UtilisateurVerifie VerifierUtilisateur(ConnexionRequest r)
+        {
+            var cpta = new BSCPTAApplication100c();
+            cpta.CompanyServer = _config.Serveur;
+            cpta.CompanyDatabaseName = _config.BaseCpta;
+            cpta.Loggable.UserName = r.Utilisateur;
+            cpta.Loggable.UserPwd = r.MotDePasse;
+
+            var cial = new BSCIALApplication100c();
+            cial.CompanyServer = _config.Serveur;
+            cial.CompanyDatabaseName = _config.BaseCial;
+            cial.Loggable.UserName = r.Utilisateur;
+            cial.Loggable.UserPwd = r.MotDePasse;
+            cial.CptaApplication = cpta;
+            try
+            {
+                cial.Open();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] Connexion refusée pour {r.Utilisateur} (0x{ex.HResult:X8}) : {ex.Message}");
+                throw new ErreurMetier(CodesErreur.AccesRefuse, $"Connexion refusée par Sage : {ex.Message}");
+            }
+            try
+            {
+                if (!cial.IsOpen)
+                    throw new ErreurMetier(CodesErreur.AccesRefuse, "Connexion refusée par Sage.");
+                var resultat = new UtilisateurVerifie { Utilisateur = r.Utilisateur, Administrateur = cial.Loggable.IsAdministrator };
+                Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] Connexion de {r.Utilisateur}{(resultat.Administrateur ? " (administrateur)" : "")}");
+                return resultat;
+            }
+            finally
+            {
+                try { if (cial.IsOpen) cial.Close(); } catch { /* session de contrôle seulement */ }
+                GC.KeepAlive(cpta);
+            }
+        }
+
         void Fermer()
         {
             try { if (_cial != null && _cial.IsOpen) _cial.Close(); } catch { /* arrêt */ }
@@ -179,8 +224,9 @@ namespace Sage100Api.Worker
             return string.Join(", ", valeurs);
         }
 
-        CommandeResult CreerCommande(CommandeRequest c)
+        CommandeResult CreerCommande(CommandeWorkerRequest demande)
         {
+            var c = demande.Commande;
             var existante = PieceParRefExterne(c.IdExterne);
             var cial = Session();
             if (existante != null)
@@ -201,6 +247,7 @@ namespace Sage100Api.Worker
             entete.SetDefaultClient(cpta.FactoryClient.ReadNumero(c.Client));
             entete.DO_RefExterne = c.IdExterne;
             entete.DO_Ref = Tronquer(string.IsNullOrEmpty(c.Reference) ? c.IdExterne : c.Reference!, Validation.LongueurReference);
+            AffecterCollaborateur(entete, demande.Auteur, c.IdExterne);
 
             for (int i = 0; i < c.Lignes.Count; i++)
             {
@@ -213,8 +260,23 @@ namespace Sage100Api.Worker
             pm.Process();
 
             var bc = (IBODocumentVente3)pm.DocumentResult;
-            Console.WriteLine($"Commande {c.IdExterne} -> {bc.DO_Piece}");
+            Console.WriteLine($"Commande {c.IdExterne} -> {bc.DO_Piece}{(demande.Auteur != null ? " par " + demande.Auteur.Utilisateur : "")}");
             return new CommandeResult { IdExterne = c.IdExterne, Piece = bc.DO_Piece, NetAPayer = bc.DO_NetAPayer };
+        }
+
+        /// <summary>Collaborateur de l'utilisateur connecté sur le bon de commande, pour savoir dans Sage qui a fait la saisie.</summary>
+        void AffecterCollaborateur(IBODocumentVente3 entete, Auteur? auteur, string idExterne)
+        {
+            if (auteur == null || string.IsNullOrEmpty(auteur.CollaborateurNom)) return;
+            try
+            {
+                entete.Collaborateur = _cpta!.FactoryCollaborateur.ReadNomPrenom(auteur.CollaborateurNom, auteur.CollaborateurPrenom ?? "");
+            }
+            catch (Exception ex)
+            {
+                // La vente passe quand même : le collaborateur est une information, pas une condition.
+                Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] Commande {idExterne} : collaborateur {auteur.CollaborateurNom} {auteur.CollaborateurPrenom} non affecté (0x{ex.HResult:X8}) : {ex.Message}");
+            }
         }
 
         string? PieceParRefExterne(string idExterne)
@@ -262,7 +324,7 @@ namespace Sage100Api.Worker
             ac.WriteDefault();
             if (journal != null) ChangerJournal(ac, journal, e.IdExterne);
 
-            Console.WriteLine($"Encaissement {e.IdExterne} ({e.Mode} {e.Montant}) -> acompte sur {r.PieceCommande}");
+            Console.WriteLine($"Encaissement {e.IdExterne} ({e.Mode} {e.Montant}) -> acompte sur {r.PieceCommande}{(r.Auteur != null ? " par " + r.Auteur.Utilisateur : "")}");
             return new EncaissementResult { IdExterne = e.IdExterne, PieceCommande = r.PieceCommande, Montant = e.Montant };
         }
 

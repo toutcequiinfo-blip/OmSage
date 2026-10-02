@@ -22,9 +22,15 @@ public sealed record ModeReglement(string Intitule, string? Code);
 /// <summary>Valeur (ou couple de valeurs) de gamme vendable pour un article : à renvoyer dans gamme1 / gamme2 de la ligne de commande.</summary>
 public sealed record EnumereGamme(string Article, string Gamme1, string? Gamme2, string? CodeBarre);
 
-/// <summary>ControleStock : vrai si une commande dépassant le stock disponible est refusée (voir Sage:ControleStock).</summary>
+/// <summary>
+/// ControleStock : vrai si une commande dépassant le stock disponible est refusée (voir Sage:ControleStock).
+/// Authentification : la borne doit connecter un utilisateur Sage ; ExigerCaissier : seuls les caissiers encaissent.
+/// </summary>
 public sealed record Catalogue(DateTime GenereLe, IReadOnlyList<Client> Clients, IReadOnlyList<Article> Articles, IReadOnlyList<ModeReglement> ModesReglement,
-    IReadOnlyList<EnumereGamme> Gammes, bool ControleStock);
+    IReadOnlyList<EnumereGamme> Gammes, bool ControleStock, bool Authentification = false, bool ExigerCaissier = false);
+
+/// <summary>Collaborateur Sage (F_COLLABORATEUR) rattaché à un utilisateur Sage, avec ses cases Vendeur et Caissier.</summary>
+public sealed record Collaborateur(int Numero, string Nom, string? Prenom, bool Vendeur, bool Caissier);
 
 /// <summary>Lectures directes en SQL. Codes et champs : « Structure des bases Sage 100 ».</summary>
 public interface ILecturesSage
@@ -38,6 +44,8 @@ public interface ILecturesSage
     Task<bool> StockNegatifAutorise();
     Task<IReadOnlyList<EnumereGamme>> Gammes(string? article = null);
     Task<string?> PieceCommande(string idExterne);
+    /// <summary>Collaborateur dont le champ « Utilisateur » de la fiche désigne ce login Sage, ou null.</summary>
+    Task<Collaborateur?> CollaborateurUtilisateur(string utilisateur);
 }
 
 public sealed class LecturesSql(IOptions<SageOptions> options) : ILecturesSage
@@ -129,6 +137,21 @@ public sealed class LecturesSql(IOptions<SageOptions> options) : ILecturesSage
         using var c = Cnx();
         return await c.QueryFirstOrDefaultAsync<string>(
             "SELECT TOP 1 DO_Piece FROM F_DOCENTETE WHERE DO_Domaine = 0 AND DO_Type = 1 AND DO_RefExterne = @idExterne", new { idExterne });
+    }
+
+    public async Task<Collaborateur?> CollaborateurUtilisateur(string utilisateur)
+    {
+        // F_COLLABORATEUR.PROT_No : utilisateur Sage choisi sur la fiche collaborateur. Les utilisateurs sont dans les
+        // tables système F_PROTECTIONCIAL (Gestion commerciale) et F_PROTECTIONCPTA (Comptabilité).
+        using var c = Cnx();
+        return await c.QueryFirstOrDefaultAsync<Collaborateur>(
+            "SELECT TOP 1 co.CO_No AS Numero, co.CO_Nom AS Nom, NULLIF(co.CO_Prenom, '') AS Prenom, " +
+            "CAST(co.CO_Vendeur AS bit) AS Vendeur, CAST(co.CO_Caissier AS bit) AS Caissier " +
+            "FROM F_COLLABORATEUR co WHERE co.PROT_No > 0 AND co.PROT_No IN (" +
+            "SELECT PROT_No FROM F_PROTECTIONCIAL WHERE PROT_User = @utilisateur " +
+            "UNION SELECT PROT_No FROM F_PROTECTIONCPTA WHERE PROT_User = @utilisateur) " +
+            "ORDER BY co.CO_Caissier DESC, co.CO_No",
+            new { utilisateur });
     }
 
     static string? Motif(string? recherche) => string.IsNullOrWhiteSpace(recherche) ? null : "%" + recherche.Trim() + "%";

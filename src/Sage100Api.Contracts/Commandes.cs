@@ -54,4 +54,11 @@ namespace Sage100Api.Contracts
         public double Montant { get; set; }
         public bool DejaExistant { get; set; }
     }
+
+    /// <summary>Login de la borne : nom et mot de passe de l'utilisateur Sage (Fichier > Autorisations d'accès).</summary>
+    public sealed class ConnexionRequest
+    {
+        public string Utilisateur { get; set; } = "";
+        public string MotDePasse { get; set; } = "";
+    }
 }

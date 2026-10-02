@@ -34,6 +34,8 @@ header .icone { background: transparent; color: #fff; border-color: rgba(255,255
 .etat.hors-ligne::before { color: #ff8a80; }
 .etat.erreur { background: var(--erreur); }
 
+.utilisateur { background: rgba(255,255,255,.12); color: #fff; border-color: rgba(255,255,255,.35); font-size: .85rem; white-space: nowrap; max-width: 30vw; overflow: hidden; text-overflow: ellipsis; }
+
 .bandeau { padding: 10px 16px; font-size: .95rem; }
 .bandeau.info { background: #e3ecf7; }
 .bandeau.ok { background: #dff3e6; }
@@ -115,3 +117,10 @@ label input { font: inherit; color: var(--texte); min-height: 52px; padding: 0 1
 .dialogue h2 { margin: 0 0 12px; font-size: 1.15rem; }
 .valeurs { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 10px; margin-bottom: 16px; max-height: 60vh; overflow: auto; }
 .valeur { min-height: 64px; font-weight: 600; }
+
+/* Connexion */
+.connexion { display: flex; justify-content: center; align-items: flex-start; }
+.carte-connexion { display: grid; gap: 14px; width: min(460px, 100%); margin-top: 6vh; background: var(--carte); border: 1px solid var(--bord); border-radius: 14px; padding: 24px; }
+.carte-connexion h1 { margin: 0; }
+.carte-connexion .familles:empty { display: none; }
+.interdit { background: #fff4e0; border: 1px solid #f0c987; border-radius: 10px; padding: 12px 16px; }

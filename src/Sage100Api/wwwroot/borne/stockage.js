@@ -33,6 +33,38 @@ export function nouvelIdVente(borne) {
   return `${borne}-${horodatage}-${alea}`;
 }
 
+// ---------- Utilisateurs Sage connectés sur cette borne ----------
+// Pour chaque login : profil et dernier jeton de l'API, plus une empreinte salée (PBKDF2) du mot de passe
+// qui permet de se reconnecter hors ligne. Le mot de passe lui-même n'est jamais gardé.
+
+const CLE_UTILISATEURS = "borne.utilisateurs";
+const CLE_SESSION = "borne.session";
+const cleLogin = (login) => (login || "").trim().toUpperCase();
+
+export function lireUtilisateurs() {
+  try {
+    return JSON.parse(localStorage.getItem(CLE_UTILISATEURS) || "{}");
+  } catch {
+    return {};
+  }
+}
+
+export const utilisateurMemorise = (login) => lireUtilisateurs()[cleLogin(login)] || null;
+
+export function memoriserUtilisateur(u) {
+  localStorage.setItem(CLE_UTILISATEURS, JSON.stringify({ ...lireUtilisateurs(), [cleLogin(u.profil.utilisateur)]: u }));
+}
+
+/** Jeton le plus récent de cet utilisateur : les ventes faites hors ligne partent avec lui après une reconnexion. */
+export const jetonUtilisateur = (login) => utilisateurMemorise(login)?.profil.jeton || null;
+
+/** Login de l'utilisateur connecté sur la borne (gardé si la tablette recharge la page), ou null. */
+export const lireSession = () => localStorage.getItem(CLE_SESSION);
+export function ecrireSession(login) {
+  if (login) localStorage.setItem(CLE_SESSION, login);
+  else localStorage.removeItem(CLE_SESSION);
+}
+
 // ---------- IndexedDB ----------
 
 let base;
@@ -69,7 +101,7 @@ export const ecrireCatalogue = (c) => transaction("catalogue", "readwrite", (s) 
 
 /**
  * Opération de la file : { cle, type: "commande" | "encaissement", idExterne, idCommande?, corps,
- * statut: "attente" | "erreur" | "ok", essais, message, resultat, creeLe, vente? }.
+ * statut: "attente" | "erreur" | "ok", essais, message, resultat, creeLe, vente?, utilisateur?, jeton? }.
  */
 export const ajouterOperation = (op) =>
   transaction("file", "readwrite", (s) => s.add({ statut: "attente", essais: 0, creeLe: Date.now(), ...op }));

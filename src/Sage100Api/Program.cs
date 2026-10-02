@@ -26,19 +26,24 @@ builder.Services.PostConfigure<SageOptions>(o =>
 });
 
 builder.Services.Configure<SageOptions>(builder.Configuration.GetSection("Sage"));
+builder.Services.Configure<AuthentificationOptions>(builder.Configuration.GetSection("Authentification"));
 builder.Services.AddSingleton<ILecturesSage, LecturesSql>();
 builder.Services.AddSingleton<IWorkerClient, WorkerClient>();
 builder.Services.AddSingleton<JournalOperations>();
 builder.Services.AddSingleton<ControleStock>();
 builder.Services.AddSingleton<ServiceEcritures>();
+builder.Services.AddSingleton<ServiceAuthentification>();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(o =>
 {
     o.SwaggerDoc("v1", new() { Title = "API Sage 100", Version = "v1", Description = "Liaison entre Sage 100 (Objets Métiers) et les applications externes." });
     o.AddSecurityDefinition("ApiKey", new() { Name = CleApi.Entete, In = Microsoft.OpenApi.Models.ParameterLocation.Header, Type = Microsoft.OpenApi.Models.SecuritySchemeType.ApiKey });
+    // Jeton renvoyé par POST /api/v1/connexion : à coller dans « Authorize » pour créer commandes et encaissements.
+    o.AddSecurityDefinition("Utilisateur", new() { Type = Microsoft.OpenApi.Models.SecuritySchemeType.Http, Scheme = "bearer", Description = "Jeton de POST /api/v1/connexion" });
     o.AddSecurityRequirement(new()
     {
         [new() { Reference = new() { Type = Microsoft.OpenApi.Models.ReferenceType.SecurityScheme, Id = "ApiKey" } }] = Array.Empty<string>(),
+        [new() { Reference = new() { Type = Microsoft.OpenApi.Models.ReferenceType.SecurityScheme, Id = "Utilisateur" } }] = Array.Empty<string>(),
     });
 });
 builder.Services.ConfigureHttpJsonOptions(o => o.SerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.CamelCase);
@@ -64,6 +69,24 @@ v1.MapGet("/sante", async (IWorkerClient worker, CancellationToken ct) =>
     return Results.Ok(new { api = "ok", worker = ping.Ok ? (object?)ping.Resultat : new { erreur = ping.MessageErreur } });
 }).WithTags("Santé");
 
+// ---------- Connexion des utilisateurs (login et mot de passe Sage, vérifiés par Sage via le worker) ----------
+v1.MapPost("/connexion", async (ConnexionRequest demande, ServiceAuthentification auth, CancellationToken ct) =>
+{
+    var r = await auth.Connecter(demande, ct);
+    if (r.Utilisateur is not { } u) return Reponses.Connexion(r.CodeErreur!, r.Message!);
+    return Results.Ok(new
+    {
+        jeton = r.Jeton,
+        expiration = u.Expiration,
+        utilisateur = u.Login,
+        administrateur = u.Administrateur,
+        collaborateur = u.Collaborateur is { } no ? new { numero = no, nom = u.Nom, prenom = u.Prenom } : null,
+        vendeur = u.Vendeur,
+        caissier = u.Caissier,
+        peutEncaisser = u.PeutEncaisser || !auth.Options.ExigerCaissier,
+    });
+}).WithTags("Connexion");
+
 // ---------- Lectures (SQL, lecture seule) ----------
 var lectures = v1.MapGroup("").WithTags("Lectures");
 
@@ -84,29 +107,36 @@ lectures.MapGet("/articles/{reference}/gammes", (ILecturesSage l, string referen
 lectures.MapGet("/modes-reglement", (ILecturesSage l) => l.ModesReglement());
 
 // Instantané complet pour le mode hors ligne de la borne (clients, articles avec prix et stock, modes de règlement, valeurs de gamme).
-lectures.MapGet("/catalogue", async (ILecturesSage l, ControleStock stock) =>
+lectures.MapGet("/catalogue", async (ILecturesSage l, ControleStock stock, ServiceAuthentification auth) =>
     new Catalogue(DateTime.UtcNow, await l.Clients(null, 1, 100_000), await l.Articles(null, null, 1, 100_000), await l.ModesReglement(),
-        await l.Gammes(), await stock.Actif()));
+        await l.Gammes(), await stock.Actif(), auth.Options.Active, auth.Options.Active && auth.Options.ExigerCaissier));
 
 // ---------- Écritures (worker Objets Métiers, idempotentes) ----------
 var ecritures = v1.MapGroup("/commandes").WithTags("Commandes et encaissements");
 
-ecritures.MapPost("", async (CommandeRequest c, ServiceEcritures s, HttpContext http, CancellationToken ct) =>
+ecritures.MapPost("", async (CommandeRequest c, ServiceEcritures s, ServiceAuthentification auth, HttpContext http, CancellationToken ct) =>
 {
+    var u = auth.Lire(http);
+    if (u == null && auth.Options.Active) return Reponses.ConnexionRequise();
     var erreurs = Validation.Verifier(c);
     if (erreurs.Count > 0) return Reponses.Invalide(erreurs);
-    var r = await s.CreerCommande(c, CleApi.Application(http), ct);
+    var r = await s.CreerCommande(c, CleApi.Application(http), u, ct);
     return Reponses.Depuis(r, v => v.DejaExistante ? Results.Ok(v) : Results.Created($"/api/v1/commandes/{v.IdExterne}", v));
 });
 
 ecritures.MapGet("/{idExterne}", async (string idExterne, ServiceEcritures s) =>
     await s.PieceCommande(idExterne) is { } piece ? Results.Ok(new { idExterne, piece }) : Results.NotFound());
 
-ecritures.MapPost("/{idExterne}/encaissements", async (string idExterne, EncaissementRequest e, ServiceEcritures s, HttpContext http, CancellationToken ct) =>
+ecritures.MapPost("/{idExterne}/encaissements", async (string idExterne, EncaissementRequest e, ServiceEcritures s, ServiceAuthentification auth,
+    HttpContext http, CancellationToken ct) =>
 {
+    var u = auth.Lire(http);
+    if (u == null && auth.Options.Active) return Reponses.ConnexionRequise();
+    if (u != null && auth.Options.Active && auth.Options.ExigerCaissier && !u.PeutEncaisser)
+        return Reponses.DroitRefuse($"{u.Login} ne peut pas encaisser : cochez « Caissier » sur sa fiche collaborateur dans Sage (champ Utilisateur = {u.Login}).");
     var erreurs = Validation.Verifier(e);
     if (erreurs.Count > 0) return Reponses.Invalide(erreurs);
-    var r = await s.CreerEncaissement(idExterne, e, CleApi.Application(http), ct);
+    var r = await s.CreerEncaissement(idExterne, e, CleApi.Application(http), u, ct);
     return Reponses.Depuis(r, v => v.DejaExistant ? Results.Ok(v) : Results.Created($"/api/v1/commandes/{idExterne}/encaissements/{v.IdExterne}", v));
 });
 

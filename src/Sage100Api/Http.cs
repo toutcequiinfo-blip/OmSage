@@ -47,6 +47,25 @@ public static class Reponses
     public static IResult Invalide(IEnumerable<string> erreurs) =>
         Results.UnprocessableEntity(new { code = "VALIDATION", erreurs });
 
+    public static IResult ConnexionRequise() =>
+        Results.Json(new { code = ServiceAuthentification.CodeConnexionRequise, message = "Connectez-vous avec votre login Sage (connexion absente ou expirée)." },
+            statusCode: StatusCodes.Status401Unauthorized);
+
+    public static IResult DroitRefuse(string message) =>
+        Results.Json(new { code = ServiceAuthentification.CodeDroitRefuse, message }, statusCode: StatusCodes.Status403Forbidden);
+
+    /// <summary>401 : login ou mot de passe refusé par Sage ; 429 : trop d'essais ; 503 : worker ou Sage indisponible.</summary>
+    public static IResult Connexion(string code, string message)
+    {
+        var corps = new { code, message };
+        return code switch
+        {
+            CodesErreur.AccesRefuse => Results.Json(corps, statusCode: StatusCodes.Status401Unauthorized),
+            ServiceAuthentification.CodeTropDEssais => Results.Json(corps, statusCode: StatusCodes.Status429TooManyRequests),
+            _ => Results.Json(corps, statusCode: StatusCodes.Status503ServiceUnavailable),
+        };
+    }
+
     /// <summary>
     /// 404 : client, article, mode ou commande inconnu ; 409 : même opération déjà en cours ;
     /// 422 : règle Sage refusée (stock, période clôturée...) ; 503 : worker ou Sage indisponible.

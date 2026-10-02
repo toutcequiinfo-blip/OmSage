@@ -1,7 +1,7 @@
 // Échanges avec l'API Sage 100 et envoi de la file d'attente.
 // Chaque opération porte un idExterne : la renvoyer après une coupure ne crée jamais de doublon dans Sage.
 
-import { lireReglages, lireFile, majOperation, ecrireCatalogue } from "./stockage.js";
+import { lireReglages, lireFile, majOperation, ecrireCatalogue, jetonUtilisateur, lireSession } from "./stockage.js";
 
 // La santé doit répondre vite ; le catalogue et les écritures peuvent attendre Sage (le worker a 60 s).
 const DELAI_SANTE_MS = 10000;
@@ -9,14 +9,19 @@ const DELAI_MS = 90000;
 
 export class ErreurReseau extends Error {}
 
-async function appeler(methode, chemin, corps, delaiMs = DELAI_MS) {
+/** jeton : connexion de l'utilisateur Sage (POST /connexion), exigée pour les commandes et encaissements. */
+export async function appeler(methode, chemin, corps, delaiMs = DELAI_MS, jeton = null) {
   const { cle } = lireReglages();
   const controle = new AbortController();
   const minuteur = setTimeout(() => controle.abort(), delaiMs);
   try {
     const r = await fetch(`/api/v1${chemin}`, {
       method: methode,
-      headers: { "X-Api-Key": cle, ...(corps ? { "Content-Type": "application/json" } : {}) },
+      headers: {
+        "X-Api-Key": cle,
+        ...(jeton ? { Authorization: `Bearer ${jeton}` } : {}),
+        ...(corps ? { "Content-Type": "application/json" } : {}),
+      },
       body: corps ? JSON.stringify(corps) : undefined,
       signal: controle.signal,
       cache: "no-store",
@@ -55,7 +60,7 @@ let enCours = null;
 /**
  * Envoie les opérations en attente, dans l'ordre où elles ont été saisies.
  * S'arrête dès que le serveur ne répond plus ; les opérations restent en file pour le prochain passage.
- * Retourne { envoyees, restantes, cleRefusee }.
+ * Retourne { envoyees, restantes, cleRefusee, reconnexions: [logins dont la connexion a expiré] }.
  */
 export function synchroniser() {
   enCours ??= envoyerFile().finally(() => (enCours = null));
@@ -63,7 +68,7 @@ export function synchroniser() {
 }
 
 async function envoyerFile() {
-  const bilan = { envoyees: 0, restantes: 0, cleRefusee: false };
+  const bilan = { envoyees: 0, restantes: 0, cleRefusee: false, reconnexions: [] };
   const ops = await lireFile();
   const commandesOk = new Set(ops.filter((o) => o.type === "commande" && o.statut === "ok").map((o) => o.idExterne));
   let arret = false;
@@ -78,7 +83,12 @@ async function envoyerFile() {
     const chemin = op.type === "commande" ? "/commandes" : `/commandes/${encodeURIComponent(op.idCommande)}/encaissements`;
     op.essais++;
     try {
-      const { statut, donnees } = await appeler("POST", chemin, op.corps);
+      // Le jeton le plus récent de l'utilisateur, au cas où celui de la vente a expiré pendant une coupure.
+      // Une vente saisie avant l'arrivée de la connexion part avec l'utilisateur connecté.
+      const jeton = op.utilisateur
+        ? jetonUtilisateur(op.utilisateur) || op.jeton || null
+        : (lireSession() && jetonUtilisateur(lireSession())) || null;
+      const { statut, donnees } = await appeler("POST", chemin, op.corps, DELAI_MS, jeton);
       if (statut === 200 || statut === 201) {
         op.statut = "ok";
         op.resultat = donnees;
@@ -89,6 +99,15 @@ async function envoyerFile() {
         // Refus de Sage (stock, client bloqué...) : il faut une décision humaine.
         op.statut = "erreur";
         op.message = texteErreur(donnees) || "Refusé par Sage.";
+      } else if (statut === 403) {
+        // Droit refusé (utilisateur non caissier) : à régler dans Sage ou par un caissier.
+        op.statut = "erreur";
+        op.message = texteErreur(donnees) || "Droit refusé.";
+      } else if (statut === 401 && donnees?.code === "CONNEXION_REQUISE") {
+        // Connexion absente ou expirée : la vente attend que son utilisateur se reconnecte.
+        op.message = `Reconnexion de ${op.utilisateur || "l'utilisateur"} nécessaire pour l'envoyer.`;
+        if (op.utilisateur && !bilan.reconnexions.includes(op.utilisateur)) bilan.reconnexions.push(op.utilisateur);
+        bilan.restantes++;
       } else if (statut === 401) {
         op.message = "Clé d'API refusée.";
         bilan.cleRefusee = true;
