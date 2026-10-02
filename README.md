@@ -30,6 +30,7 @@ Borne / applications ──HTTPS + X-Api-Key──► Sage100Api (.NET 8, 64 bit
 | Méthode | Route | Description |
 |---|---|---|
 | GET | `/api/v1/sante` | État de l'API et du worker (sans clé) |
+| POST | `/api/v1/connexion` | Connexion d'un utilisateur avec son login Sage : renvoie un jeton, le collaborateur rattaché et le droit d'encaisser |
 | GET | `/api/v1/clients?recherche=&page=&taille=` | Clients actifs |
 | GET | `/api/v1/clients/{numero}` | Un client |
 | GET | `/api/v1/articles?recherche=&famille=&page=&taille=` | Articles actifs, prix HT, stock et stock réservé |
@@ -43,8 +44,18 @@ Borne / applications ──HTTPS + X-Api-Key──► Sage100Api (.NET 8, 64 bit
 
 **Journal des encaissements :** un acompte n'a pas de journal. Sage le donne au règlement qu'il crée : c'est le journal par défaut du mode, par exemple BEU pour Espèces. Pour imposer un journal de trésorerie par mode, renseigne `journauxParMode` dans `worker.json`, par exemple `{ "Espèces": "CAIS", "Carte bancaire": "BQ1" }`, puis redémarre le worker. Un mode absent garde le journal de Sage. Un code de journal inconnu fait refuser l'encaissement avant qu'il soit créé.
 
+**Connexion des utilisateurs :** avec `Authentification:Active` à `true` (par défaut), commandes et encaissements exigent un utilisateur Sage connecté, en plus de la clé d'API.
+- `POST /api/v1/connexion` avec `{ "utilisateur": "MARIE", "motDePasse": "..." }`. Le worker ouvre Sage avec ce login et ce mot de passe, le temps de la vérification : c'est Sage qui les contrôle. L'API ne garde aucun mot de passe.
+- La réponse contient un `jeton`, à envoyer ensuite dans l'en-tête `Authorization: Bearer <jeton>` (bouton « Authorize » dans Swagger). Il est valable `Authentification:DureeHeures` heures (168 par défaut), ce qui couvre aussi les ventes faites hors ligne.
+- Le bon de commande reçoit le collaborateur Sage rattaché à l'utilisateur : c'est le champ « Utilisateur » de la fiche collaborateur. Le journal de l'API note aussi le login.
+- Avec `Authentification:ExigerCaissier` à `true` (par défaut), seuls les utilisateurs dont le collaborateur a la case « Caissier » cochée, ou les administrateurs Sage, peuvent encaisser.
+- Après 5 mauvais mots de passe, le login est bloqué 2 minutes.
+- Les droits configurés dans Sage (menus, fonctions) ne sont pas appliqués : les écritures passent par la session du worker.
+
 Codes d'erreur :
-- 401 : clé d'API absente ou invalide.
+- 401 : clé d'API absente ou invalide, connexion absente ou expirée (`CONNEXION_REQUISE`), login refusé par Sage (`ACCES_REFUSE`).
+- 403 : utilisateur sans droit d'encaisser (`DROIT_REFUSE`).
+- 429 : trop de mauvais mots de passe.
 - 404 : client, article, mode ou commande inconnu.
 - 409 : la même opération est déjà en cours.
 - 422 : données invalides, ou règle Sage refusée (stock, période clôturée…).
@@ -100,7 +111,7 @@ POST /api/v1/commandes/BORNE1-20260929-0001/encaissements
 
 L'API sert l'application sur **http://<serveur>:5080/borne/**. Il n'y a rien à installer à part : c'est une page web installable (PWA).
 
-**Parcours :** choix du client, puis articles et panier (un article à gamme ouvre le choix de sa valeur ; le code-barres d'une valeur l'ajoute directement), puis encaissement (plusieurs modes possibles pour une même vente, avec la monnaie à rendre en espèces), puis fin.
+**Parcours :** connexion avec le login Sage (si `Authentification:Active`), choix du client, puis articles et panier (un article à gamme ouvre le choix de sa valeur ; le code-barres d'une valeur l'ajoute directement), puis encaissement (plusieurs modes possibles pour une même vente, avec la monnaie à rendre en espèces), puis fin.
 
 **Hors ligne :**
 - Chaque commande et chaque encaissement est d'abord enregistré sur la tablette (IndexedDB), puis envoyé à Sage. L'envoi se fait toutes les 20 secondes, au retour du réseau, ou avec le bouton « Envoyer maintenant ».
@@ -108,6 +119,9 @@ L'API sert l'application sur **http://<serveur>:5080/borne/**. Il n'y a rien à 
 - Un encaissement attend toujours que sa commande soit dans Sage avant de partir.
 - Un refus de Sage (422 : stock, client bloqué…) est affiché dans **Réglages > File d'envoi**, avec les boutons Réessayer et Abandonner.
 - Le catalogue (clients, articles, prix, stock, modes de règlement) est gardé sur la tablette et rafraîchi toutes les 10 minutes.
+- Un utilisateur déjà connecté une fois sur la tablette peut s'y reconnecter sans serveur : la borne garde une empreinte salée de son mot de passe, jamais le mot de passe. Ses ventes partent avec sa connexion ; si elle a expiré entre-temps, la borne demande de le reconnecter pour les envoyer.
+
+**Utilisateurs :** le bouton 👤 en haut affiche l'utilisateur connecté ; un appui permet de changer d'utilisateur. Sans la case « Caissier » sur sa fiche collaborateur Sage, l'utilisateur prend la commande mais la borne n'affiche pas les modes de règlement.
 
 **Montants :** la borne affiche un TTC **estimé** avec le taux de TVA des réglages. Le net à payer réel est celui calculé par Sage, visible dans la file d'envoi une fois la commande envoyée.
 
@@ -155,7 +169,7 @@ Ce qui est installé dans `C:\Sage100Api` :
 dotnet test tests/Sage100Api.Tests
 ```
 
-13 tests couvrent la clé d'API, l'accès à l'application borne, la validation (dont les gammes), le contrôle du stock, le catalogue, les doublons de commandes et d'encaissements, et la conversion des erreurs Sage et du worker en codes HTTP. Ils tournent sans Sage.
+17 tests couvrent la clé d'API, la connexion des utilisateurs (jeton, collaborateur, caissier, blocage), l'accès à l'application borne, la validation (dont les gammes), le contrôle du stock, le catalogue, les doublons de commandes et d'encaissements, et la conversion des erreurs Sage et du worker en codes HTTP. Ils tournent sans Sage.
 
 ## Reste à faire
 

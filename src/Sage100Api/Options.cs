@@ -16,3 +16,19 @@ public sealed class SageOptions
     /// <summary>Nom de l'application cliente -> clé d'API (en-tête X-Api-Key).</summary>
     public Dictionary<string, string> ClesApi { get; set; } = new();
 }
+
+/// <summary>Section « Authentification » : connexion des utilisateurs de la borne avec leur login Sage.</summary>
+public sealed class AuthentificationOptions
+{
+    /// <summary>Vrai : commandes et encaissements exigent un utilisateur Sage connecté (POST /api/v1/connexion).</summary>
+    public bool Active { get; set; } = true;
+    /// <summary>
+    /// Durée de validité d'une connexion. Elle couvre aussi les ventes faites hors ligne : passé ce délai,
+    /// l'utilisateur doit se reconnecter pour que ses ventes en attente partent vers Sage.
+    /// </summary>
+    public int DureeHeures { get; set; } = 168;
+    /// <summary>Vrai : seuls les utilisateurs dont le collaborateur Sage est « Caissier » (ou les administrateurs) encaissent.</summary>
+    public bool ExigerCaissier { get; set; } = true;
+    /// <summary>Clé de signature des jetons (base64). Vide : clé aléatoire gardée dans un fichier à côté du journal.</summary>
+    public string CleSignature { get; set; } = "";
+}

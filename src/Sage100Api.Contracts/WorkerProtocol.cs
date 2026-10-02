@@ -23,6 +23,7 @@ namespace Sage100Api.Contracts
         public const string Ping = "ping";
         public const string CreerCommande = "creerCommande";
         public const string CreerEncaissement = "creerEncaissement";
+        public const string VerifierUtilisateur = "verifierUtilisateur";
     }
 
     public sealed class WorkerRequest
@@ -41,11 +42,34 @@ namespace Sage100Api.Contracts
         public string? MessageErreur { get; set; }
     }
 
+    /// <summary>Commande adressée au worker, avec l'utilisateur connecté qui l'a saisie (null si la connexion n'est pas exigée).</summary>
+    public sealed class CommandeWorkerRequest
+    {
+        public CommandeRequest Commande { get; set; } = new CommandeRequest();
+        public Auteur? Auteur { get; set; }
+    }
+
     /// <summary>Encaissement adressé au worker : l'API y ajoute la pièce Sage de la commande.</summary>
     public sealed class EncaissementCommandeRequest
     {
         public string PieceCommande { get; set; } = "";
         public EncaissementRequest Encaissement { get; set; } = new EncaissementRequest();
+        public Auteur? Auteur { get; set; }
+    }
+
+    /// <summary>Utilisateur Sage connecté et le collaborateur Sage qui lui est rattaché (fiche collaborateur, champ Utilisateur).</summary>
+    public sealed class Auteur
+    {
+        public string Utilisateur { get; set; } = "";
+        public string? CollaborateurNom { get; set; }
+        public string? CollaborateurPrenom { get; set; }
+    }
+
+    /// <summary>Résultat de la vérification d'un login Sage par le worker.</summary>
+    public sealed class UtilisateurVerifie
+    {
+        public string Utilisateur { get; set; } = "";
+        public bool Administrateur { get; set; }
     }
 
     public static class CodesErreur
@@ -53,5 +77,7 @@ namespace Sage100Api.Contracts
         public const string SageMetier = "SAGE_METIER";
         public const string Introuvable = "INTROUVABLE";
         public const string Technique = "TECHNIQUE";
+        /// <summary>Login ou mot de passe Sage refusé.</summary>
+        public const string AccesRefuse = "ACCES_REFUSE";
     }
 }

@@ -13,11 +13,24 @@
   <header>
     <div class="marque">Borne <span id="nom-borne"></span></div>
     <div id="client-actuel" class="client-actuel"></div>
+    <button id="utilisateur" class="utilisateur" type="button" title="Changer d'utilisateur" hidden></button>
     <button id="etat" class="etat" type="button" title="État de la connexion et file d'envoi">…</button>
     <button id="btn-reglages" class="icone" type="button" aria-label="Réglages">⚙</button>
   </header>
 
   <div id="bandeau" class="bandeau" hidden></div>
+
+  <!-- 0. Connexion avec le login Sage -->
+  <main id="ecran-connexion" class="ecran connexion" hidden>
+    <form id="form-connexion" class="carte-connexion">
+      <h1>Connexion</h1>
+      <p class="discret">Votre nom d'utilisateur et votre mot de passe Sage.</p>
+      <label>Utilisateur <input name="utilisateur" required autocomplete="username" autocapitalize="none" spellcheck="false"></label>
+      <div id="utilisateurs-connus" class="familles"></div>
+      <label>Mot de passe <input name="motDePasse" type="password" autocomplete="current-password"></label>
+      <button id="btn-connexion" type="submit" class="principal grand">Se connecter</button>
+    </form>
+  </main>
 
   <!-- 1. Choix du client -->
   <main id="ecran-client" class="ecran">
@@ -57,6 +70,7 @@
       <div class="reste"><span>Reste à payer</span><strong id="p-reste">0</strong></div>
     </div>
     <div id="modes" class="modes"></div>
+    <p id="encaissement-interdit" class="interdit" hidden></p>
     <div id="saisie-paiement" class="saisie-paiement" hidden>
       <label>Montant reçu <input id="p-montant" type="number" inputmode="decimal" min="0" step="0.01"></label>
       <label id="lbl-reference">Référence <input id="p-reference" type="text" maxlength="20" placeholder="N° de chèque, transaction…"></label>

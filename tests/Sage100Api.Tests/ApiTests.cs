@@ -24,10 +24,18 @@ public sealed class ApiTests : IDisposable
 
     public ApiTests()
     {
-        _usine = new WebApplicationFactory<Program>().WithWebHostBuilder(b =>
+        _usine = Usine(connexion: false);
+        _http = _usine.CreateClient();
+        _http.DefaultRequestHeaders.Add("X-Api-Key", Cle);
+    }
+
+    WebApplicationFactory<Program> Usine(bool connexion) =>
+        new WebApplicationFactory<Program>().WithWebHostBuilder(b =>
         {
             b.UseSetting("Sage:CheminJournal", _journal);
             b.UseSetting("Sage:ClesApi:borne-test", Cle);
+            b.UseSetting("Authentification:Active", connexion ? "true" : "false");
+            b.UseSetting("Authentification:CleSignature", Convert.ToBase64String(new byte[32]));
             b.ConfigureServices(s =>
             {
                 s.RemoveAll<IWorkerClient>();
@@ -36,8 +44,20 @@ public sealed class ApiTests : IDisposable
                 s.AddSingleton<ILecturesSage>(_lectures);
             });
         });
-        _http = _usine.CreateClient();
-        _http.DefaultRequestHeaders.Add("X-Api-Key", Cle);
+
+    HttpClient ClientAvecConnexion(WebApplicationFactory<Program> usine, string? jeton = null)
+    {
+        var http = usine.CreateClient();
+        http.DefaultRequestHeaders.Add("X-Api-Key", Cle);
+        if (jeton != null) http.DefaultRequestHeaders.Authorization = new("Bearer", jeton);
+        return http;
+    }
+
+    async Task<string> Jeton(HttpClient http, string utilisateur)
+    {
+        var r = await http.PostAsJsonAsync("/api/v1/connexion", new ConnexionRequest { Utilisateur = utilisateur, MotDePasse = "bon" });
+        Assert.Equal(HttpStatusCode.OK, r.StatusCode);
+        return (await r.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("jeton").GetString()!;
     }
 
     static CommandeRequest Commande(string id = "BORNE1-000001") => new()
@@ -198,6 +218,77 @@ public sealed class ApiTests : IDisposable
         Assert.Equal(HttpStatusCode.ServiceUnavailable, r.StatusCode);
     }
 
+    [Fact]
+    public async Task Connexion_exigee_commande_refusee_sans_utilisateur()
+    {
+        using var usine = Usine(connexion: true);
+        var r = await ClientAvecConnexion(usine).PostAsJsonAsync("/api/v1/commandes", Commande("BORNE1-000010"));
+        var faux = await ClientAvecConnexion(usine, "abc.def").PostAsJsonAsync("/api/v1/commandes", Commande("BORNE1-000010"));
+
+        Assert.Equal(HttpStatusCode.Unauthorized, r.StatusCode);
+        Assert.Contains("CONNEXION_REQUISE", await r.Content.ReadAsStringAsync());
+        Assert.Equal(HttpStatusCode.Unauthorized, faux.StatusCode);
+        Assert.Equal(0, _worker.Appels(Operations.CreerCommande));
+        var catalogue = await ClientAvecConnexion(usine).GetFromJsonAsync<JsonElement>("/api/v1/catalogue");
+        Assert.True(catalogue.GetProperty("authentification").GetBoolean());
+        Assert.True(catalogue.GetProperty("exigerCaissier").GetBoolean());
+    }
+
+    [Fact]
+    public async Task Mauvais_mot_de_passe_renvoie_401_puis_blocage_apres_5_essais()
+    {
+        using var usine = Usine(connexion: true);
+        var http = ClientAvecConnexion(usine);
+        var mauvais = new ConnexionRequest { Utilisateur = "MARIE", MotDePasse = "faux" };
+
+        var r = await http.PostAsJsonAsync("/api/v1/connexion", mauvais);
+        for (int i = 0; i < 4; i++) await http.PostAsJsonAsync("/api/v1/connexion", mauvais);
+        var bloque = await http.PostAsJsonAsync("/api/v1/connexion", new ConnexionRequest { Utilisateur = "MARIE", MotDePasse = "bon" });
+
+        Assert.Equal(HttpStatusCode.Unauthorized, r.StatusCode);
+        Assert.Contains("ACCES_REFUSE", await r.Content.ReadAsStringAsync());
+        Assert.Equal(HttpStatusCode.TooManyRequests, bloque.StatusCode);
+        Assert.Equal(5, _worker.Appels(Operations.VerifierUtilisateur));
+    }
+
+    [Fact]
+    public async Task La_commande_porte_le_collaborateur_de_l_utilisateur_connecte()
+    {
+        using var usine = Usine(connexion: true);
+        var http = ClientAvecConnexion(usine);
+        var connexion = await (await http.PostAsJsonAsync("/api/v1/connexion", new ConnexionRequest { Utilisateur = "MARIE", MotDePasse = "bon" }))
+            .Content.ReadFromJsonAsync<JsonElement>();
+        var jeton = connexion.GetProperty("jeton").GetString()!;
+
+        var r = await ClientAvecConnexion(usine, jeton).PostAsJsonAsync("/api/v1/commandes", Commande("BORNE1-000011"));
+
+        Assert.Equal(HttpStatusCode.Created, r.StatusCode);
+        Assert.Equal("DUPONT", connexion.GetProperty("collaborateur").GetProperty("nom").GetString());
+        Assert.True(connexion.GetProperty("peutEncaisser").GetBoolean());
+        Assert.Equal("MARIE", _worker.DernierAuteur?.Utilisateur);
+        Assert.Equal("DUPONT", _worker.DernierAuteur?.CollaborateurNom);
+        Assert.Equal("Marie", _worker.DernierAuteur?.CollaborateurPrenom);
+    }
+
+    [Fact]
+    public async Task Un_utilisateur_non_caissier_ne_peut_pas_encaisser()
+    {
+        using var usine = Usine(connexion: true);
+        var http = ClientAvecConnexion(usine);
+        var vendeur = ClientAvecConnexion(usine, await Jeton(http, "PAUL"));
+        var caissiere = ClientAvecConnexion(usine, await Jeton(http, "MARIE"));
+        await vendeur.PostAsJsonAsync("/api/v1/commandes", Commande("BORNE1-000012"));
+        var p = new EncaissementRequest { IdExterne = "BORNE1-000012-P1", Mode = "Espèces", Montant = 100 };
+
+        var refuse = await vendeur.PostAsJsonAsync("/api/v1/commandes/BORNE1-000012/encaissements", p);
+        var accepte = await caissiere.PostAsJsonAsync("/api/v1/commandes/BORNE1-000012/encaissements", p);
+
+        Assert.Equal(HttpStatusCode.Forbidden, refuse.StatusCode);
+        Assert.Contains("Caissier", await refuse.Content.ReadAsStringAsync());
+        Assert.Equal(HttpStatusCode.Created, accepte.StatusCode);
+        Assert.Equal(1, _worker.Appels(Operations.CreerEncaissement));
+    }
+
     public void Dispose()
     {
         _http.Dispose();
@@ -211,6 +302,7 @@ public sealed class ApiTests : IDisposable
         readonly Dictionary<string, int> _appels = new();
         public (string Code, string Message)? ProchaineErreur;
         public string? DernierePiece;
+        public Auteur? DernierAuteur;
 
         public int Appels(string op) => _appels.GetValueOrDefault(op);
 
@@ -222,13 +314,22 @@ public sealed class ApiTests : IDisposable
                 ProchaineErreur = null;
                 return Task.FromResult(new WorkerResponse { Ok = false, CodeErreur = e.Code, MessageErreur = e.Message });
             }
+            if (donnees is ConnexionRequest login && login.MotDePasse != "bon")
+                return Task.FromResult(new WorkerResponse { Ok = false, CodeErreur = CodesErreur.AccesRefuse, MessageErreur = "Mot de passe incorrect" });
             object resultat = donnees switch
             {
-                CommandeRequest c => new CommandeResult { IdExterne = c.IdExterne, Piece = "BC00100", NetAPayer = 1303.2 },
+                CommandeWorkerRequest c => Commande(c),
                 EncaissementCommandeRequest p => Encaissement(p),
+                ConnexionRequest l => new UtilisateurVerifie { Utilisateur = l.Utilisateur },
                 _ => new { sage = true },
             };
             return Task.FromResult(new WorkerResponse { Ok = true, Resultat = JsonSerializer.SerializeToElement(resultat, WorkerProtocol.Json) });
+        }
+
+        CommandeResult Commande(CommandeWorkerRequest c)
+        {
+            DernierAuteur = c.Auteur;
+            return new CommandeResult { IdExterne = c.Commande.IdExterne, Piece = "BC00100", NetAPayer = 1303.2 };
         }
 
         EncaissementResult Encaissement(EncaissementCommandeRequest p)
@@ -253,5 +354,11 @@ public sealed class ApiTests : IDisposable
         public Task<IReadOnlyList<EnumereGamme>> Gammes(string? article = null) =>
             Task.FromResult<IReadOnlyList<EnumereGamme>>(new[] { new EnumereGamme("BAOR01", "52", null, null) });
         public Task<string?> PieceCommande(string idExterne) => Task.FromResult<string?>(null);
+        public Task<Collaborateur?> CollaborateurUtilisateur(string utilisateur) => Task.FromResult(utilisateur switch
+        {
+            "MARIE" => new Collaborateur(3, "DUPONT", "Marie", true, true),
+            "PAUL" => new Collaborateur(4, "MARTIN", "Paul", true, false),
+            _ => (Collaborateur?)null,
+        });
     }
 }

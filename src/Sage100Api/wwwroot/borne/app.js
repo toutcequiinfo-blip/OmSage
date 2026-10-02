@@ -1,11 +1,14 @@
 // Borne de prise de commande et d'encaissement (Sage 100).
-// Parcours : client -> articles et panier -> encaissement -> fin. Fonctionne hors ligne grâce à la file d'envoi.
+// Parcours : connexion (login Sage) -> client -> articles et panier -> encaissement -> fin.
+// Fonctionne hors ligne grâce à la file d'envoi.
 
 import {
   lireReglages, ecrireReglages, prochainNumeroVente, nouvelIdVente,
   lireCatalogue, ajouterOperation, majOperation, supprimerOperation, lireFile, purgerFile,
+  lireSession, ecrireSession, utilisateurMemorise, lireUtilisateurs,
 } from "./stockage.js";
 import { etatConnexion, rechargerCatalogue, synchroniser } from "./synchro.js";
+import { seConnecter } from "./connexion.js";
 
 const $ = (s) => document.querySelector(s);
 const euros = new Intl.NumberFormat("fr-FR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -17,6 +20,7 @@ let connexion = "hors-ligne";
 let vente = null; // { id, numero, client, lignes: Map(cle -> {article, enumere, quantite}), paiements: [], validee }
 let famille = null;
 let modeChoisi = null;
+let utilisateur = null; // profil renvoyé par la connexion (voir connexion.js)
 
 // ---------- Écrans ----------
 
@@ -27,6 +31,7 @@ function afficher(ecran) {
   if (ecran === "vente") { dessinerFamilles(); dessinerArticles(); dessinerPanier(); }
   if (ecran === "paiement") dessinerPaiement();
   if (ecran === "reglages") dessinerReglages();
+  if (ecran === "connexion") dessinerConnexion();
 }
 
 function bandeau(texte, type = "info") {
@@ -204,6 +209,7 @@ async function validerCommande() {
       })),
     },
     vente: { numero: vente.numero, client: vente.client.intitule || vente.client.numero, totalTtcEstime: t.ttc },
+    ...auteur(),
   });
   synchroniserPuisAfficher();
   afficher("paiement");
@@ -220,7 +226,13 @@ function dessinerPaiement() {
 
   const zone = $("#modes");
   zone.replaceChildren();
-  for (const m of catalogue.modesReglement) {
+  // Même règle que l'API : sans la case Caissier sur sa fiche collaborateur Sage, l'utilisateur n'encaisse pas.
+  const interdit = !!catalogue.exigerCaissier && !!utilisateur && !utilisateur.peutEncaisser;
+  $("#encaissement-interdit").hidden = !interdit;
+  $("#encaissement-interdit").textContent = interdit
+    ? `${nomUtilisateur(utilisateur)} n'est pas caissier dans Sage : la commande est enregistrée, l'encaissement sera fait par un caissier dans Sage.`
+    : "";
+  for (const m of interdit ? [] : catalogue.modesReglement) {
     zone.append(element("button", {
       type: "button", class: modeChoisi === m.intitule ? "mode actif" : "mode",
       onclick: () => choisirMode(m.intitule),
@@ -278,6 +290,7 @@ async function enregistrerEncaissement() {
     idCommande: vente.id,
     corps: { idExterne: id, mode: modeChoisi, montant, referencePaiement: reference },
     vente: { numero: vente.numero, client: vente.client.intitule || vente.client.numero },
+    ...auteur(),
   });
   vente.paiements.push({ mode: modeChoisi, montant, reference });
   modeChoisi = null;
@@ -302,10 +315,71 @@ function terminer() {
 }
 
 function nouvelleVente() {
+  if (connexionExigee() && !utilisateur) return afficher("connexion");
   const defaut = lireReglages().clientDefaut;
   const client = defaut && catalogue?.clients.find((c) => c.numero === defaut);
   if (client) demarrerVente(client);
   else afficher("client");
+}
+
+// ---------- Connexion des utilisateurs (login Sage) ----------
+
+const connexionExigee = () => !!catalogue?.authentification;
+const nomUtilisateur = (u) =>
+  u?.collaborateur ? [u.collaborateur.prenom, u.collaborateur.nom].filter(Boolean).join(" ") : u?.utilisateur || "";
+/** Utilisateur à joindre à chaque opération de la file : elle partira avec sa connexion, même plus tard. */
+const auteur = () => (utilisateur ? { utilisateur: utilisateur.utilisateur, jeton: utilisateur.jeton } : {});
+
+function majUtilisateur() {
+  const b = $("#utilisateur");
+  b.hidden = !connexionExigee() || !utilisateur;
+  b.textContent = utilisateur ? `👤 ${nomUtilisateur(utilisateur)}` : "";
+}
+
+function dessinerConnexion() {
+  const f = $("#form-connexion");
+  f.elements.motDePasse.value = "";
+  // Les utilisateurs déjà connectés sur cette borne : un appui remplit le nom.
+  const connus = Object.values(lireUtilisateurs()).map((u) => u.profil.utilisateur).sort();
+  $("#utilisateurs-connus").replaceChildren(...connus.map((login) => element("button", {
+    type: "button", class: "puce",
+    onclick: () => { f.elements.utilisateur.value = login; f.elements.motDePasse.focus(); },
+  }, login)));
+  (f.elements.utilisateur.value ? f.elements.motDePasse : f.elements.utilisateur).focus();
+}
+
+async function connecter(ev) {
+  ev.preventDefault();
+  const f = ev.target.elements;
+  const bouton = $("#btn-connexion");
+  bouton.disabled = true;
+  bouton.textContent = "Connexion…";
+  try {
+    utilisateur = await seConnecter(f.utilisateur.value, f.motDePasse.value);
+    ecrireSession(utilisateur.utilisateur);
+    f.motDePasse.value = "";
+    majUtilisateur();
+    bandeau(utilisateur.horsLigne ? "Connecté hors ligne : les ventes partiront vers Sage au retour du serveur." : "", "info");
+    nouvelleVente();
+    synchroniserPuisAfficher();
+  } catch (e) {
+    bandeau(e.message, "erreur");
+    f.motDePasse.select();
+  } finally {
+    bouton.disabled = false;
+    bouton.textContent = "Se connecter";
+  }
+}
+
+function deconnecter() {
+  if (vente && (vente.lignes.size > 0 || vente.validee)
+      && !confirm(vente.validee ? "Changer d'utilisateur ? La commande est enregistrée ; son encaissement s'arrête ici." : "Changer d'utilisateur ? La commande en cours sera perdue.")) return;
+  vente = null;
+  utilisateur = null;
+  ecrireSession(null);
+  majUtilisateur();
+  bandeau("");
+  afficher("connexion");
 }
 
 // ---------- 4. Réglages et file ----------
@@ -402,6 +476,8 @@ async function synchroniserPuisAfficher() {
   if (connexion === "hors-ligne") return;
   const bilan = await synchroniser();
   if (bilan.cleRefusee) bandeau("La clé d'API est refusée par le serveur. Corrigez-la dans les réglages.", "erreur");
+  else if (bilan.reconnexions.length)
+    bandeau(`Connexion expirée pour ${bilan.reconnexions.join(", ")} : reconnectez-vous pour envoyer vos ventes à Sage.`, "erreur");
   await majEtat();
   if (!$("#ecran-reglages").hidden) dessinerFile();
 }
@@ -438,6 +514,8 @@ function brancher() {
     else if (vente) afficher("vente");
     else nouvelleVente();
   });
+  $("#form-connexion").addEventListener("submit", connecter);
+  $("#utilisateur").addEventListener("click", deconnecter);
   $("#form-reglages").addEventListener("submit", enregistrerReglages);
   $("#btn-catalogue").addEventListener("click", async () => { await chargerCatalogue(true); dessinerReglages(); });
   $("#btn-synchroniser").addEventListener("click", synchroniserPuisAfficher);
@@ -452,6 +530,10 @@ async function demarrer() {
   await purgerFile();
   await majEtat();
   await chargerCatalogue();
+  // La page peut être rechargée : l'utilisateur connecté le reste.
+  const session = lireSession() ? utilisateurMemorise(lireSession())?.profil : null;
+  utilisateur = session && new Date(session.expiration) > new Date() ? session : null;
+  majUtilisateur();
   if (!r.cle || !catalogue) {
     bandeau(r.cle ? "Aucun catalogue : la borne doit joindre le serveur une première fois." : "Première utilisation : saisissez le nom de la borne et la clé d'API.", "info");
     afficher("reglages");
