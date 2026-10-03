@@ -13,6 +13,7 @@
   <header>
     <div class="marque">Borne <span id="nom-borne"></span></div>
     <div id="client-actuel" class="client-actuel"></div>
+    <button id="btn-commandes" class="utilisateur" type="button" title="Encaisser une commande déjà enregistrée">À encaisser</button>
     <button id="utilisateur" class="utilisateur" type="button" title="Changer d'utilisateur" hidden></button>
     <button id="etat" class="etat" type="button" title="État de la connexion et file d'envoi">…</button>
     <button id="btn-reglages" class="icone" type="button" aria-label="Réglages">⚙</button>
@@ -37,6 +38,15 @@
     <h1>Quel client ?</h1>
     <input id="recherche-client" class="recherche" type="search" placeholder="Rechercher un client (code ou nom)" autocomplete="off">
     <ul id="liste-clients" class="liste-clients"></ul>
+  </main>
+
+  <!-- 1 bis. Commandes déjà enregistrées, à encaisser (saisies dans Sage ou par un vendeur) -->
+  <main id="ecran-commandes" class="ecran" hidden>
+    <h1>Commandes à encaisser</h1>
+    <input id="recherche-commande" class="recherche" type="search" placeholder="Rechercher (n° de pièce, client, référence)" autocomplete="off">
+    <p id="info-commandes" class="discret"></p>
+    <ul id="liste-commandes" class="liste-clients liste-commandes"></ul>
+    <div class="actions"><button id="btn-fermer-commandes" type="button" class="secondaire">Retour</button></div>
   </main>
 
   <!-- 2. Vente : articles et panier -->
@@ -65,7 +75,7 @@
   <main id="ecran-paiement" class="ecran paiement" hidden>
     <h1>Encaissement <span id="paiement-numero" class="discret"></span></h1>
     <div class="montants">
-      <div><span>Total TTC estimé</span><strong id="p-total">0</strong></div>
+      <div><span id="p-total-libelle">Total TTC estimé</span><strong id="p-total">0</strong></div>
       <div><span>Déjà encaissé</span><strong id="p-paye">0</strong></div>
       <div class="reste"><span>Reste à payer</span><strong id="p-reste">0</strong></div>
     </div>

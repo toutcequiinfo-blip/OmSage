@@ -9,6 +9,8 @@ namespace Sage100Api.Contracts
     public static class Validation
     {
         public const int LongueurIdExterne = 51;
+        /// <summary>Numéro de pièce Sage (DO_Piece), par exemple BC00042.</summary>
+        public const int LongueurPiece = 13;
         public const int LongueurClient = 17;
         public const int LongueurArticle = 18;
         public const int LongueurReference = 17;

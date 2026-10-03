@@ -49,7 +49,19 @@ public sealed class ServiceEcritures(JournalOperations journal, IWorkerClient wo
         if (piece == null)
             return ResultatEcriture<EncaissementResult>.Echec(CodesApi.CommandeInconnue,
                 $"Aucune commande Sage pour l'identifiant {idCommande}. Envoyez d'abord la commande.");
+        return await Encaisser(piece, e, application, utilisateur, ct);
+    }
 
+    /// <summary>
+    /// Encaissement sur un bon de commande désigné par son numéro de pièce Sage : commande saisie dans Sage,
+    /// ou prise par un vendeur sur la borne. Le worker vérifie que la pièce existe.
+    /// </summary>
+    public Task<ResultatEcriture<EncaissementResult>> CreerEncaissementSurPiece(string piece, EncaissementRequest e, string application, Utilisateur? utilisateur,
+        CancellationToken ct) =>
+        Encaisser(piece.Trim().ToUpperInvariant(), e, application, utilisateur, ct);
+
+    async Task<ResultatEcriture<EncaissementResult>> Encaisser(string piece, EncaissementRequest e, string application, Utilisateur? utilisateur, CancellationToken ct)
+    {
         var cle = JournalOperations.Cle(TypeEncaissement, e.IdExterne);
         var existante = journal.Reserver(cle, TypeEncaissement, Origine(application, utilisateur));
         if (existante != null) return DejaVue<EncaissementResult>(existante, r => r.DejaExistant = true);

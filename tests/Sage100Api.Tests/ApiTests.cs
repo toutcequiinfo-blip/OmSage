@@ -219,6 +219,24 @@ public sealed class ApiTests : IDisposable
     }
 
     [Fact]
+    public async Task Une_commande_saisie_dans_Sage_s_encaisse_par_son_numero_de_piece()
+    {
+        var p = new EncaissementRequest { IdExterne = "BORNE1-20261003-090000-AB12-P1", Mode = "Espèces", Montant = 1003.2 };
+
+        var r1 = await _http.PostAsJsonAsync("/api/v1/commandes/piece/bc00042/encaissements", p);
+        var r2 = await _http.PostAsJsonAsync("/api/v1/commandes/piece/BC00042/encaissements", p);
+        var catalogue = await _http.GetFromJsonAsync<JsonElement>("/api/v1/catalogue");
+
+        Assert.Equal(HttpStatusCode.Created, r1.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, r2.StatusCode);
+        Assert.Equal("BC00042", _worker.DernierePiece);
+        Assert.Equal(1, _worker.Appels(Operations.CreerEncaissement));
+        var c = catalogue.GetProperty("commandesOuvertes")[0];
+        Assert.Equal("BC00042", c.GetProperty("piece").GetString());
+        Assert.Equal(1003.2m, c.GetProperty("reste").GetDecimal());
+    }
+
+    [Fact]
     public async Task Connexion_exigee_commande_refusee_sans_utilisateur()
     {
         using var usine = Usine(connexion: true);
@@ -360,5 +378,7 @@ public sealed class ApiTests : IDisposable
             "PAUL" => new Collaborateur(4, "MARTIN", "Paul", true, false),
             _ => (Collaborateur?)null,
         });
+        public Task<IReadOnlyList<CommandeOuverte>> CommandesOuvertes(string? recherche, int taille) =>
+            Task.FromResult<IReadOnlyList<CommandeOuverte>>(new[] { new CommandeOuverte("BC00042", new DateTime(2026, 10, 2), "CISEL", "Ciselure", "BC00042", null, 1303.2m, 300m) });
     }
 }

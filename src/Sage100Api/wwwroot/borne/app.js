@@ -7,7 +7,7 @@ import {
   lireCatalogue, ajouterOperation, majOperation, supprimerOperation, lireFile, purgerFile,
   lireSession, ecrireSession, utilisateurMemorise, lireUtilisateurs,
 } from "./stockage.js";
-import { etatConnexion, rechargerCatalogue, synchroniser } from "./synchro.js";
+import { etatConnexion, rechargerCatalogue, synchroniser, commandesOuvertes } from "./synchro.js";
 import { seConnecter } from "./connexion.js";
 
 const $ = (s) => document.querySelector(s);
@@ -17,7 +17,9 @@ const MODES_ESPECES = /esp[eè]ce/i;
 
 let catalogue = null;
 let connexion = "hors-ligne";
-let vente = null; // { id, numero, client, lignes: Map(cle -> {article, enumere, quantite}), paiements: [], validee }
+// { id, numero, client, lignes: Map(cle -> {article, enumere, quantite}), paiements: [], validee }
+// Commande déjà enregistrée : existante, piece (Sage) ou idCommande (encore dans la file), totalTTC, dejaRegle.
+let vente = null;
 let famille = null;
 let modeChoisi = null;
 let utilisateur = null; // profil renvoyé par la connexion (voir connexion.js)
@@ -32,6 +34,8 @@ function afficher(ecran) {
   if (ecran === "paiement") dessinerPaiement();
   if (ecran === "reglages") dessinerReglages();
   if (ecran === "connexion") dessinerConnexion();
+  if (ecran === "commandes") { $("#recherche-commande").value = ""; dessinerCommandes(); }
+  majBoutonCommandes();
 }
 
 function bandeau(texte, type = "info") {
@@ -154,6 +158,10 @@ function ajouterArticle(article, delta = 1, enumere = null) {
 }
 
 function totaux() {
+  if (vente.existante) {
+    const paye = arrondi(vente.dejaRegle + vente.paiements.reduce((s, p) => s + p.montant, 0));
+    return { ht: 0, tva: 0, ttc: vente.totalTTC, paye, reste: Math.max(0, arrondi(vente.totalTTC - paye)) };
+  }
   const ht = arrondi([...vente.lignes.values()].reduce((s, l) => s + l.article.prixVenteHT * l.quantite, 0));
   const tva = arrondi(ht * lireReglages().tauxTva / 100);
   const ttc = arrondi(ht + tva);
@@ -220,6 +228,7 @@ async function validerCommande() {
 function dessinerPaiement() {
   const t = totaux();
   $("#paiement-numero").textContent = vente.numero;
+  $("#p-total-libelle").textContent = vente.existante && vente.piece ? "Total TTC" : "Total TTC estimé";
   $("#p-total").textContent = euros.format(t.ttc);
   $("#p-paye").textContent = euros.format(t.paye);
   $("#p-reste").textContent = euros.format(t.reste);
@@ -287,7 +296,8 @@ async function enregistrerEncaissement() {
     cle: `encaissement:${id}`,
     type: "encaissement",
     idExterne: id,
-    idCommande: vente.id,
+    // Commande de cette vente, commande encore dans la file, ou pièce Sage existante.
+    ...(vente.piece ? { piece: vente.piece } : { idCommande: vente.idCommande || vente.id }),
     corps: { idExterne: id, mode: modeChoisi, montant, referencePaiement: reference },
     vente: { numero: vente.numero, client: vente.client.intitule || vente.client.numero },
     ...auteur(),
@@ -305,8 +315,9 @@ function terminer() {
   const recap = $("#recap");
   recap.replaceChildren(
     element("p", {}, element("strong", {}, vente.numero), ` · ${vente.client.intitule || vente.client.numero}`),
-    element("ul", {}, ...[...vente.lignes.values()].map((l) => element("li", {}, `${l.quantite} × ${l.article.designation || l.article.reference}${l.enumere ? ` (${libelleGamme(l.enumere)})` : ""}`))),
-    element("p", {}, `Total TTC estimé : ${euros.format(t.ttc)} · Encaissé : ${euros.format(t.paye)}`),
+    vente.existante ? null
+      : element("ul", {}, ...[...vente.lignes.values()].map((l) => element("li", {}, `${l.quantite} × ${l.article.designation || l.article.reference}${l.enumere ? ` (${libelleGamme(l.enumere)})` : ""}`))),
+    element("p", {}, `${vente.existante ? "Total TTC" : "Total TTC estimé"} : ${euros.format(t.ttc)} · Encaissé : ${euros.format(t.paye)} · Reste : ${euros.format(t.reste)}`),
     element("p", { class: "discret" }, connexion === "sage"
       ? "La vente est envoyée à Sage."
       : "La vente est enregistrée sur la borne et sera envoyée à Sage dès le retour du serveur."));
@@ -320,6 +331,82 @@ function nouvelleVente() {
   const client = defaut && catalogue?.clients.find((c) => c.numero === defaut);
   if (client) demarrerVente(client);
   else afficher("client");
+}
+
+// ---------- Commandes déjà enregistrées, à encaisser ----------
+// Bons de commande Sage (saisis dans Sage, ou pris par un vendeur sur une borne) et commandes de cette borne pas encore
+// envoyées. Hors ligne : la liste du dernier catalogue. Les encaissements encore en file sont déduits du reste.
+
+const peutEncaisser = () => !catalogue?.exigerCaissier || !!utilisateur?.peutEncaisser;
+
+function majBoutonCommandes() {
+  $("#btn-commandes").hidden = !catalogue || !peutEncaisser() || (connexionExigee() && !utilisateur)
+    || !$("#ecran-commandes").hidden || !$("#ecran-paiement").hidden;
+}
+
+let rechercheCommandes = 0;
+
+async function dessinerCommandes() {
+  const numero = ++rechercheCommandes; // une frappe plus récente remplace la recherche en cours
+  const q = $("#recherche-commande").value.trim();
+  let sage = null;
+  if (connexion !== "hors-ligne") {
+    try { sage = await commandesOuvertes(q); } catch { /* liste du catalogue */ }
+  }
+  const depuisCatalogue = sage == null;
+  if (depuisCatalogue) {
+    const m = q.toLowerCase();
+    sage = (catalogue.commandesOuvertes || []).filter((c) => !m
+      || [c.piece, c.client, c.intitule, c.reference].some((v) => (v || "").toLowerCase().includes(m)));
+  }
+  const ops = await lireFile();
+  if (numero !== rechercheCommandes) return;
+
+  const enFile = ops.filter((o) => o.type === "encaissement" && o.statut !== "ok");
+  const enAttente = (piece, idCommande) => arrondi(enFile
+    .filter((o) => (piece && o.piece === piece) || (idCommande && o.idCommande === idCommande))
+    .reduce((s, o) => s + o.corps.montant, 0));
+  const locales = ops.filter((o) => o.type === "commande" && o.statut === "attente").map((o) => ({
+    idCommande: o.idExterne, numero: o.vente?.numero || o.idExterne, client: o.corps.client, intitule: o.vente?.client,
+    totalTTC: o.vente?.totalTtcEstime || 0, dejaRegle: enAttente(null, o.idExterne), local: true,
+  }));
+  const deSage = sage.map((c) => ({
+    piece: c.piece, numero: c.piece, client: c.client, intitule: c.intitule, reference: c.reference, date: c.date,
+    totalTTC: c.totalTTC, dejaRegle: arrondi(c.dejaRegle + enAttente(c.piece, c.idExterne)),
+  }));
+  const m = q.toLowerCase();
+  const commandes = [...locales.filter((c) => !m || [c.numero, c.client, c.intitule].some((v) => (v || "").toLowerCase().includes(m))), ...deSage]
+    .filter((c) => c.totalTTC - c.dejaRegle > 0.005);
+
+  $("#info-commandes").textContent = depuisCatalogue
+    ? `Hors ligne : commandes connues au ${new Date(catalogue.genereLe).toLocaleString("fr-FR")}.`
+    : "";
+  const ul = $("#liste-commandes");
+  ul.replaceChildren(...commandes.slice(0, 120).map((c) => element("li", {},
+    element("button", { type: "button", onclick: () => encaisserCommande(c) },
+      element("strong", {}, `${c.numero} · ${c.intitule || c.client}`),
+      element("span", { class: "discret" },
+        `${c.local ? "pas encore dans Sage" : c.date ? new Date(c.date).toLocaleDateString("fr-FR") : ""}${c.reference && c.reference !== c.numero ? " · " + c.reference : ""}`),
+      element("span", { class: "reste" }, `Reste ${euros.format(arrondi(c.totalTTC - c.dejaRegle))} sur ${euros.format(c.totalTTC)}`)))));
+  if (commandes.length === 0) ul.append(element("li", { class: "vide" }, "Aucune commande à encaisser."));
+}
+
+function ouvrirCommandes() {
+  if (vente && !vente.existante && (vente.lignes.size > 0 && !vente.validee) && !confirm("Abandonner la commande en cours ?")) return;
+  vente = null;
+  bandeau("");
+  afficher("commandes");
+}
+
+function encaisserCommande(c) {
+  const client = catalogue.clients.find((x) => x.numero === c.client) || { numero: c.client, intitule: c.intitule || c.client };
+  vente = {
+    id: nouvelIdVente(lireReglages().borne), numero: c.numero, client, lignes: new Map(), paiements: [], validee: true,
+    existante: true, piece: c.piece || null, idCommande: c.idCommande || null, totalTTC: c.totalTTC, dejaRegle: c.dejaRegle,
+  };
+  modeChoisi = null;
+  $("#saisie-paiement").hidden = true;
+  afficher("paiement");
 }
 
 // ---------- Connexion des utilisateurs (login Sage) ----------
@@ -515,6 +602,9 @@ function brancher() {
     else nouvelleVente();
   });
   $("#form-connexion").addEventListener("submit", connecter);
+  $("#btn-commandes").addEventListener("click", ouvrirCommandes);
+  $("#btn-fermer-commandes").addEventListener("click", nouvelleVente);
+  $("#recherche-commande").addEventListener("input", dessinerCommandes);
   $("#utilisateur").addEventListener("click", deconnecter);
   $("#form-reglages").addEventListener("submit", enregistrerReglages);
   $("#btn-catalogue").addEventListener("click", async () => { await chargerCatalogue(true); dessinerReglages(); });
