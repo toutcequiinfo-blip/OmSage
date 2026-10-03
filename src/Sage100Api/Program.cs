@@ -109,6 +109,9 @@ lectures.MapGet("/modes-reglement", (ILecturesSage l) => l.ModesReglement());
 lectures.MapGet("/commandes-ouvertes", (ILecturesSage l, string? recherche, int taille = 200) =>
     l.CommandesOuvertes(recherche, Math.Clamp(taille, 1, 1000)));
 
+lectures.MapGet("/commandes-ouvertes/{piece}", async (ILecturesSage l, string piece) =>
+    await l.DetailCommande(piece) is { } d ? Results.Ok(d) : Results.NotFound());
+
 // Instantané complet pour le mode hors ligne de la borne (clients, articles avec prix et stock, modes de règlement, valeurs de gamme,
 // commandes à encaisser).
 lectures.MapGet("/catalogue", async (ILecturesSage l, ControleStock stock, ServiceAuthentification auth) =>

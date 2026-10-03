@@ -144,3 +144,11 @@ function texteErreur(d) {
   if (Array.isArray(d.erreurs)) return d.erreurs.join(" ");
   return d.message || d.erreur || null;
 }
+
+/** Bon de commande Sage et ses lignes (loupe des commandes à encaisser) ; null s'il n'existe plus dans Sage. */
+export async function detailCommande(piece) {
+  const { statut, donnees } = await appeler("GET", `/commandes-ouvertes/${encodeURIComponent(piece)}`, null, DELAI_SANTE_MS);
+  if (statut === 404) return null;
+  if (statut !== 200) throw new Error(`Détail indisponible (code ${statut}).`);
+  return donnees;
+}

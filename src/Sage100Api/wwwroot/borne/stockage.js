@@ -135,3 +135,22 @@ export function lireAttente() {
 }
 
 export const ecrireAttente = (tickets) => localStorage.setItem(CLE_ATTENTE, JSON.stringify(tickets));
+
+// ---------- Affichage en liste ou en boutons (articles, clients, commandes), propre à cette tablette ----------
+
+const CLE_AFFICHAGE = "borne.affichage";
+const AFFICHAGE_DEFAUT = { articles: "boutons", clients: "boutons", commandes: "liste" };
+
+export function lireAffichage(liste) {
+  try {
+    return { ...AFFICHAGE_DEFAUT, ...JSON.parse(localStorage.getItem(CLE_AFFICHAGE) || "{}") }[liste];
+  } catch {
+    return AFFICHAGE_DEFAUT[liste];
+  }
+}
+
+export function ecrireAffichage(liste, mode) {
+  try {
+    localStorage.setItem(CLE_AFFICHAGE, JSON.stringify({ ...JSON.parse(localStorage.getItem(CLE_AFFICHAGE) || "{}"), [liste]: mode }));
+  } catch { /* préférence non gardée, l'affichage change quand même */ }
+}

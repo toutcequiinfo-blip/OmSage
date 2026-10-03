@@ -39,12 +39,20 @@ public sealed record Catalogue(DateTime GenereLe, IReadOnlyList<Client> Clients,
 /// <summary>
 /// Bon de commande client pas encore livré ni clôturé, avec ce qui reste à encaisser.
 /// DejaRegle : total des acomptes déjà saisis sur la pièce (F_DOCREGL, DR_TypeRegl = 0).
+/// NetAPayer : « Net à payer » du pied de pièce Sage (DO_NetAPayer).
 /// </summary>
 public sealed record CommandeOuverte(string Piece, DateTime Date, string Client, string? Intitule, string? Reference, string? IdExterne,
-    decimal TotalTTC, decimal DejaRegle)
+    decimal TotalTTC, decimal DejaRegle, decimal? NetAPayer = null)
 {
     public decimal Reste => TotalTTC - DejaRegle;
 }
+
+/// <summary>Ligne d'un bon de commande (F_DOCLIGNE), avec les valeurs de gamme de l'article s'il en a.</summary>
+public sealed record LignePiece(string? Article, string? Designation, string? Gamme1, string? Gamme2, decimal Quantite, decimal PrixUnitaireHT,
+    decimal MontantHT, decimal MontantTTC);
+
+/// <summary>Bon de commande et ses lignes, pour le consulter depuis la borne (loupe).</summary>
+public sealed record DetailPiece(CommandeOuverte Entete, decimal TotalHT, IReadOnlyList<LignePiece> Lignes);
 
 /// <summary>Collaborateur Sage (F_COLLABORATEUR) rattaché à un utilisateur Sage, avec ses cases Vendeur et Caissier.</summary>
 public sealed record Collaborateur(int Numero, string Nom, string? Prenom, bool Vendeur, bool Caissier);
@@ -65,6 +73,8 @@ public interface ILecturesSage
     Task<Collaborateur?> CollaborateurUtilisateur(string utilisateur);
     /// <summary>Bons de commande avec un reste à encaisser, les plus récents d'abord.</summary>
     Task<IReadOnlyList<CommandeOuverte>> CommandesOuvertes(string? recherche, int taille);
+    /// <summary>Bon de commande client et ses lignes, ou null s'il n'existe pas (ou plus : transformé en livraison).</summary>
+    Task<DetailPiece?> DetailCommande(string piece);
 }
 
 public sealed class LecturesSql(IOptions<SageOptions> options) : ILecturesSage
@@ -184,7 +194,8 @@ public sealed class LecturesSql(IOptions<SageOptions> options) : ILecturesSage
         var r = await c.QueryAsync<CommandeOuverte>(
             "SELECT TOP (@taille) e.DO_Piece AS Piece, e.DO_Date AS Date, e.DO_Tiers AS Client, t.CT_Intitule AS Intitule, " +
             "NULLIF(e.DO_Ref, '') AS Reference, NULLIF(e.DO_RefExterne, '') AS IdExterne, " +
-            "CAST(e.DO_TotalTTC AS decimal(18,2)) AS TotalTTC, CAST(ISNULL(a.Regle, 0) AS decimal(18,2)) AS DejaRegle " +
+            "CAST(e.DO_TotalTTC AS decimal(18,2)) AS TotalTTC, CAST(ISNULL(a.Regle, 0) AS decimal(18,2)) AS DejaRegle, " +
+            "CAST(e.DO_NetAPayer AS decimal(18,2)) AS NetAPayer " +
             "FROM F_DOCENTETE e LEFT JOIN F_COMPTET t ON t.CT_Num = e.DO_Tiers " +
             "OUTER APPLY (SELECT SUM(r.DR_Montant) AS Regle FROM F_DOCREGL r " +
             "  WHERE r.DO_Domaine = 0 AND r.DO_Type = 1 AND r.DO_Piece = e.DO_Piece AND r.DR_TypeRegl = 0) a " +
@@ -193,6 +204,34 @@ public sealed class LecturesSql(IOptions<SageOptions> options) : ILecturesSage
             "ORDER BY e.DO_Date DESC, e.DO_Piece DESC",
             new { q = Motif(recherche), taille });
         return r.AsList();
+    }
+
+    public async Task<DetailPiece?> DetailCommande(string piece)
+    {
+        using var c = Cnx();
+        var entete = await c.QueryFirstOrDefaultAsync<(string Piece, DateTime Date, string Client, string? Intitule, string? Reference, string? IdExterne,
+            decimal TotalTTC, decimal DejaRegle, decimal NetAPayer, decimal TotalHT)>(
+            "SELECT e.DO_Piece, e.DO_Date, e.DO_Tiers, t.CT_Intitule, NULLIF(e.DO_Ref, ''), NULLIF(e.DO_RefExterne, ''), " +
+            "CAST(e.DO_TotalTTC AS decimal(18,2)), " +
+            "CAST(ISNULL((SELECT SUM(r.DR_Montant) FROM F_DOCREGL r WHERE r.DO_Domaine = 0 AND r.DO_Type = 1 AND r.DO_Piece = e.DO_Piece AND r.DR_TypeRegl = 0), 0) AS decimal(18,2)), " +
+            "CAST(e.DO_NetAPayer AS decimal(18,2)), CAST(e.DO_TotalHT AS decimal(18,2)) " +
+            "FROM F_DOCENTETE e LEFT JOIN F_COMPTET t ON t.CT_Num = e.DO_Tiers " +
+            "WHERE e.DO_Domaine = 0 AND e.DO_Type = 1 AND e.DO_Piece = @piece",
+            new { piece });
+        if (entete.Piece is null) return null;
+        // Lignes sans article (commentaires, sous-totaux) incluses : AR_Ref vide, seule la désignation compte.
+        var lignes = await c.QueryAsync<LignePiece>(
+            "SELECT NULLIF(l.AR_Ref, '') AS Article, NULLIF(l.DL_Design, '') AS Designation, g1.EG_Enumere AS Gamme1, g2.EG_Enumere AS Gamme2, " +
+            "CAST(l.DL_Qte AS decimal(18,6)) AS Quantite, CAST(l.DL_PrixUnitaire AS decimal(18,6)) AS PrixUnitaireHT, " +
+            "CAST(l.DL_MontantHT AS decimal(18,2)) AS MontantHT, CAST(l.DL_MontantTTC AS decimal(18,2)) AS MontantTTC " +
+            "FROM F_DOCLIGNE l " +
+            "LEFT JOIN F_ARTGAMME g1 ON g1.AG_No = l.AG_No1 AND l.AG_No1 <> 0 " +
+            "LEFT JOIN F_ARTGAMME g2 ON g2.AG_No = l.AG_No2 AND l.AG_No2 <> 0 " +
+            "WHERE l.DO_Domaine = 0 AND l.DO_Type = 1 AND l.DO_Piece = @piece ORDER BY l.DL_Ligne",
+            new { piece });
+        var e = entete;
+        return new DetailPiece(new CommandeOuverte(e.Piece, e.Date, e.Client, e.Intitule, e.Reference, e.IdExterne, e.TotalTTC, e.DejaRegle, e.NetAPayer),
+            e.TotalHT, lignes.AsList());
     }
 
     static string? Motif(string? recherche) => string.IsNullOrWhiteSpace(recherche) ? null : "%" + recherche.Trim() + "%";
