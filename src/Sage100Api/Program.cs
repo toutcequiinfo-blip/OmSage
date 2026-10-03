@@ -106,10 +106,14 @@ lectures.MapGet("/articles/{reference}/gammes", (ILecturesSage l, string referen
 
 lectures.MapGet("/modes-reglement", (ILecturesSage l) => l.ModesReglement());
 
-// Instantané complet pour le mode hors ligne de la borne (clients, articles avec prix et stock, modes de règlement, valeurs de gamme).
+lectures.MapGet("/commandes-ouvertes", (ILecturesSage l, string? recherche, int taille = 200) =>
+    l.CommandesOuvertes(recherche, Math.Clamp(taille, 1, 1000)));
+
+// Instantané complet pour le mode hors ligne de la borne (clients, articles avec prix et stock, modes de règlement, valeurs de gamme,
+// commandes à encaisser).
 lectures.MapGet("/catalogue", async (ILecturesSage l, ControleStock stock, ServiceAuthentification auth) =>
     new Catalogue(DateTime.UtcNow, await l.Clients(null, 1, 100_000), await l.Articles(null, null, 1, 100_000), await l.ModesReglement(),
-        await l.Gammes(), await stock.Actif(), auth.Options.Active, auth.Options.Active && auth.Options.ExigerCaissier));
+        await l.Gammes(), await stock.Actif(), auth.Options.Active, auth.Options.Active && auth.Options.ExigerCaissier, await l.CommandesOuvertes(null, 500)));
 
 // ---------- Écritures (worker Objets Métiers, idempotentes) ----------
 var ecritures = v1.MapGroup("/commandes").WithTags("Commandes et encaissements");
@@ -130,16 +134,34 @@ ecritures.MapGet("/{idExterne}", async (string idExterne, ServiceEcritures s) =>
 ecritures.MapPost("/{idExterne}/encaissements", async (string idExterne, EncaissementRequest e, ServiceEcritures s, ServiceAuthentification auth,
     HttpContext http, CancellationToken ct) =>
 {
-    var u = auth.Lire(http);
-    if (u == null && auth.Options.Active) return Reponses.ConnexionRequise();
-    if (u != null && auth.Options.Active && auth.Options.ExigerCaissier && !u.PeutEncaisser)
-        return Reponses.DroitRefuse($"{u.Login} ne peut pas encaisser : cochez « Caissier » sur sa fiche collaborateur dans Sage (champ Utilisateur = {u.Login}).");
-    var erreurs = Validation.Verifier(e);
-    if (erreurs.Count > 0) return Reponses.Invalide(erreurs);
+    if (RefusEncaissement(auth, http, e, out var u) is { } refus) return refus;
     var r = await s.CreerEncaissement(idExterne, e, CleApi.Application(http), u, ct);
     return Reponses.Depuis(r, v => v.DejaExistant ? Results.Ok(v) : Results.Created($"/api/v1/commandes/{idExterne}/encaissements/{v.IdExterne}", v));
 });
 
+// Encaissement d'une commande désignée par sa pièce Sage (par exemple saisie dans Sage, ou prise par un vendeur sur la borne).
+ecritures.MapPost("/piece/{piece}/encaissements", async (string piece, EncaissementRequest e, ServiceEcritures s, ServiceAuthentification auth,
+    HttpContext http, CancellationToken ct) =>
+{
+    if (RefusEncaissement(auth, http, e, out var u) is { } refus) return refus;
+    if (string.IsNullOrWhiteSpace(piece) || piece.Length > Validation.LongueurPiece)
+        return Reponses.Invalide(new[] { $"piece : {Validation.LongueurPiece} caractères maximum." });
+    var r = await s.CreerEncaissementSurPiece(piece, e, CleApi.Application(http), u, ct);
+    return Reponses.Depuis(r, v => v.DejaExistant ? Results.Ok(v) : Results.Created($"/api/v1/commandes/piece/{v.PieceCommande}/encaissements/{v.IdExterne}", v));
+});
+
 app.Run();
+
+/// <summary>Connexion, droit d'encaisser et validation communs aux deux routes d'encaissement ; null si l'encaissement peut partir.</summary>
+static IResult? RefusEncaissement(ServiceAuthentification auth, HttpContext http, EncaissementRequest e, out Utilisateur? u)
+{
+    u = auth.Lire(http);
+    if (u == null && auth.Options.Active) return Reponses.ConnexionRequise();
+    if (u != null && auth.Options.Active && auth.Options.ExigerCaissier && !u.PeutEncaisser)
+        return Reponses.DroitRefuse($"{u.Login} ne peut pas encaisser : cochez « Caissier » sur sa fiche collaborateur dans Sage (champ Utilisateur = {u.Login}).");
+    var erreurs = Validation.Verifier(e);
+    return erreurs.Count > 0 ? Reponses.Invalide(erreurs) : null;
+}
+
 
 public partial class Program;

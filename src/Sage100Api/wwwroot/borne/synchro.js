@@ -55,6 +55,14 @@ export async function rechargerCatalogue() {
   return donnees;
 }
 
+/** Bons de commande Sage avec un reste à encaisser ; lève une erreur si le serveur ne répond pas. */
+export async function commandesOuvertes(recherche) {
+  const q = recherche ? `?recherche=${encodeURIComponent(recherche)}` : "";
+  const { statut, donnees } = await appeler("GET", `/commandes-ouvertes${q}`, null, DELAI_SANTE_MS);
+  if (statut !== 200) throw new Error(`Commandes indisponibles (code ${statut}).`);
+  return donnees;
+}
+
 let enCours = null;
 
 /**
@@ -75,12 +83,14 @@ async function envoyerFile() {
 
   for (const op of ops) {
     if (op.statut !== "attente") continue;
-    // Un encaissement attend que sa commande soit dans Sage.
-    if (arret || (op.type === "encaissement" && !commandesOk.has(op.idCommande))) {
+    // Un encaissement attend que sa commande soit dans Sage (sauf s'il vise directement une pièce Sage).
+    if (arret || (op.type === "encaissement" && !op.piece && !commandesOk.has(op.idCommande))) {
       bilan.restantes++;
       continue;
     }
-    const chemin = op.type === "commande" ? "/commandes" : `/commandes/${encodeURIComponent(op.idCommande)}/encaissements`;
+    const chemin = op.type === "commande" ? "/commandes"
+      : op.piece ? `/commandes/piece/${encodeURIComponent(op.piece)}/encaissements`
+      : `/commandes/${encodeURIComponent(op.idCommande)}/encaissements`;
     op.essais++;
     try {
       // Le jeton le plus récent de l'utilisateur, au cas où celui de la vente a expiré pendant une coupure.

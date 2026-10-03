@@ -27,7 +27,18 @@ public sealed record EnumereGamme(string Article, string Gamme1, string? Gamme2,
 /// Authentification : la borne doit connecter un utilisateur Sage ; ExigerCaissier : seuls les caissiers encaissent.
 /// </summary>
 public sealed record Catalogue(DateTime GenereLe, IReadOnlyList<Client> Clients, IReadOnlyList<Article> Articles, IReadOnlyList<ModeReglement> ModesReglement,
-    IReadOnlyList<EnumereGamme> Gammes, bool ControleStock, bool Authentification = false, bool ExigerCaissier = false);
+    IReadOnlyList<EnumereGamme> Gammes, bool ControleStock, bool Authentification = false, bool ExigerCaissier = false,
+    IReadOnlyList<CommandeOuverte>? CommandesOuvertes = null);
+
+/// <summary>
+/// Bon de commande client pas encore livré ni clôturé, avec ce qui reste à encaisser.
+/// DejaRegle : total des acomptes déjà saisis sur la pièce (F_DOCREGL, DR_TypeRegl = 0).
+/// </summary>
+public sealed record CommandeOuverte(string Piece, DateTime Date, string Client, string? Intitule, string? Reference, string? IdExterne,
+    decimal TotalTTC, decimal DejaRegle)
+{
+    public decimal Reste => TotalTTC - DejaRegle;
+}
 
 /// <summary>Collaborateur Sage (F_COLLABORATEUR) rattaché à un utilisateur Sage, avec ses cases Vendeur et Caissier.</summary>
 public sealed record Collaborateur(int Numero, string Nom, string? Prenom, bool Vendeur, bool Caissier);
@@ -46,6 +57,8 @@ public interface ILecturesSage
     Task<string?> PieceCommande(string idExterne);
     /// <summary>Collaborateur dont le champ « Utilisateur » de la fiche désigne ce login Sage, ou null.</summary>
     Task<Collaborateur?> CollaborateurUtilisateur(string utilisateur);
+    /// <summary>Bons de commande avec un reste à encaisser, les plus récents d'abord.</summary>
+    Task<IReadOnlyList<CommandeOuverte>> CommandesOuvertes(string? recherche, int taille);
 }
 
 public sealed class LecturesSql(IOptions<SageOptions> options) : ILecturesSage
@@ -152,6 +165,24 @@ public sealed class LecturesSql(IOptions<SageOptions> options) : ILecturesSage
             "UNION SELECT PROT_No FROM F_PROTECTIONCPTA WHERE PROT_User = @utilisateur) " +
             "ORDER BY co.CO_Caissier DESC, co.CO_No",
             new { utilisateur });
+    }
+
+    public async Task<IReadOnlyList<CommandeOuverte>> CommandesOuvertes(string? recherche, int taille)
+    {
+        // Un bon de commande transformé en livraison change de DO_Type : il sort de cette liste.
+        using var c = Cnx();
+        var r = await c.QueryAsync<CommandeOuverte>(
+            "SELECT TOP (@taille) e.DO_Piece AS Piece, e.DO_Date AS Date, e.DO_Tiers AS Client, t.CT_Intitule AS Intitule, " +
+            "NULLIF(e.DO_Ref, '') AS Reference, NULLIF(e.DO_RefExterne, '') AS IdExterne, " +
+            "CAST(e.DO_TotalTTC AS decimal(18,2)) AS TotalTTC, CAST(ISNULL(a.Regle, 0) AS decimal(18,2)) AS DejaRegle " +
+            "FROM F_DOCENTETE e LEFT JOIN F_COMPTET t ON t.CT_Num = e.DO_Tiers " +
+            "OUTER APPLY (SELECT SUM(r.DR_Montant) AS Regle FROM F_DOCREGL r " +
+            "  WHERE r.DO_Domaine = 0 AND r.DO_Type = 1 AND r.DO_Piece = e.DO_Piece AND r.DR_TypeRegl = 0) a " +
+            "WHERE e.DO_Domaine = 0 AND e.DO_Type = 1 AND e.DO_Cloture = 0 AND e.DO_TotalTTC - ISNULL(a.Regle, 0) > 0.005 " +
+            "AND (@q IS NULL OR e.DO_Piece LIKE @q OR e.DO_Tiers LIKE @q OR t.CT_Intitule LIKE @q OR e.DO_Ref LIKE @q) " +
+            "ORDER BY e.DO_Date DESC, e.DO_Piece DESC",
+            new { q = Motif(recherche), taille });
+        return r.AsList();
     }
 
     static string? Motif(string? recherche) => string.IsNullOrWhiteSpace(recherche) ? null : "%" + recherche.Trim() + "%";
