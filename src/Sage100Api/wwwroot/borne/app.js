@@ -1,11 +1,12 @@
 // Borne de prise de commande et d'encaissement (Sage 100).
-// Parcours : connexion (login Sage) -> client -> articles et panier -> encaissement -> fin.
+// Parcours : connexion (login Sage) -> client -> caisse (ticket, articles, pavé numérique) -> encaissement -> fin.
+// Sur téléphone, la caisse passe en deux onglets : Articles et Ticket.
 // Fonctionne hors ligne grâce à la file d'envoi.
 
 import {
   lireReglages, ecrireReglages, prochainNumeroVente, nouvelIdVente,
   lireCatalogue, ajouterOperation, majOperation, supprimerOperation, lireFile, purgerFile,
-  lireSession, ecrireSession, utilisateurMemorise, lireUtilisateurs,
+  lireSession, ecrireSession, utilisateurMemorise, lireUtilisateurs, lireAttente, ecrireAttente,
 } from "./stockage.js";
 import { etatConnexion, rechargerCatalogue, synchroniser, commandesOuvertes } from "./synchro.js";
 import { seConnecter } from "./connexion.js";
@@ -23,14 +24,20 @@ let vente = null;
 let famille = null;
 let modeChoisi = null;
 let utilisateur = null; // profil renvoyé par la connexion (voir connexion.js)
+let ligneChoisie = null; // clé de la ligne du ticket sur laquelle agit le pavé numérique
+let saisie = ""; // chiffres tapés sur le pavé
+let changementClient = false; // l'écran client change le client du ticket en cours au lieu d'en ouvrir un nouveau
+let dernierTicket = null; // ticket de la dernière vente terminée, pour l'imprimer depuis l'écran de fin
 
 // ---------- Écrans ----------
 
 function afficher(ecran) {
   for (const e of document.querySelectorAll(".ecran")) e.hidden = e.id !== `ecran-${ecran}`;
-  $("#client-actuel").textContent = vente?.client ? `${vente.client.numero} · ${vente.client.intitule}` : "";
-  if (ecran === "client") { $("#recherche-client").value = ""; dessinerClients(); $("#recherche-client").focus(); }
-  if (ecran === "vente") { dessinerFamilles(); dessinerArticles(); dessinerPanier(); }
+  // Sur la caisse, le client est affiché en tête du ticket.
+  $("#client-actuel").textContent = vente?.client && ecran !== "vente" ? `${vente.client.numero} · ${vente.client.intitule}` : "";
+  if (ecran !== "client") changementClient = false;
+  if (ecran === "client") { $("#btn-retour-ticket").hidden = !changementClient; $("#recherche-client").value = ""; dessinerClients(); $("#recherche-client").focus(); }
+  if (ecran === "vente") { dessinerFamilles(); dessinerArticles(); dessinerPanier(); majRaccourcis(); }
   if (ecran === "paiement") dessinerPaiement();
   if (ecran === "reglages") dessinerReglages();
   if (ecran === "connexion") dessinerConnexion();
@@ -78,10 +85,34 @@ function dessinerClients() {
 }
 
 function demarrerVente(client) {
-  vente = { id: null, numero: null, client, lignes: new Map(), paiements: [], validee: false };
-  famille = null;
-  $("#recherche-article").value = "";
+  const garder = changementClient && vente && !vente.validee && !vente.existante;
+  changementClient = false;
+  if (garder) {
+    vente.client = client;
+  } else {
+    vente = { id: null, numero: null, client, lignes: new Map(), paiements: [], validee: false };
+    famille = null;
+    ligneChoisie = null;
+    saisie = "";
+    $("#recherche-article").value = "";
+  }
   afficher("vente");
+}
+
+/** Change le client du ticket en cours sans perdre ses lignes. */
+function changerClient() {
+  changementClient = true;
+  afficher("client");
+}
+
+const clientDefaut = () => {
+  const defaut = lireReglages().clientDefaut;
+  return (defaut && catalogue?.clients.find((c) => c.numero === defaut)) || null;
+};
+
+function clientDePassage() {
+  const c = clientDefaut();
+  if (c) { changementClient = true; demarrerVente(c); }
 }
 
 // ---------- 2. Articles et panier ----------
@@ -125,8 +156,10 @@ const aGamme = (article) => !!article.gamme1 || enumeres(article).length > 0;
 const libelleGamme = (e) => (e ? [e.gamme1, e.gamme2].filter(Boolean).join(" / ") : "");
 
 function toucherArticle(article) {
-  if (!aGamme(article)) return ajouterArticle(article);
-  if (stockControle(article) && quantiteAuPanier(article) + 1 > article.stockDisponible) return ajouterArticle(article, 1); // affiche le refus
+  // Quantité tapée au pavé avant de toucher l'article (comme sur une caisse : 3 puis l'article).
+  const q = prendreSaisie() ?? 1;
+  if (!aGamme(article)) return ajouterArticle(article, q);
+  if (stockControle(article) && quantiteAuPanier(article) + q > article.stockDisponible) return ajouterArticle(article, q); // affiche le refus
   const valeurs = enumeres(article);
   if (valeurs.length === 0) {
     bandeau(`${article.designation || article.reference} est géré en gamme : rechargez le catalogue (Réglages) pour voir ses valeurs.`, "erreur");
@@ -138,7 +171,7 @@ function toucherArticle(article) {
   $("#gamme-valeurs").replaceChildren(...valeurs.map((e) => {
     const dispo = e.stockDisponible == null ? null : e.stockDisponible - quantiteValeurAuPanier(e);
     const epuise = stockControle(article) && dispo != null && dispo <= 0;
-    return element("button", { type: "button", class: epuise ? "valeur epuise" : "valeur", onclick: () => { d.close(); ajouterArticle(article, 1, e); } },
+    return element("button", { type: "button", class: epuise ? "valeur epuise" : "valeur", onclick: () => { d.close(); ajouterArticle(article, q, e); } },
       element("span", {}, libelleGamme(e)),
       article.suiviStock === false || dispo == null ? null
         : element("span", { class: dispo > 0 ? "stock" : "stock rupture" }, dispo > 0 ? `Stock ${dispo}` : "Rupture"));
@@ -168,9 +201,53 @@ function ajouterArticle(article, delta = 1, enumere = null) {
   }
   const cle = enumere ? `${article.reference}|${enumere.gamme1}|${enumere.gamme2 || ""}` : article.reference;
   const l = vente.lignes.get(cle) || { article, enumere, quantite: 0 };
-  l.quantite += delta;
+  l.quantite = arrondi(l.quantite + delta);
   if (l.quantite <= 0) vente.lignes.delete(cle);
   else vente.lignes.set(cle, l);
+  if (l.quantite > 0 && delta > 0) ligneChoisie = cle;
+  if (!vente.lignes.has(ligneChoisie)) ligneChoisie = [...vente.lignes.keys()].pop() ?? null;
+  dessinerPanier();
+}
+
+// ---------- Pavé numérique ----------
+// Les chiffres tapés servent de quantité : pour l'article touché ensuite, ou pour la ligne choisie (Quantité / Entrée).
+
+/** Quantité tapée au pavé (vidée une fois lue), ou null si rien n'est tapé. */
+function prendreSaisie() {
+  const v = Number(saisie.replace(",", "."));
+  saisie = "";
+  majSaisie();
+  return v > 0 ? v : null;
+}
+
+function majSaisie() {
+  $("#saisie").textContent = saisie || "0";
+}
+
+function toucherPave(touche) {
+  if (!vente || vente.validee) return;
+  const l = vente.lignes.get(ligneChoisie);
+  if (/^[0-9]$/.test(touche)) saisie = (saisie === "0" ? "" : saisie) + touche;
+  else if (touche === ",") { if (!saisie.includes(",")) saisie = (saisie || "0") + ","; }
+  else if (touche === "suppr") saisie = saisie.slice(0, -1);
+  else if (touche === "plus" || touche === "moins") {
+    if (!l) return bandeau("Choisissez d'abord une ligne du ticket.", "info");
+    const n = prendreSaisie() ?? 1;
+    return ajouterArticle(l.article, touche === "plus" ? n : -n, l.enumere);
+  } else if (touche === "quantite" || touche === "entree") {
+    if (!l) return bandeau("Choisissez d'abord une ligne du ticket.", "info");
+    const n = prendreSaisie();
+    if (n == null) return bandeau("Tapez la quantité puis appuyez sur Quantité.", "info");
+    return ajouterArticle(l.article, arrondi(n - l.quantite), l.enumere);
+  }
+  if (saisie.length > 8) saisie = saisie.slice(0, 8);
+  majSaisie();
+}
+
+function supprimerLigne() {
+  if (!vente || vente.validee || !vente.lignes.has(ligneChoisie)) return;
+  vente.lignes.delete(ligneChoisie);
+  ligneChoisie = [...vente.lignes.keys()].pop() ?? null;
   dessinerPanier();
 }
 
@@ -189,16 +266,17 @@ function totaux() {
 function dessinerPanier() {
   const ul = $("#lignes");
   ul.replaceChildren();
-  for (const l of vente.lignes.values()) {
+  for (const [cle, l] of vente.lignes) {
     const alerte = (l.article.suiviStock !== false && quantiteAuPanier(l.article) > l.article.stockDisponible) || valeurEnManque(l.article, l.enumere);
-    ul.append(element("li", { class: alerte ? "alerte" : "" },
+    const classes = [alerte ? "alerte" : "", cle === ligneChoisie ? "choisie" : ""].filter(Boolean).join(" ");
+    ul.append(element("li", { class: classes, onclick: () => { ligneChoisie = cle; dessinerPanier(); } },
       element("div", { class: "libelle" },
         element("strong", {}, l.article.designation || l.article.reference, l.enumere ? ` · ${libelleGamme(l.enumere)}` : ""),
         element("span", { class: "discret" }, `${euros.format(l.article.prixVenteHT)} HT${alerte ? " · stock insuffisant" : ""}`)),
       element("div", { class: "quantite" },
-        element("button", { type: "button", "aria-label": "Retirer un", onclick: () => ajouterArticle(l.article, -1, l.enumere) }, "−"),
-        element("span", {}, String(l.quantite)),
-        element("button", { type: "button", "aria-label": "Ajouter un", onclick: () => ajouterArticle(l.article, 1, l.enumere) }, "+")),
+        element("button", { type: "button", "aria-label": "Retirer un", onclick: (e) => { e.stopPropagation(); ajouterArticle(l.article, -1, l.enumere); } }, "−"),
+        element("span", {}, String(l.quantite).replace(".", ",")),
+        element("button", { type: "button", "aria-label": "Ajouter un", onclick: (e) => { e.stopPropagation(); ajouterArticle(l.article, 1, l.enumere); } }, "+")),
       element("span", { class: "montant" }, euros.format(l.article.prixVenteHT * l.quantite))));
   }
   if (vente.lignes.size === 0) ul.append(element("li", { class: "vide" }, "Touchez un article pour l'ajouter."));
@@ -207,7 +285,48 @@ function dessinerPanier() {
   $("#total-tva").textContent = euros.format(t.tva);
   $("#total-ttc").textContent = euros.format(t.ttc);
   $("#taux-tva").textContent = lireReglages().tauxTva;
-  $("#btn-valider").disabled = vente.lignes.size === 0;
+  const vide = vente.lignes.size === 0;
+  // Un vendeur sans la case Caissier enregistre la commande ; le caissier choisit directement le mode de règlement.
+  $("#btn-valider").textContent = peutEncaisser() ? "Régler" : "Valider la commande";
+  $("#btn-valider").disabled = vide;
+  $("#modes-rapides").replaceChildren(...(peutEncaisser() ? catalogue.modesReglement : []).map((m) =>
+    element("button", { type: "button", class: "mode-rapide", disabled: vide, onclick: () => reglerAvec(m.intitule) }, m.intitule)));
+  $("#btn-supprimer-ligne").disabled = !vente.lignes.has(ligneChoisie);
+  $("#btn-attente").disabled = vide;
+  const articles = [...vente.lignes.values()].reduce((s, l) => s + l.quantite, 0);
+  $("#onglet-total").textContent = vide ? "" : `(${String(arrondi(articles)).replace(".", ",")}) ${euros.format(t.ttc)}`;
+  majEntete();
+  majSaisie();
+}
+
+function majEntete() {
+  $("#t-date").textContent = new Date().toLocaleString("fr-FR", { dateStyle: "short", timeStyle: "short" });
+  $("#t-numero").textContent = vente?.numero || "nouveau";
+  $("#t-vendeur").textContent = nomUtilisateur(utilisateur) || "—";
+  $("#t-client").textContent = vente?.client ? `${vente.client.intitule || vente.client.numero} (${vente.client.numero})` : "";
+}
+
+function majRaccourcis() {
+  $("#btn-r-passage").hidden = !clientDefaut();
+  $("#btn-r-x").hidden = !peutEncaisser();
+  const n = lireAttente().length;
+  $("#nb-attente").textContent = n ? String(n) : "";
+  $("#nb-attente").hidden = !n;
+}
+
+/** Bouton de mode sous le ticket : enregistre la commande puis ouvre l'encaissement sur ce mode. */
+async function reglerAvec(mode) {
+  if (!vente || vente.lignes.size === 0) return;
+  await validerCommande();
+  if (!$("#ecran-paiement").hidden) choisirMode(mode);
+}
+
+function basculerOnglet(vue) {
+  const e = $("#ecran-vente");
+  e.classList.toggle("vue-articles", vue === "articles");
+  e.classList.toggle("vue-ticket", vue === "ticket");
+  $("#onglet-articles").classList.toggle("actif", vue === "articles");
+  $("#onglet-ticket").classList.toggle("actif", vue === "ticket");
 }
 
 async function validerCommande() {
@@ -329,6 +448,7 @@ async function enregistrerEncaissement() {
 
 function terminer() {
   const t = totaux();
+  dernierTicket = ticketAImprimer();
   const recap = $("#recap");
   recap.replaceChildren(
     element("p", {}, element("strong", {}, vente.numero), ` · ${vente.client.intitule || vente.client.numero}`),
@@ -344,10 +464,173 @@ function terminer() {
 
 function nouvelleVente() {
   if (connexionExigee() && !utilisateur) return afficher("connexion");
-  const defaut = lireReglages().clientDefaut;
-  const client = defaut && catalogue?.clients.find((c) => c.numero === defaut);
+  changementClient = false;
+  const client = clientDefaut();
   if (client) demarrerVente(client);
   else afficher("client");
+}
+
+// ---------- Tickets en attente ----------
+
+function mettreEnAttente() {
+  if (!vente || vente.validee || vente.lignes.size === 0) return;
+  ecrireAttente([...lireAttente(), {
+    id: nouvelIdVente(lireReglages().borne),
+    client: vente.client.numero,
+    intitule: vente.client.intitule || vente.client.numero,
+    lignes: [...vente.lignes.values()].map((l) => ({
+      reference: l.article.reference, quantite: l.quantite,
+      ...(l.enumere ? { gamme1: l.enumere.gamme1, gamme2: l.enumere.gamme2 || null } : {}),
+    })),
+    totalTtcEstime: totaux().ttc,
+    utilisateur: utilisateur?.utilisateur || null,
+    creeLe: Date.now(),
+  }]);
+  bandeau("Ticket mis en attente.", "ok");
+  vente = null;
+  nouvelleVente();
+}
+
+function ouvrirAttente() {
+  const tickets = lireAttente();
+  const contenu = tickets.length === 0
+    ? [element("p", { class: "vide" }, "Aucun ticket en attente.")]
+    : [element("ul", { class: "liste-clients liste-attente" }, ...tickets.slice().reverse().map((t) => element("li", {},
+      element("button", { type: "button", onclick: () => rappelerTicket(t.id) },
+        element("strong", {}, `${t.intitule} · ${euros.format(t.totalTtcEstime)}`),
+        element("span", { class: "discret" },
+          ` ${new Date(t.creeLe).toLocaleString("fr-FR", { dateStyle: "short", timeStyle: "short" })} · ${t.lignes.length} ligne(s)${t.utilisateur ? " · " + t.utilisateur : ""}`)),
+      element("button", { type: "button", class: "danger petit", "aria-label": "Supprimer ce ticket", onclick: () => supprimerAttente(t.id) }, "✕"))))];
+  ouvrirListe("Tickets en attente", contenu, false);
+}
+
+function supprimerAttente(id) {
+  if (!confirm("Supprimer ce ticket en attente ?")) return;
+  ecrireAttente(lireAttente().filter((t) => t.id !== id));
+  majRaccourcis();
+  ouvrirAttente();
+}
+
+function rappelerTicket(id) {
+  const t = lireAttente().find((x) => x.id === id);
+  if (!t) return;
+  if (vente && !vente.validee && vente.lignes.size > 0 && !confirm("Le ticket en cours sera remplacé. Continuer ?")) return;
+  const client = catalogue.clients.find((c) => c.numero === t.client) || { numero: t.client, intitule: t.intitule };
+  vente = { id: null, numero: null, client, lignes: new Map(), paiements: [], validee: false };
+  ligneChoisie = null;
+  const manquants = [];
+  for (const l of t.lignes) {
+    const article = catalogue.articles.find((a) => a.reference === l.reference);
+    const enumere = l.gamme1 ? enumeres(article || {}).find((e) => memeValeur(e, { article: l.reference, gamme1: l.gamme1, gamme2: l.gamme2 })) : null;
+    if (!article || (l.gamme1 && !enumere)) { manquants.push(l.reference); continue; }
+    const cle = enumere ? `${article.reference}|${enumere.gamme1}|${enumere.gamme2 || ""}` : article.reference;
+    vente.lignes.set(cle, { article, enumere, quantite: l.quantite });
+    ligneChoisie = cle;
+  }
+  ecrireAttente(lireAttente().filter((x) => x.id !== id));
+  $("#dialogue-liste").close();
+  bandeau(manquants.length ? `Articles absents du catalogue, non repris : ${manquants.join(", ")}.` : "", "erreur");
+  afficher("vente");
+}
+
+// ---------- X de caisse : ce que cette borne a enregistré aujourd'hui ----------
+
+async function ouvrirX() {
+  const debut = new Date();
+  debut.setHours(0, 0, 0, 0);
+  const ops = (await lireFile()).filter((o) => o.creeLe >= debut.getTime() && o.statut !== "erreur");
+  const commandes = ops.filter((o) => o.type === "commande");
+  const encaissements = ops.filter((o) => o.type === "encaissement");
+  const parMode = new Map();
+  for (const o of encaissements) {
+    const m = parMode.get(o.corps.mode) || { nombre: 0, montant: 0 };
+    m.nombre++;
+    m.montant = arrondi(m.montant + o.corps.montant);
+    parMode.set(o.corps.mode, m);
+  }
+  const totalEncaisse = arrondi(encaissements.reduce((s, o) => s + o.corps.montant, 0));
+  const totalCommandes = arrondi(commandes.reduce((s, o) => s + (o.vente?.totalTtcEstime || 0), 0));
+  const enAttente = ops.filter((o) => o.statut === "attente").length;
+  const ligne = (a, b, c) => element("tr", {}, element("td", {}, a), element("td", {}, b), element("td", { class: "montant" }, c));
+  const contenu = [
+    element("p", { class: "discret" }, `Borne ${lireReglages().borne} · ${new Date().toLocaleString("fr-FR", { dateStyle: "full", timeStyle: "short" })}`),
+    element("table", { class: "tableau" },
+      element("thead", {}, element("tr", {}, element("th", {}, ""), element("th", {}, "Nombre"), element("th", { class: "montant" }, "Montant"))),
+      element("tbody", {},
+        ligne("Commandes (TTC estimé)", String(commandes.length), euros.format(totalCommandes)),
+        ...[...parMode].map(([mode, m]) => ligne(mode, String(m.nombre), euros.format(m.montant))),
+        ligne(element("strong", {}, "Total encaissé"), String(encaissements.length), element("strong", {}, euros.format(totalEncaisse))))),
+    element("p", { class: "discret" }, enAttente
+      ? `${enAttente} opération(s) pas encore envoyée(s) à Sage. Les montants exacts sont ceux de Sage.`
+      : "Tout est envoyé à Sage. Les montants exacts sont ceux de Sage."),
+  ];
+  ouvrirListe("X de caisse", contenu, true);
+}
+
+function ouvrirListe(titre, contenu, imprimable) {
+  $("#liste-titre").textContent = titre;
+  $("#liste-contenu").replaceChildren(...contenu);
+  $("#btn-liste-imprimer").hidden = !imprimable;
+  const d = $("#dialogue-liste");
+  if (!d.open) d.showModal();
+}
+
+// ---------- Impression (imprimante ticket du navigateur ou PDF) ----------
+
+function ticketAImprimer() {
+  if (!vente) return null;
+  const t = totaux();
+  return {
+    numero: vente.numero || "Ticket en cours", client: vente.client.intitule || vente.client.numero, vendeur: nomUtilisateur(utilisateur),
+    date: new Date(), existante: !!vente.existante, taux: lireReglages().tauxTva,
+    lignes: [...vente.lignes.values()].map((l) => ({
+      libelle: `${l.article.designation || l.article.reference}${l.enumere ? " " + libelleGamme(l.enumere) : ""}`,
+      quantite: l.quantite, prix: l.article.prixVenteHT, montant: arrondi(l.article.prixVenteHT * l.quantite),
+    })),
+    ...t, paiements: vente.paiements.slice(),
+  };
+}
+
+function imprimer(ticket) {
+  if (!ticket) return;
+  const ligne = (a, b) => element("div", { class: "ligne" }, element("span", {}, a), element("span", {}, b));
+  $("#impression").replaceChildren(
+    element("h3", {}, `Borne ${lireReglages().borne}`),
+    element("p", {}, ticket.date.toLocaleString("fr-FR")),
+    element("p", {}, ticket.numero),
+    element("p", {}, `Client : ${ticket.client}`),
+    ticket.vendeur ? element("p", {}, `Vendeur : ${ticket.vendeur}`) : null,
+    element("hr"),
+    ...ticket.lignes.map((l) => element("div", {},
+      element("div", {}, l.libelle),
+      ligne(`  ${String(l.quantite).replace(".", ",")} x ${euros.format(l.prix)}`, euros.format(l.montant)))),
+    element("hr"),
+    ticket.existante ? null : ligne("Total HT", euros.format(ticket.ht)),
+    ticket.existante ? null : ligne(`TVA estimée ${ticket.taux} %`, euros.format(ticket.tva)),
+    ligne(ticket.existante ? "TOTAL TTC" : "TOTAL TTC estimé", euros.format(ticket.ttc)),
+    ...ticket.paiements.map((p) => ligne(p.mode, euros.format(p.montant))),
+    ticket.paiements.length ? ligne("Reste à payer", euros.format(ticket.reste)) : null,
+    element("hr"),
+    element("p", {}, "Document non fiscal. La facture est établie dans Sage."));
+  window.print();
+}
+
+function imprimerListe() {
+  $("#impression").replaceChildren(element("h3", {}, $("#liste-titre").textContent), $("#liste-contenu").cloneNode(true));
+  window.print();
+}
+
+// ---------- Verrouillage : l'écran revient à la connexion, le ticket en cours est gardé pour la personne qui se reconnecte ----------
+
+function verrouiller() {
+  if (!connexionExigee() || !utilisateur) return;
+  const login = utilisateur.utilisateur;
+  utilisateur = null;
+  ecrireSession(null);
+  majUtilisateur();
+  bandeau(`Caisse verrouillée : ${login} doit se reconnecter.`, "info");
+  $("#form-connexion").elements.utilisateur.value = login;
+  afficher("connexion");
 }
 
 // ---------- Commandes déjà enregistrées, à encaisser ----------
@@ -464,7 +747,10 @@ async function connecter(ev) {
     f.motDePasse.value = "";
     majUtilisateur();
     bandeau(utilisateur.horsLigne ? "Connecté hors ligne : les ventes partiront vers Sage au retour du serveur." : "", "info");
-    nouvelleVente();
+    // Après un verrouillage, on retrouve le ticket ou l'encaissement en cours.
+    if (vente?.validee) afficher("paiement");
+    else if (vente) afficher("vente");
+    else nouvelleVente();
     synchroniserPuisAfficher();
   } catch (e) {
     bandeau(e.message, "erreur");
@@ -606,7 +892,24 @@ function brancher() {
   });
   $("#btn-valider").addEventListener("click", validerCommande);
   $("#btn-fermer-gamme").addEventListener("click", () => $("#choix-gamme").close());
-  $("#btn-annuler-vente").addEventListener("click", () => { if (vente.lignes.size === 0 || confirm("Annuler cette commande ?")) { vente = null; afficher("client"); } });
+  $("#btn-annuler-vente").addEventListener("click", () => { if (vente.lignes.size === 0 || confirm("Annuler ce ticket ?")) { vente = null; nouvelleVente(); } });
+  $("#btn-supprimer-ligne").addEventListener("click", supprimerLigne);
+  $("#btn-retour-ticket").addEventListener("click", () => afficher("vente"));
+  $("#btn-attente").addEventListener("click", mettreEnAttente);
+  $("#btn-client-ticket").addEventListener("click", changerClient);
+  $("#btn-r-client").addEventListener("click", changerClient);
+  $("#btn-r-passage").addEventListener("click", clientDePassage);
+  $("#btn-r-rappel").addEventListener("click", ouvrirAttente);
+  $("#btn-r-x").addEventListener("click", ouvrirX);
+  $("#btn-fermer-liste").addEventListener("click", () => $("#dialogue-liste").close());
+  $("#btn-liste-imprimer").addEventListener("click", imprimerListe);
+  $("#btn-imprimer").addEventListener("click", () => imprimer(ticketAImprimer()));
+  $("#btn-imprimer-fin").addEventListener("click", () => imprimer(dernierTicket));
+  $("#btn-verrouiller").addEventListener("click", verrouiller);
+  $("#btn-changer-utilisateur").addEventListener("click", deconnecter);
+  $("#onglet-articles").addEventListener("click", () => basculerOnglet("articles"));
+  $("#onglet-ticket").addEventListener("click", () => basculerOnglet("ticket"));
+  for (const b of document.querySelectorAll("[data-touche]")) b.addEventListener("click", () => toucherPave(b.dataset.touche));
   $("#p-montant").addEventListener("input", majRendu);
   $("#btn-encaisser").addEventListener("click", encaisser);
   $("#btn-terminer").addEventListener("click", terminer);
@@ -649,6 +952,7 @@ async function demarrer() {
   }
   synchroniserPuisAfficher();
   setInterval(synchroniserPuisAfficher, 20000);
+  setInterval(() => !$("#ecran-vente").hidden && majEntete(), 30000);
   setInterval(() => connexion !== "hors-ligne" && chargerCatalogue(), 10 * 60 * 1000);
 }
 

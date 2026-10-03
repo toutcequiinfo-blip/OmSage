@@ -115,7 +115,18 @@ POST /api/v1/commandes/BORNE1-20260929-0001/encaissements
 
 L'API sert l'application sur **http://<serveur>:5080/borne/**. Il n'y a rien à installer à part : c'est une page web installable (PWA).
 
-**Parcours :** connexion avec le login Sage (si `Authentification:Active`), choix du client, puis articles et panier (un article à gamme ouvre le choix de sa valeur ; le code-barres d'une valeur l'ajoute directement), puis encaissement (plusieurs modes possibles pour une même vente, avec la monnaie à rendre en espèces), puis fin.
+**Parcours :** connexion avec le login Sage (si `Authentification:Active`), choix du client (ou client par défaut des réglages), puis l'écran caisse, puis encaissement (plusieurs modes possibles pour une même vente, avec la monnaie à rendre en espèces), puis fin.
+
+**Écran caisse** (présenté comme une caisse : ticket à gauche, articles au centre, pavé numérique à droite) :
+- Un article à gamme ouvre le choix de sa valeur ; le code-barres d'une valeur l'ajoute directement.
+- Pavé : taper 3 puis toucher un article en ajoute 3. Toucher une ligne du ticket la choisit ; taper une quantité puis « Quantité » (ou « Entrée ») la remplace, « + » et « − » l'ajustent, « Supprimer ligne » la retire.
+- « Client » (ou le nom du client sur le ticket) change le client sans perdre les lignes ; « Client de passage » reprend le client par défaut des réglages.
+- « Mettre en attente » met le ticket de côté sur la tablette ; « Tickets en attente » le reprend. Rien n'est envoyé à Sage tant que le ticket n'est pas validé.
+- « Régler » enregistre la commande et ouvre l'encaissement ; les boutons de mode (Espèces, Carte bancaire…) le font directement sur ce mode. Un vendeur non caissier voit « Valider la commande » à la place.
+- « X de caisse » (caissiers) résume la journée de la borne : nombre de commandes, encaissements par mode. Les montants exacts restent ceux de Sage.
+- « Imprimer » imprime le ticket en cours (ou, depuis l'écran de fin, celui de la vente terminée) au format d'une imprimante ticket de 80 mm, via l'impression du navigateur. C'est un document non fiscal : la facture est faite dans Sage.
+- « Verrouiller » revient à l'écran de connexion en gardant le ticket en cours ; « Changer d'utilisateur » l'abandonne.
+- Sur téléphone, l'écran passe en deux onglets, Articles et Ticket, sans pavé (les + et − des lignes suffisent). Sur tablette en portrait, le pavé passe sous les articles.
 
 **Hors ligne :**
 - Chaque commande et chaque encaissement est d'abord enregistré sur la tablette (IndexedDB), puis envoyé à Sage. L'envoi se fait toutes les 20 secondes, au retour du réseau, ou avec le bouton « Envoyer maintenant ».
@@ -180,7 +191,7 @@ dotnet test tests/Sage100Api.Tests
 ## Reste à faire
 
 - Faire la **synchronisation incrémentale** du catalogue : aujourd'hui, `/catalogue` renvoie un instantané complet.
-- Afficher le **stock par valeur de gamme** (F_GAMSTOCK) ; la borne montre aujourd'hui le stock total de l'article.
+- Sur l'écran caisse : remises et changement de prix (droit à définir), avoirs, historique client, lignes de commentaire, ouverture du tiroir-caisse.
 - Créer un **compte SQL en lecture seule** dédié à l'API.
 
 ## Recette
