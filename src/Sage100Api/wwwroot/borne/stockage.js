@@ -120,3 +120,18 @@ export async function purgerFile() {
     if (op.statut === "ok" && op.creeLe < limite) await supprimerOperation(op.cle);
   }
 }
+
+// ---------- Tickets en attente ----------
+// Ticket mis de côté (client qui revient plus tard) : seulement sur cette borne, rien n'est encore envoyé à Sage.
+
+const CLE_ATTENTE = "borne.attente";
+
+export function lireAttente() {
+  try {
+    return JSON.parse(localStorage.getItem(CLE_ATTENTE) || "[]");
+  } catch {
+    return [];
+  }
+}
+
+export const ecrireAttente = (tickets) => localStorage.setItem(CLE_ATTENTE, JSON.stringify(tickets));

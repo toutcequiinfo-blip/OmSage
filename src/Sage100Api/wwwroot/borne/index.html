@@ -38,6 +38,7 @@
     <h1>Quel client ?</h1>
     <input id="recherche-client" class="recherche" type="search" placeholder="Rechercher un client (code ou nom)" autocomplete="off">
     <ul id="liste-clients" class="liste-clients"></ul>
+    <div class="actions"><button id="btn-retour-ticket" type="button" class="secondaire" hidden>Retour au ticket</button></div>
   </main>
 
   <!-- 1 bis. Commandes déjà enregistrées, à encaisser (saisies dans Sage ou par un vendeur) -->
@@ -49,26 +50,68 @@
     <div class="actions"><button id="btn-fermer-commandes" type="button" class="secondaire">Retour</button></div>
   </main>
 
-  <!-- 2. Vente : articles et panier -->
-  <main id="ecran-vente" class="ecran vente" hidden>
-    <section class="catalogue">
-      <input id="recherche-article" class="recherche" type="search" placeholder="Rechercher un article ou scanner un code-barres" autocomplete="off">
-      <div id="familles" class="familles"></div>
-      <div id="articles" class="articles"></div>
-    </section>
-    <aside class="panier">
-      <h2>Commande</h2>
+  <!-- 2. Vente, présentée comme une caisse : ticket, articles, pavé numérique, boutons de règlement.
+       Sur téléphone, deux onglets (Articles / Ticket) remplacent les colonnes. -->
+  <main id="ecran-vente" class="ecran caisse vue-articles" hidden>
+    <section class="ticket">
+      <div class="ticket-entete">
+        <div class="ligne-info"><span id="t-date"></span><span>Ticket <strong id="t-numero">nouveau</strong></span></div>
+        <div class="ligne-info"><span>Commercial / collaborateur</span><strong id="t-vendeur"></strong></div>
+        <button id="btn-client-ticket" class="ticket-client" type="button" title="Changer de client">
+          <span>Client :</span> <strong id="t-client"></strong> <span class="crayon" aria-hidden="true">✎</span>
+        </button>
+      </div>
       <ul id="lignes" class="lignes"></ul>
       <div class="totaux">
         <div><span>Total HT</span><span id="total-ht">0</span></div>
         <div><span>TVA estimée (<span id="taux-tva"></span> %)</span><span id="total-tva">0</span></div>
-        <div class="ttc"><span>Total TTC estimé</span><span id="total-ttc">0</span></div>
+        <div class="ttc"><span>Total TTC</span><span id="total-ttc">0</span></div>
       </div>
-      <div class="actions">
-        <button id="btn-annuler-vente" class="secondaire" type="button">Annuler</button>
-        <button id="btn-valider" class="principal" type="button" disabled>Valider la commande</button>
+    </section>
+
+    <section class="catalogue">
+      <div class="raccourcis">
+        <button id="btn-r-client" type="button">Client</button>
+        <button id="btn-r-passage" type="button">Client de passage</button>
+        <button id="btn-r-rappel" type="button">Tickets en attente <span id="nb-attente" class="pastille"></span></button>
+        <button id="btn-r-x" type="button">X de caisse</button>
+      </div>
+      <input id="recherche-article" class="recherche" type="search" placeholder="Rechercher un article ou scanner un code-barres" autocomplete="off">
+      <div id="familles" class="familles"></div>
+      <div id="articles" class="articles"></div>
+    </section>
+
+    <aside class="pave">
+      <div class="saisie-pave"><span class="discret">Saisie</span><strong id="saisie">0</strong></div>
+      <div class="touches">
+        <button type="button" class="fonction large" data-touche="quantite">Quantité</button>
+        <button type="button" data-touche="7">7</button><button type="button" data-touche="8">8</button><button type="button" data-touche="9">9</button>
+        <button type="button" class="fonction" data-touche="moins" aria-label="Retirer un">−</button>
+        <button type="button" data-touche="4">4</button><button type="button" data-touche="5">5</button><button type="button" data-touche="6">6</button>
+        <button type="button" class="fonction" data-touche="plus" aria-label="Ajouter un">+</button>
+        <button type="button" data-touche="1">1</button><button type="button" data-touche="2">2</button><button type="button" data-touche="3">3</button>
+        <button type="button" class="fonction haute" data-touche="entree">Entrée</button>
+        <button type="button" class="fonction" data-touche="suppr">Suppr</button><button type="button" data-touche="0">0</button><button type="button" data-touche=",">,</button>
+      </div>
+      <div class="fonctions">
+        <button id="btn-verrouiller" type="button" class="sombre">🔒 Verrouiller</button>
+        <button id="btn-changer-utilisateur" type="button" class="sombre">👤 Changer d'utilisateur</button>
+        <button id="btn-imprimer" type="button" class="sombre">🖨 Imprimer</button>
       </div>
     </aside>
+
+    <footer class="commandes-caisse">
+      <button id="btn-supprimer-ligne" type="button" class="sombre">Supprimer ligne</button>
+      <button id="btn-annuler-vente" type="button" class="sombre">Annuler ticket</button>
+      <button id="btn-attente" type="button" class="attente">Mettre en attente</button>
+      <button id="btn-valider" type="button" class="regler" disabled>Régler</button>
+      <div id="modes-rapides" class="modes-rapides"></div>
+    </footer>
+
+    <nav class="onglets" aria-label="Affichage">
+      <button id="onglet-articles" type="button" class="actif">Articles</button>
+      <button id="onglet-ticket" type="button">Ticket <span id="onglet-total"></span></button>
+    </nav>
   </main>
 
   <!-- 3. Paiement -->
@@ -97,7 +140,10 @@
   <main id="ecran-fin" class="ecran fin" hidden>
     <h1>Merci !</h1>
     <div id="recap" class="recap"></div>
-    <button id="btn-nouvelle" class="principal grand" type="button">Nouvelle vente</button>
+    <div class="actions centre">
+      <button id="btn-imprimer-fin" class="secondaire grand" type="button">🖨 Imprimer le ticket</button>
+      <button id="btn-nouvelle" class="principal grand" type="button">Nouvelle vente</button>
+    </div>
   </main>
 
   <!-- 5. Réglages et file d'envoi -->
@@ -127,6 +173,19 @@
     <div id="gamme-valeurs" class="valeurs"></div>
     <button id="btn-fermer-gamme" type="button" class="secondaire">Annuler</button>
   </dialog>
+
+  <!-- Liste générique : tickets en attente, X de caisse -->
+  <dialog id="dialogue-liste" class="dialogue">
+    <h2 id="liste-titre"></h2>
+    <div id="liste-contenu" class="liste-dialogue"></div>
+    <div class="actions">
+      <button id="btn-liste-imprimer" type="button" class="secondaire" hidden>Imprimer</button>
+      <button id="btn-fermer-liste" type="button" class="secondaire">Fermer</button>
+    </div>
+  </dialog>
+
+  <!-- Ticket imprimé (seule partie visible à l'impression) -->
+  <section id="impression" class="impression" aria-hidden="true"></section>
 
   <script type="module" src="app.js"></script>
 </body>
