@@ -134,8 +134,15 @@ function toucherArticle(article) {
   }
   const d = $("#choix-gamme");
   $("#gamme-titre").textContent = `${article.designation || article.reference} : ${[article.gamme1, article.gamme2].filter(Boolean).join(" / ") || "choisir"}`;
-  $("#gamme-valeurs").replaceChildren(...valeurs.map((e) =>
-    element("button", { type: "button", class: "valeur", onclick: () => { d.close(); ajouterArticle(article, 1, e); } }, libelleGamme(e))));
+  // Stock de chaque valeur (taille, couleur...) : une valeur épuisée reste visible mais ne s'ajoute pas.
+  $("#gamme-valeurs").replaceChildren(...valeurs.map((e) => {
+    const dispo = e.stockDisponible == null ? null : e.stockDisponible - quantiteValeurAuPanier(e);
+    const epuise = stockControle(article) && dispo != null && dispo <= 0;
+    return element("button", { type: "button", class: epuise ? "valeur epuise" : "valeur", onclick: () => { d.close(); ajouterArticle(article, 1, e); } },
+      element("span", {}, libelleGamme(e)),
+      article.suiviStock === false || dispo == null ? null
+        : element("span", { class: dispo > 0 ? "stock" : "stock rupture" }, dispo > 0 ? `Stock ${dispo}` : "Rupture"));
+  }));
   d.showModal();
 }
 
@@ -143,10 +150,20 @@ function toucherArticle(article) {
 const stockControle = (article) => !!catalogue.controleStock && article.suiviStock !== false;
 const quantiteAuPanier = (article) =>
   [...vente.lignes.values()].filter((l) => l.article.reference === article.reference).reduce((s, l) => s + l.quantite, 0);
+const memeValeur = (a, b) => a.article === b.article && a.gamme1 === b.gamme1 && (a.gamme2 || "") === (b.gamme2 || "");
+const quantiteValeurAuPanier = (e) =>
+  [...vente.lignes.values()].filter((l) => l.enumere && memeValeur(l.enumere, e)).reduce((s, l) => s + l.quantite, 0);
+/** Vrai si cette valeur de gamme dépasse son propre stock (catalogue récent : stock connu par valeur). */
+const valeurEnManque = (article, e, ajout = 0) =>
+  !!e && e.stockDisponible != null && article.suiviStock !== false && quantiteValeurAuPanier(e) + ajout > e.stockDisponible;
 
 function ajouterArticle(article, delta = 1, enumere = null) {
   if (delta > 0 && stockControle(article) && quantiteAuPanier(article) + delta > article.stockDisponible) {
     bandeau(`Stock insuffisant pour ${article.designation || article.reference} : ${Math.max(0, article.stockDisponible)} disponible(s).`, "erreur");
+    return;
+  }
+  if (delta > 0 && stockControle(article) && valeurEnManque(article, enumere, delta)) {
+    bandeau(`Stock insuffisant pour ${article.designation || article.reference} ${libelleGamme(enumere)} : ${Math.max(0, enumere.stockDisponible)} disponible(s).`, "erreur");
     return;
   }
   const cle = enumere ? `${article.reference}|${enumere.gamme1}|${enumere.gamme2 || ""}` : article.reference;
@@ -173,7 +190,7 @@ function dessinerPanier() {
   const ul = $("#lignes");
   ul.replaceChildren();
   for (const l of vente.lignes.values()) {
-    const alerte = l.article.suiviStock !== false && quantiteAuPanier(l.article) > l.article.stockDisponible;
+    const alerte = (l.article.suiviStock !== false && quantiteAuPanier(l.article) > l.article.stockDisponible) || valeurEnManque(l.article, l.enumere);
     ul.append(element("li", { class: alerte ? "alerte" : "" },
       element("div", { class: "libelle" },
         element("strong", {}, l.article.designation || l.article.reference, l.enumere ? ` · ${libelleGamme(l.enumere)}` : ""),

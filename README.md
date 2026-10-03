@@ -79,7 +79,9 @@ X-Api-Key: changer-cette-cle
 - `Bloquer` : refus dans tous les cas ;
 - `Aucun` : aucun contrôle.
 
-La borne applique la même règle au moment d'ajouter un article au panier.
+Pour un article à gamme, chaque valeur (taille, couleur…) est aussi contrôlée avec son propre stock (table F_GAMSTOCK, tous dépôts), en plus du total de l'article.
+
+La borne applique la même règle au moment d'ajouter un article au panier. Le choix de la gamme affiche le stock de chaque valeur, et une valeur épuisée ne s'ajoute pas.
 
 Un article géré en gamme (taille, couleur…) doit recevoir sa valeur dans `gamme1`, et `gamme2` pour une double gamme. Sans valeur, Sage refuse la ligne ; l'API renvoie alors 422 avec la liste des valeurs possibles.
 
@@ -173,7 +175,7 @@ Ce qui est installé dans `C:\Sage100Api` :
 dotnet test tests/Sage100Api.Tests
 ```
 
-18 tests couvrent l'encaissement par numéro de pièce, la clé d'API, la connexion des utilisateurs (jeton, collaborateur, caissier, blocage), l'accès à l'application borne, la validation (dont les gammes), le contrôle du stock, le catalogue, les doublons de commandes et d'encaissements, et la conversion des erreurs Sage et du worker en codes HTTP. Ils tournent sans Sage.
+19 tests couvrent le stock par valeur de gamme, l'encaissement par numéro de pièce, la clé d'API, la connexion des utilisateurs (jeton, collaborateur, caissier, blocage), l'accès à l'application borne, la validation (dont les gammes), le contrôle du stock, le catalogue, les doublons de commandes et d'encaissements, et la conversion des erreurs Sage et du worker en codes HTTP. Ils tournent sans Sage.
 
 ## Reste à faire
 
