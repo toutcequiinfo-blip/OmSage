@@ -328,6 +328,17 @@ public sealed class ApiTests : IDisposable
         Assert.Equal(1, _worker.Appels(Operations.CreerEncaissement));
     }
 
+    [Fact]
+    public async Task Le_detail_d_un_bon_de_commande_donne_ses_lignes()
+    {
+        var r = await _http.GetFromJsonAsync<JsonElement>("/api/v1/commandes-ouvertes/BC00042");
+        var absent = await _http.GetAsync("/api/v1/commandes-ouvertes/BC99999");
+
+        Assert.Equal(1003.2m, r.GetProperty("entete").GetProperty("netAPayer").GetDecimal());
+        Assert.Equal("CHORFA", r.GetProperty("lignes")[0].GetProperty("article").GetString());
+        Assert.Equal(HttpStatusCode.NotFound, absent.StatusCode);
+    }
+
     public void Dispose()
     {
         _http.Dispose();
@@ -401,5 +412,9 @@ public sealed class ApiTests : IDisposable
         });
         public Task<IReadOnlyList<CommandeOuverte>> CommandesOuvertes(string? recherche, int taille) =>
             Task.FromResult<IReadOnlyList<CommandeOuverte>>(new[] { new CommandeOuverte("BC00042", new DateTime(2026, 10, 2), "CISEL", "Ciselure", "BC00042", null, 1303.2m, 300m) });
+        public Task<DetailPiece?> DetailCommande(string piece) => Task.FromResult(piece == "BC00042"
+            ? new DetailPiece(new CommandeOuverte("BC00042", new DateTime(2026, 10, 2), "CISEL", "Ciselure", "BC00042", null, 1303.2m, 300m, 1003.2m), 1086m,
+                new[] { new LignePiece("CHORFA", "Chaîne forçat Or", null, null, 1, 1086m, 1086m, 1303.2m) })
+            : null);
     }
 }

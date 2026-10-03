@@ -36,17 +36,29 @@
   <!-- 1. Choix du client -->
   <main id="ecran-client" class="ecran">
     <h1>Quel client ?</h1>
-    <input id="recherche-client" class="recherche" type="search" placeholder="Rechercher un client (code ou nom)" autocomplete="off">
-    <ul id="liste-clients" class="liste-clients"></ul>
+    <div class="barre-recherche">
+      <input id="recherche-client" class="recherche" type="search" placeholder="Rechercher un client (code ou nom)" autocomplete="off">
+      <div class="bascule" role="group" aria-label="Affichage">
+        <button type="button" data-liste="clients" data-mode="liste" title="Affichage en liste" aria-label="Liste">☰</button>
+        <button type="button" data-liste="clients" data-mode="boutons" title="Affichage en boutons" aria-label="Boutons">▦</button>
+      </div>
+    </div>
+    <div id="liste-clients" class="liste-clients"></div>
     <div class="actions"><button id="btn-retour-ticket" type="button" class="secondaire" hidden>Retour au ticket</button></div>
   </main>
 
   <!-- 1 bis. Commandes déjà enregistrées, à encaisser (saisies dans Sage ou par un vendeur) -->
   <main id="ecran-commandes" class="ecran" hidden>
     <h1>Commandes à encaisser</h1>
-    <input id="recherche-commande" class="recherche" type="search" placeholder="Rechercher (n° de pièce, client, référence)" autocomplete="off">
+    <div class="barre-recherche">
+      <input id="recherche-commande" class="recherche" type="search" placeholder="Rechercher (n° de pièce, client, référence)" autocomplete="off">
+      <div class="bascule" role="group" aria-label="Affichage">
+        <button type="button" data-liste="commandes" data-mode="liste" title="Affichage en liste" aria-label="Liste">☰</button>
+        <button type="button" data-liste="commandes" data-mode="boutons" title="Affichage en boutons" aria-label="Boutons">▦</button>
+      </div>
+    </div>
     <p id="info-commandes" class="discret"></p>
-    <ul id="liste-commandes" class="liste-clients liste-commandes"></ul>
+    <div id="liste-commandes" class="liste-commandes"></div>
     <div class="actions"><button id="btn-fermer-commandes" type="button" class="secondaire">Retour</button></div>
   </main>
 
@@ -76,7 +88,13 @@
         <button id="btn-r-rappel" type="button">Tickets en attente <span id="nb-attente" class="pastille"></span></button>
         <button id="btn-r-x" type="button">X de caisse</button>
       </div>
-      <input id="recherche-article" class="recherche" type="search" placeholder="Rechercher un article ou scanner un code-barres" autocomplete="off">
+      <div class="barre-recherche">
+        <input id="recherche-article" class="recherche" type="search" placeholder="Rechercher un article ou scanner un code-barres" autocomplete="off">
+        <div class="bascule" role="group" aria-label="Affichage">
+        <button type="button" data-liste="articles" data-mode="liste" title="Affichage en liste" aria-label="Liste">☰</button>
+        <button type="button" data-liste="articles" data-mode="boutons" title="Affichage en boutons" aria-label="Boutons">▦</button>
+      </div>
+      </div>
       <div id="familles" class="familles"></div>
       <div id="articles" class="articles"></div>
     </section>

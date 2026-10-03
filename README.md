@@ -41,7 +41,8 @@ Borne / applications ──HTTPS + X-Api-Key──► Sage100Api (.NET 8, 64 bit
 | POST | `/api/v1/commandes` | Crée un bon de commande. **Idempotent** sur `idExterne` : 201 à la création, 200 si déjà reçu. |
 | GET | `/api/v1/commandes/{idExterne}` | Pièce Sage d'une commande |
 | POST | `/api/v1/commandes/{idExterne}/encaissements` | Encaissement, enregistré comme acompte. Idempotent sur son propre `idExterne`. |
-| GET | `/api/v1/commandes-ouvertes?recherche=&taille=` | Bons de commande non clôturés avec un reste à payer (total TTC moins acomptes), les plus récents d'abord |
+| GET | `/api/v1/commandes-ouvertes?recherche=&taille=` | Bons de commande non clôturés avec un reste à payer (total TTC moins acomptes) et leur net à payer Sage, les plus récents d'abord |
+| GET | `/api/v1/commandes-ouvertes/{piece}` | Un bon de commande et ses lignes (article, désignation, gamme, quantité, prix), pour la loupe de la borne |
 | POST | `/api/v1/commandes/piece/{piece}/encaissements` | Encaissement d'un bon de commande désigné par sa pièce Sage (saisi dans Sage ou par un vendeur). Idempotent sur `idExterne`. |
 
 **Journal des encaissements :** un acompte n'a pas de journal. Sage le donne au règlement qu'il crée : c'est le journal par défaut du mode, par exemple BEU pour Espèces. Pour imposer un journal de trésorerie par mode, renseigne `journauxParMode` dans `worker.json`, par exemple `{ "Espèces": "CAIS", "Carte bancaire": "BQ1" }`, puis redémarre le worker. Un mode absent garde le journal de Sage. Un code de journal inconnu fait refuser l'encaissement avant qu'il soit créé.
@@ -126,6 +127,7 @@ L'API sert l'application sur **http://<serveur>:5080/borne/**. Il n'y a rien à 
 - « X de caisse » (caissiers) résume la journée de la borne : nombre de commandes, encaissements par mode. Les montants exacts restent ceux de Sage.
 - « Imprimer » imprime le ticket en cours (ou, depuis l'écran de fin, celui de la vente terminée) au format d'une imprimante ticket de 80 mm, via l'impression du navigateur. C'est un document non fiscal : la facture est faite dans Sage.
 - « Verrouiller » revient à l'écran de connexion en gardant le ticket en cours ; « Changer d'utilisateur » l'abandonne.
+- Articles et clients s'affichent au choix en boutons (▦) ou en liste (☰, tableau compact). Le choix est gardé par la tablette.
 - Sur téléphone, l'écran passe en deux onglets, Articles et Ticket, sans pavé (les + et − des lignes suffisent). Sur tablette en portrait, le pavé passe sous les articles.
 
 **Hors ligne :**
@@ -136,7 +138,7 @@ L'API sert l'application sur **http://<serveur>:5080/borne/**. Il n'y a rien à 
 - Le catalogue (clients, articles, prix, stock, modes de règlement) est gardé sur la tablette et rafraîchi toutes les 10 minutes.
 - Un utilisateur déjà connecté une fois sur la tablette peut s'y reconnecter sans serveur : la borne garde une empreinte salée de son mot de passe, jamais le mot de passe. Ses ventes partent avec sa connexion ; si elle a expiré entre-temps, la borne demande de le reconnecter pour les envoyer.
 
-**Commandes à encaisser :** le bouton « À encaisser » en haut (caissiers seulement) liste les bons de commande Sage qui ont un reste à payer, ainsi que les commandes de la borne pas encore envoyées. Un appui ouvre l'encaissement de la commande choisie. Hors ligne, la liste vient du dernier catalogue, et les encaissements encore en file sont déduits du reste.
+**Commandes à encaisser :** le bouton « À encaisser » en haut (caissiers seulement) liste les bons de commande Sage qui ont un reste à payer, ainsi que les commandes de la borne pas encore envoyées. Elles s'affichent en liste (date, n° de pièce, référence, code client, net à payer, reste) ou en boutons. Un appui ouvre l'encaissement de la commande choisie ; la loupe 🔍 montre le contenu de la pièce (lu dans Sage, ou dans la file pour une commande de la borne pas encore envoyée). Hors ligne, la liste vient du dernier catalogue, et les encaissements encore en file sont déduits du reste.
 
 **Utilisateurs :** le bouton 👤 en haut affiche l'utilisateur connecté ; un appui permet de changer d'utilisateur. Sans la case « Caissier » sur sa fiche collaborateur Sage, l'utilisateur prend la commande mais la borne n'affiche pas les modes de règlement.
 
@@ -186,7 +188,7 @@ Ce qui est installé dans `C:\Sage100Api` :
 dotnet test tests/Sage100Api.Tests
 ```
 
-19 tests couvrent le stock par valeur de gamme, l'encaissement par numéro de pièce, la clé d'API, la connexion des utilisateurs (jeton, collaborateur, caissier, blocage), l'accès à l'application borne, la validation (dont les gammes), le contrôle du stock, le catalogue, les doublons de commandes et d'encaissements, et la conversion des erreurs Sage et du worker en codes HTTP. Ils tournent sans Sage.
+20 tests couvrent le détail d'un bon de commande, le stock par valeur de gamme, l'encaissement par numéro de pièce, la clé d'API, la connexion des utilisateurs (jeton, collaborateur, caissier, blocage), l'accès à l'application borne, la validation (dont les gammes), le contrôle du stock, le catalogue, les doublons de commandes et d'encaissements, et la conversion des erreurs Sage et du worker en codes HTTP. Ils tournent sans Sage.
 
 ## Reste à faire
 

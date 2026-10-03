@@ -7,8 +7,9 @@ import {
   lireReglages, ecrireReglages, prochainNumeroVente, nouvelIdVente,
   lireCatalogue, ajouterOperation, majOperation, supprimerOperation, lireFile, purgerFile,
   lireSession, ecrireSession, utilisateurMemorise, lireUtilisateurs, lireAttente, ecrireAttente,
+  lireAffichage, ecrireAffichage,
 } from "./stockage.js";
-import { etatConnexion, rechargerCatalogue, synchroniser, commandesOuvertes } from "./synchro.js";
+import { etatConnexion, rechargerCatalogue, synchroniser, commandesOuvertes, detailCommande } from "./synchro.js";
 import { seConnecter } from "./connexion.js";
 
 const $ = (s) => document.querySelector(s);
@@ -62,26 +63,61 @@ function element(balise, attributs = {}, ...enfants) {
   return el;
 }
 
+// ---------- Affichage en liste ou en boutons ----------
+
+const dessins = { articles: () => dessinerArticles(), clients: () => dessinerClients(), commandes: () => dessinerCommandes() };
+
+function changerAffichage(liste, mode) {
+  ecrireAffichage(liste, mode);
+  majBascules();
+  dessins[liste]();
+}
+
+function majBascules() {
+  for (const b of document.querySelectorAll("[data-liste]")) {
+    const actif = lireAffichage(b.dataset.liste) === b.dataset.mode;
+    b.classList.toggle("actif", actif);
+    b.setAttribute("aria-pressed", String(actif));
+  }
+}
+
+/** Tableau dont chaque ligne se touche : colonnes [{ titre, classe }], lignes [{ cellules, onclick, classe, attributs }]. */
+function tableau(colonnes, lignes) {
+  return element("table", { class: "table-liste" },
+    element("thead", {}, element("tr", {}, ...colonnes.map((c) => element("th", { class: c.classe }, c.titre)))),
+    element("tbody", {}, ...lignes.map((l) => element("tr", { class: l.classe, onclick: l.onclick, ...(l.attributs || {}) },
+      ...l.cellules.map((v, i) => element("td", { class: colonnes[i].classe }, v))))));
+}
+
+/** Teinte stable par famille d'articles : un repère de couleur sur les boutons. */
+const teinte = (texte) => [...(texte || "")].reduce((h, c) => (h * 31 + c.charCodeAt(0)) % 360, 200);
+const quantiteTexte = (q) => String(q).replace(".", ",");
+
 // ---------- 1. Client ----------
 
 function dessinerClients() {
   const q = $("#recherche-client").value.trim().toLowerCase();
-  const liste = $("#liste-clients");
-  liste.replaceChildren();
+  const zone = $("#liste-clients");
+  const enListe = lireAffichage("clients") === "liste";
+  zone.className = enListe ? "liste-clients en-liste" : "liste-clients en-boutons";
   if (!catalogue) {
-    liste.append(element("li", { class: "vide" }, "Catalogue absent : connectez la borne au serveur puis ouvrez les réglages."));
+    zone.replaceChildren(element("p", { class: "vide" }, "Catalogue absent : connectez la borne au serveur puis ouvrez les réglages."));
     return;
   }
   const clients = catalogue.clients
     .filter((c) => !q || c.numero.toLowerCase().includes(q) || (c.intitule || "").toLowerCase().includes(q))
-    .slice(0, 60);
-  for (const c of clients) {
-    liste.append(element("li", {},
-      element("button", { type: "button", onclick: () => demarrerVente(c) },
-        element("strong", {}, c.intitule || c.numero),
-        element("span", { class: "discret" }, ` ${c.numero}${c.ville ? " · " + c.ville : ""}`))));
+    .slice(0, enListe ? 200 : 60);
+  if (clients.length === 0) return zone.replaceChildren(element("p", { class: "vide" }, "Aucun client trouvé."));
+  if (enListe) {
+    zone.replaceChildren(tableau(
+      [{ titre: "Code", classe: "code" }, { titre: "Nom" }, { titre: "Ville", classe: "secondaire" }, { titre: "Téléphone", classe: "secondaire" }],
+      clients.map((c) => ({ cellules: [c.numero, c.intitule || "", c.ville || "", c.telephone || ""], onclick: () => demarrerVente(c) }))));
+  } else {
+    zone.replaceChildren(...clients.map((c) => element("button", { type: "button", class: "carte-client", onclick: () => demarrerVente(c) },
+      element("span", { class: "code" }, c.numero),
+      element("strong", {}, c.intitule || c.numero),
+      element("span", { class: "discret" }, [c.ville, c.telephone].filter(Boolean).join(" · ")))));
   }
-  if (clients.length === 0) liste.append(element("li", { class: "vide" }, "Aucun client trouvé."));
 }
 
 function demarrerVente(client) {
@@ -131,22 +167,37 @@ function dessinerFamilles() {
 function dessinerArticles() {
   const q = $("#recherche-article").value.trim().toLowerCase();
   const zone = $("#articles");
-  zone.replaceChildren();
+  const enListe = lireAffichage("articles") === "liste";
+  zone.className = enListe ? "articles en-liste" : "articles en-boutons";
   const articles = catalogue.articles
     .filter((a) => !famille || a.famille === famille)
     .filter((a) => !q || a.reference.toLowerCase().includes(q) || (a.designation || "").toLowerCase().includes(q) || a.codeBarre === q)
-    .slice(0, 120);
-  for (const a of articles) {
+    .slice(0, enListe ? 300 : 120);
+  if (articles.length === 0) return zone.replaceChildren(element("p", { class: "vide" }, "Aucun article."));
+  const stock = (a) => {
+    if (a.suiviStock === false) return null;
     const dispo = a.stockDisponible;
-    zone.append(element("button", { type: "button", class: "tuile", onclick: () => toucherArticle(a) },
+    return element("span", { class: dispo > 0 ? "stock" : "stock rupture" }, dispo > 0 ? quantiteTexte(dispo) : "Rupture");
+  };
+  const gamme = (a) => (aGamme(a) ? element("span", { class: "gamme" }, [a.gamme1, a.gamme2].filter(Boolean).join(" / ") || "Gamme") : null);
+  if (enListe) {
+    zone.replaceChildren(tableau(
+      [{ titre: "Code", classe: "code" }, { titre: "Désignation" }, { titre: "Famille", classe: "secondaire" },
+        { titre: "PV HT", classe: "nombre" }, { titre: "Stock", classe: "nombre" }],
+      articles.map((a) => ({
+        classe: a.suiviStock !== false && a.stockDisponible <= 0 ? "article rupture" : "article",
+        cellules: [a.reference, element("span", {}, a.designation || a.reference, gamme(a)), a.famille || "", euros.format(a.prixVenteHT), stock(a)],
+        onclick: () => toucherArticle(a),
+      }))));
+  } else {
+    zone.replaceChildren(...articles.map((a) => element("button", {
+      type: "button", class: a.suiviStock !== false && a.stockDisponible <= 0 ? "tuile rupture" : "tuile",
+      style: `--teinte: ${teinte(a.famille)}`, title: a.famille || "", onclick: () => toucherArticle(a),
+    },
+      element("span", { class: "haut" }, element("span", { class: "code" }, a.reference), stock(a)),
       element("span", { class: "designation" }, a.designation || a.reference),
-      aGamme(a) ? element("span", { class: "discret" }, `Choix : ${[a.gamme1, a.gamme2].filter(Boolean).join(" / ") || "gamme"}`) : null,
-      element("span", { class: "discret" }, a.reference),
-      element("span", { class: "prix" }, `${euros.format(a.prixVenteHT)} HT`),
-      a.suiviStock === false ? null
-        : element("span", { class: dispo > 0 ? "stock" : "stock rupture" }, dispo > 0 ? `Stock ${dispo}` : "Rupture")));
+      element("span", { class: "bas" }, gamme(a), element("span", { class: "prix" }, `${euros.format(a.prixVenteHT)} HT`)))));
   }
-  if (articles.length === 0) zone.append(element("p", { class: "vide" }, "Aucun article."));
 }
 
 // ---------- Gammes (taille, couleur...) : Sage exige la valeur pour un article à gamme ----------
@@ -269,15 +320,19 @@ function dessinerPanier() {
   for (const [cle, l] of vente.lignes) {
     const alerte = (l.article.suiviStock !== false && quantiteAuPanier(l.article) > l.article.stockDisponible) || valeurEnManque(l.article, l.enumere);
     const classes = [alerte ? "alerte" : "", cle === ligneChoisie ? "choisie" : ""].filter(Boolean).join(" ");
+    // Comme un ticket de caisse : code et désignation, puis quantité × prix unitaire et montant.
     ul.append(element("li", { class: classes, onclick: () => { ligneChoisie = cle; dessinerPanier(); } },
       element("div", { class: "libelle" },
+        element("span", { class: "code" }, l.article.reference),
         element("strong", {}, l.article.designation || l.article.reference, l.enumere ? ` · ${libelleGamme(l.enumere)}` : ""),
-        element("span", { class: "discret" }, `${euros.format(l.article.prixVenteHT)} HT${alerte ? " · stock insuffisant" : ""}`)),
-      element("div", { class: "quantite" },
-        element("button", { type: "button", "aria-label": "Retirer un", onclick: (e) => { e.stopPropagation(); ajouterArticle(l.article, -1, l.enumere); } }, "−"),
-        element("span", {}, String(l.quantite).replace(".", ",")),
-        element("button", { type: "button", "aria-label": "Ajouter un", onclick: (e) => { e.stopPropagation(); ajouterArticle(l.article, 1, l.enumere); } }, "+")),
-      element("span", { class: "montant" }, euros.format(l.article.prixVenteHT * l.quantite))));
+        alerte ? element("span", { class: "alerte-stock" }, "Stock insuffisant") : null),
+      element("div", { class: "detail" },
+        element("div", { class: "quantite" },
+          element("button", { type: "button", "aria-label": "Retirer un", onclick: (e) => { e.stopPropagation(); ajouterArticle(l.article, -1, l.enumere); } }, "−"),
+          element("span", {}, quantiteTexte(l.quantite)),
+          element("button", { type: "button", "aria-label": "Ajouter un", onclick: (e) => { e.stopPropagation(); ajouterArticle(l.article, 1, l.enumere); } }, "+")),
+        element("span", { class: "pu" }, `× ${euros.format(l.article.prixVenteHT)} HT`),
+        element("span", { class: "montant" }, euros.format(l.article.prixVenteHT * l.quantite)))));
   }
   if (vente.lignes.size === 0) ul.append(element("li", { class: "vide" }, "Touchez un article pour l'ajouter."));
   const t = totaux();
@@ -668,11 +723,12 @@ async function dessinerCommandes() {
     .reduce((s, o) => s + o.corps.montant, 0));
   const locales = ops.filter((o) => o.type === "commande" && o.statut === "attente").map((o) => ({
     idCommande: o.idExterne, numero: o.vente?.numero || o.idExterne, client: o.corps.client, intitule: o.vente?.client,
-    totalTTC: o.vente?.totalTtcEstime || 0, dejaRegle: enAttente(null, o.idExterne), local: true,
+    reference: o.vente?.numero, date: o.creeLe, totalTTC: o.vente?.totalTtcEstime || 0, netAPayer: o.vente?.totalTtcEstime || 0,
+    dejaRegle: enAttente(null, o.idExterne), local: true, operation: o,
   }));
   const deSage = sage.map((c) => ({
     piece: c.piece, numero: c.piece, client: c.client, intitule: c.intitule, reference: c.reference, date: c.date,
-    totalTTC: c.totalTTC, dejaRegle: arrondi(c.dejaRegle + enAttente(c.piece, c.idExterne)),
+    totalTTC: c.totalTTC, netAPayer: c.netAPayer ?? c.totalTTC, dejaRegle: arrondi(c.dejaRegle + enAttente(c.piece, c.idExterne)),
   }));
   const m = q.toLowerCase();
   const commandes = [...locales.filter((c) => !m || [c.numero, c.client, c.intitule].some((v) => (v || "").toLowerCase().includes(m))), ...deSage]
@@ -681,14 +737,89 @@ async function dessinerCommandes() {
   $("#info-commandes").textContent = depuisCatalogue
     ? `Hors ligne : commandes connues au ${new Date(catalogue.genereLe).toLocaleString("fr-FR")}.`
     : "";
-  const ul = $("#liste-commandes");
-  ul.replaceChildren(...commandes.slice(0, 120).map((c) => element("li", {},
-    element("button", { type: "button", onclick: () => encaisserCommande(c) },
-      element("strong", {}, `${c.numero} · ${c.intitule || c.client}`),
-      element("span", { class: "discret" },
-        `${c.local ? "pas encore dans Sage" : c.date ? new Date(c.date).toLocaleDateString("fr-FR") : ""}${c.reference && c.reference !== c.numero ? " · " + c.reference : ""}`),
-      element("span", { class: "reste" }, `Reste ${euros.format(arrondi(c.totalTTC - c.dejaRegle))} sur ${euros.format(c.totalTTC)}`)))));
-  if (commandes.length === 0) ul.append(element("li", { class: "vide" }, "Aucune commande à encaisser."));
+  const zone = $("#liste-commandes");
+  const enListe = lireAffichage("commandes") === "liste";
+  zone.className = enListe ? "liste-commandes en-liste" : "liste-commandes en-boutons";
+  if (commandes.length === 0) return zone.replaceChildren(element("p", { class: "vide" }, "Aucune commande à encaisser."));
+  const date = (c) => (c.date ? new Date(c.date).toLocaleDateString("fr-FR") : "");
+  const reste = (c) => euros.format(arrondi(c.totalTTC - c.dejaRegle));
+  const loupe = (c) => element("button", {
+    type: "button", class: "loupe", title: "Voir le contenu de la pièce", "aria-label": `Voir le contenu de ${c.numero}`,
+    onclick: (e) => { e.stopPropagation(); consulterCommande(c); },
+  }, "🔍");
+  const liste = commandes.slice(0, 200);
+  if (enListe) {
+    zone.replaceChildren(tableau(
+      [{ titre: "Date", classe: "date" }, { titre: "N° pièce", classe: "code" }, { titre: "Référence", classe: "secondaire" },
+        { titre: "Code client", classe: "code" }, { titre: "Client", classe: "secondaire" }, { titre: "Net à payer", classe: "nombre" },
+        { titre: "Reste", classe: "nombre reste" }, { titre: "", classe: "action" }],
+      liste.map((c) => ({
+        classe: c.local ? "commande locale" : "commande", attributs: { "data-commande": c.numero },
+        cellules: [date(c), element("span", {}, c.numero, c.local ? element("span", { class: "etiquette" }, "pas encore dans Sage") : null),
+          c.reference && c.reference !== c.numero ? c.reference : "", c.client, c.intitule || "", euros.format(c.netAPayer), reste(c), loupe(c)],
+        onclick: () => encaisserCommande(c),
+      }))));
+  } else {
+    zone.replaceChildren(...liste.map((c) => element("div", { class: c.local ? "carte-commande locale" : "carte-commande", "data-commande": c.numero },
+      element("button", { type: "button", class: "corps", onclick: () => encaisserCommande(c) },
+        element("span", { class: "haut" }, element("strong", {}, c.numero), element("span", { class: "discret" }, date(c))),
+        element("span", {}, `${c.client} · ${c.intitule || ""}`),
+        element("span", { class: "discret" }, [c.local ? "pas encore dans Sage" : null, c.reference && c.reference !== c.numero ? `Réf. ${c.reference}` : null].filter(Boolean).join(" · ")),
+        element("span", { class: "montants-commande" },
+          element("span", {}, `Net à payer ${euros.format(c.netAPayer)}`), element("span", { class: "reste" }, `Reste ${reste(c)}`))),
+      loupe(c))));
+  }
+}
+
+/** Loupe : contenu de la pièce. Bon Sage : lu dans Sage (serveur joignable) ; commande de la borne : depuis la file. */
+async function consulterCommande(c) {
+  const titre = `${c.numero} · ${c.intitule || c.client}`;
+  const encaisser = element("button", { type: "button", class: "principal", onclick: () => { $("#dialogue-liste").close(); encaisserCommande(c); } },
+    `Encaisser (reste ${euros.format(arrondi(c.totalTTC - c.dejaRegle))})`);
+  const entete = (date, reference) => element("p", { class: "discret" },
+    [date ? new Date(date).toLocaleDateString("fr-FR") : null, `Client ${c.client}`, reference ? `Réf. ${reference}` : null].filter(Boolean).join(" · "));
+  const tableauLignes = (lignes) => element("table", { class: "tableau" },
+    element("thead", {}, element("tr", {}, element("th", {}, "Article"), element("th", {}, "Désignation"),
+      element("th", { class: "nombre" }, "Qté"), element("th", { class: "nombre" }, "PU HT"), element("th", { class: "nombre" }, "Montant HT"))),
+    element("tbody", {}, ...lignes.map((l) => element("tr", {},
+      element("td", {}, l.article || ""), element("td", {}, l.designation || "", l.gamme ? ` · ${l.gamme}` : ""),
+      element("td", { class: "nombre" }, l.article ? quantiteTexte(l.quantite) : ""),
+      element("td", { class: "nombre" }, l.article ? euros.format(l.prix) : ""),
+      element("td", { class: "nombre" }, l.article ? euros.format(l.montant) : "")))));
+  const totaux = (lignes) => element("div", { class: "totaux-piece" }, ...lignes.map(([libelle, valeur, fort]) =>
+    element("div", { class: fort ? "fort" : "" }, element("span", {}, libelle), element("span", {}, valeur))));
+
+  if (c.local) {
+    const lignes = c.operation.corps.lignes.map((l) => {
+      const a = catalogue.articles.find((x) => x.reference === l.article);
+      const prix = a?.prixVenteHT || 0;
+      return { article: l.article, designation: a?.designation || l.article, gamme: [l.gamme1, l.gamme2].filter(Boolean).join(" / "),
+        quantite: l.quantite, prix, montant: arrondi(prix * l.quantite) };
+    });
+    return ouvrirListe(titre, [entete(c.date, null), element("p", { class: "info" }, "Commande pas encore envoyée à Sage : prix du catalogue, TTC estimé."),
+      tableauLignes(lignes),
+      totaux([["Total TTC estimé", euros.format(c.totalTTC)], ["Déjà encaissé", euros.format(c.dejaRegle)], ["Reste à payer", euros.format(arrondi(c.totalTTC - c.dejaRegle)), true]]),
+      encaisser], false);
+  }
+
+  ouvrirListe(titre, [element("p", { class: "discret" }, "Lecture de la pièce dans Sage…")], false);
+  let d;
+  try {
+    d = connexion === "hors-ligne" ? undefined : await detailCommande(c.piece);
+  } catch { d = undefined; }
+  if (!$("#dialogue-liste").open || $("#liste-titre").textContent !== titre) return; // fermée entre-temps
+  if (d === undefined) {
+    return ouvrirListe(titre, [entete(c.date, c.reference), element("p", { class: "info" }, "Le contenu de la pièce se lit dans Sage : il s'affichera quand le serveur répondra."),
+      totaux([["Net à payer", euros.format(c.netAPayer)], ["Reste à payer", euros.format(arrondi(c.totalTTC - c.dejaRegle)), true]]), encaisser], false);
+  }
+  if (d === null) return ouvrirListe(titre, [element("p", { class: "info" }, "Cette pièce n'est plus un bon de commande dans Sage (livrée ou supprimée).")], false);
+  const e = d.entete;
+  ouvrirListe(titre, [entete(e.date, e.reference),
+    tableauLignes(d.lignes.map((l) => ({ article: l.article, designation: l.designation, gamme: [l.gamme1, l.gamme2].filter(Boolean).join(" / "),
+      quantite: l.quantite, prix: l.prixUnitaireHT, montant: l.montantHT }))),
+    totaux([["Total HT", euros.format(d.totalHT)], ["Total TTC", euros.format(e.totalTTC)], ["Net à payer", euros.format(e.netAPayer ?? e.totalTTC)],
+      ["Acomptes déjà réglés", euros.format(c.dejaRegle)], ["Reste à payer", euros.format(arrondi(c.totalTTC - c.dejaRegle)), true]]),
+    encaisser], false);
 }
 
 function ouvrirCommandes() {
@@ -894,6 +1025,8 @@ function brancher() {
   $("#btn-fermer-gamme").addEventListener("click", () => $("#choix-gamme").close());
   $("#btn-annuler-vente").addEventListener("click", () => { if (vente.lignes.size === 0 || confirm("Annuler ce ticket ?")) { vente = null; nouvelleVente(); } });
   $("#btn-supprimer-ligne").addEventListener("click", supprimerLigne);
+  for (const b of document.querySelectorAll("[data-liste]")) b.addEventListener("click", () => changerAffichage(b.dataset.liste, b.dataset.mode));
+  majBascules();
   $("#btn-retour-ticket").addEventListener("click", () => afficher("vente"));
   $("#btn-attente").addEventListener("click", mettreEnAttente);
   $("#btn-client-ticket").addEventListener("click", changerClient);
