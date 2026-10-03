@@ -145,6 +145,27 @@ public sealed class ApiTests : IDisposable
     }
 
     [Fact]
+    public async Task Le_stock_d_un_article_a_gamme_est_controle_par_valeur()
+    {
+        _lectures.Stocks["BAOR01"] = new Article("BAOR01", "Bague Or", null, null, 2292, 4, 0, Gamme1: "Taille");
+        var c = new CommandeRequest
+        {
+            IdExterne = "BORNE1-000020", Client = "CISEL",
+            Lignes = { new LigneCommande { Article = "BAOR01", Quantite = 2, Gamme1 = "52" } },
+        };
+
+        var refus = await _http.PostAsJsonAsync("/api/v1/commandes", c);
+        c.Lignes[0].Gamme1 = "54";
+        var accepte = await _http.PostAsJsonAsync("/api/v1/commandes", c);
+
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, refus.StatusCode);
+        Assert.Contains("52 : 1 disponible(s), 2 demandé(s)", await refus.Content.ReadAsStringAsync());
+        Assert.Equal(HttpStatusCode.Created, accepte.StatusCode);
+        var catalogue = await _http.GetFromJsonAsync<JsonElement>("/api/v1/catalogue");
+        Assert.Equal(3m, catalogue.GetProperty("gammes")[1].GetProperty("stockDisponible").GetDecimal());
+    }
+
+    [Fact]
     public async Task Le_controle_de_stock_suit_l_option_stocks_negatifs_de_Sage()
     {
         _lectures.Stocks["CHORFA"] = new Article("CHORFA", "Chaîne forçat", null, null, 1071, 0, 0);
@@ -370,7 +391,7 @@ public sealed class ApiTests : IDisposable
         public Task<Article?> Article(string reference) => Task.FromResult(Stocks.GetValueOrDefault(reference));
         public Task<IReadOnlyList<ModeReglement>> ModesReglement() => Task.FromResult<IReadOnlyList<ModeReglement>>(Array.Empty<ModeReglement>());
         public Task<IReadOnlyList<EnumereGamme>> Gammes(string? article = null) =>
-            Task.FromResult<IReadOnlyList<EnumereGamme>>(new[] { new EnumereGamme("BAOR01", "52", null, null) });
+            Task.FromResult<IReadOnlyList<EnumereGamme>>(new[] { new EnumereGamme("BAOR01", "52", null, null, 1, 0), new EnumereGamme("BAOR01", "54", null, null, 3, 0) });
         public Task<string?> PieceCommande(string idExterne) => Task.FromResult<string?>(null);
         public Task<Collaborateur?> CollaborateurUtilisateur(string utilisateur) => Task.FromResult(utilisateur switch
         {

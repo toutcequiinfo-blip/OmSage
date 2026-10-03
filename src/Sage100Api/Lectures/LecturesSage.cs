@@ -19,8 +19,14 @@ public sealed record Article(string Reference, string Designation, string? Famil
 
 public sealed record ModeReglement(string Intitule, string? Code);
 
-/// <summary>Valeur (ou couple de valeurs) de gamme vendable pour un article : à renvoyer dans gamme1 / gamme2 de la ligne de commande.</summary>
-public sealed record EnumereGamme(string Article, string Gamme1, string? Gamme2, string? CodeBarre);
+/// <summary>
+/// Valeur (ou couple de valeurs) de gamme vendable pour un article : à renvoyer dans gamme1 / gamme2 de la ligne de commande.
+/// Stock et StockReserve : stock de cette valeur, tous dépôts confondus (F_GAMSTOCK).
+/// </summary>
+public sealed record EnumereGamme(string Article, string Gamme1, string? Gamme2, string? CodeBarre, decimal Stock = 0, decimal StockReserve = 0)
+{
+    public decimal StockDisponible => Stock - StockReserve;
+}
 
 /// <summary>
 /// ControleStock : vrai si une commande dépassant le stock disponible est refusée (voir Sage:ControleStock).
@@ -135,10 +141,14 @@ public sealed class LecturesSql(IOptions<SageOptions> options) : ILecturesSage
         // F_ARTENUMREF : une ligne par valeur (ou couple de valeurs) ; AG_No1 / AG_No2 renvoient à F_ARTGAMME.
         using var c = Cnx();
         var r = await c.QueryAsync<EnumereGamme>(
-            "SELECT e.AR_Ref AS Article, g1.EG_Enumere AS Gamme1, g2.EG_Enumere AS Gamme2, NULLIF(e.AE_CodeBarre, '') AS CodeBarre " +
+            "SELECT e.AR_Ref AS Article, g1.EG_Enumere AS Gamme1, g2.EG_Enumere AS Gamme2, NULLIF(e.AE_CodeBarre, '') AS CodeBarre, " +
+            "CAST(ISNULL(s.Sto, 0) AS decimal(18,6)) AS Stock, CAST(ISNULL(s.Res, 0) AS decimal(18,6)) AS StockReserve " +
             "FROM F_ARTENUMREF e JOIN F_ARTICLE a ON a.AR_Ref = e.AR_Ref " +
             "JOIN F_ARTGAMME g1 ON g1.AG_No = e.AG_No1 " +
             "LEFT JOIN F_ARTGAMME g2 ON g2.AG_No = e.AG_No2 AND e.AG_No2 <> 0 " +
+            // F_GAMSTOCK : une ligne par dépôt et par valeur de gamme (AG_No2 = 0 pour une gamme simple).
+            "OUTER APPLY (SELECT SUM(gs.GS_QteSto) AS Sto, SUM(gs.GS_QteRes) AS Res FROM F_GAMSTOCK gs " +
+            "  WHERE gs.AR_Ref = e.AR_Ref AND gs.AG_No1 = e.AG_No1 AND gs.AG_No2 = e.AG_No2) s " +
             "WHERE a.AR_Sommeil = 0 AND e.AE_Sommeil = 0 AND (@article IS NULL OR e.AR_Ref = @article) " +
             "ORDER BY e.AR_Ref, g1.AG_No, g2.AG_No",
             new { article });
