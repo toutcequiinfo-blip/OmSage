@@ -47,8 +47,8 @@ Borne / applications ──HTTPS + X-Api-Key──► Sage100Api (.NET 8, 64 bit
 | POST | `/api/v1/commandes` | Crée un bon de commande, un bon de livraison ou une facture (`typeDocument`), dans la souche et le dépôt demandés. **Idempotent** sur `idExterne` : 201 à la création, 200 si déjà reçu. |
 | GET | `/api/v1/commandes/{idExterne}` | Pièce Sage d'une commande |
 | POST | `/api/v1/commandes/{idExterne}/encaissements` | Encaissement : acompte sur un bon de commande ou de livraison, règlement client sur une facture. Idempotent sur son propre `idExterne`. |
-| GET | `/api/v1/commandes-ouvertes?recherche=&taille=` | Bons de commande non clôturés avec un reste à payer (total TTC moins acomptes) et leur net à payer Sage, les plus récents d'abord |
-| GET | `/api/v1/commandes-ouvertes/{piece}` | Un bon de commande et ses lignes (article, désignation, gamme, quantité, prix), pour la loupe de la borne |
+| GET | `/api/v1/commandes-ouvertes?recherche=&taille=` | Pièces avec un reste à payer : bons de commande et de livraison non clôturés, factures et factures comptabilisées (`typePiece` = DO_Type). Déjà réglé = acomptes, règlements imputés et règlements de la borne pas encore imputés. Les plus récentes d'abord |
+| GET | `/api/v1/commandes-ouvertes/{piece}` | Une pièce (BC, BL ou facture) et ses lignes (article, désignation, gamme, quantité, prix), pour la loupe et le ticket de la borne |
 | POST | `/api/v1/commandes/piece/{piece}/encaissements` | Encaissement d'un bon de commande désigné par sa pièce Sage (saisi dans Sage ou par un vendeur). Idempotent sur `idExterne`. |
 
 
@@ -202,13 +202,13 @@ L'API sert l'application sur **http://<serveur>:5080/borne/**. Il n'y a rien à 
 - Le catalogue (clients, articles, prix, stock, modes de règlement) est gardé sur la tablette et rafraîchi toutes les 10 minutes.
 - Un utilisateur déjà connecté une fois sur la tablette peut s'y reconnecter sans serveur : la borne garde une empreinte salée de son mot de passe, jamais le mot de passe. Ses ventes partent avec sa connexion ; si elle a expiré entre-temps, la borne demande de le reconnecter pour les envoyer.
 
-**Commandes à encaisser :** le bouton « À encaisser » en haut (caissiers seulement) liste les bons de commande Sage qui ont un reste à payer, ainsi que les commandes de la borne pas encore envoyées. Elles s'affichent en liste (date, n° de pièce, référence, code client, net à payer, reste) ou en boutons. Un appui ouvre l'encaissement de la commande choisie ; la loupe 🔍 montre le contenu de la pièce (lu dans Sage, ou dans la file pour une commande de la borne pas encore envoyée). Hors ligne, la liste vient du dernier catalogue, et les encaissements encore en file sont déduits du reste.
+**Pièces à encaisser :** le bouton « À encaisser » en haut (caissiers seulement) liste les bons de commande, bons de livraison, factures et factures comptabilisées de Sage qui ont un reste à payer, avec leur type, ainsi que les commandes de la borne pas encore envoyées. Elles s'affichent en liste (date, n° de pièce, référence, code client, net à payer, reste) ou en boutons. Un appui ouvre l'encaissement de la commande choisie ; la loupe 🔍 montre le contenu de la pièce (lu dans Sage, ou dans la file pour une commande de la borne pas encore envoyée). Hors ligne, la liste vient du dernier catalogue, et les encaissements encore en file sont déduits du reste.
 
 **Utilisateurs :** le bouton 👤 en haut affiche l'utilisateur connecté ; un appui permet de changer d'utilisateur. Sans la case « Caissier » sur sa fiche collaborateur Sage, l'utilisateur prend la commande mais la borne n'affiche pas les modes de règlement.
 
-**Montants :** la borne affiche un TTC **estimé** avec le taux de TVA des réglages. Le net à payer réel est celui calculé par Sage, visible dans la file d'envoi une fois la commande envoyée.
+**Montants :** en ligne, « Régler » crée d'abord la pièce dans Sage, puis la borne encaisse le **net à payer calculé par Sage** (remises du client et de sa famille, TVA, escompte) ; le ticket imprimé reprend les lignes et les montants de Sage. Hors ligne, la borne affiche un TTC **estimé** avec le taux de TVA de chaque article dans Sage (catégorie comptable du client). Une pièce refusée par Sage n'est pas encaissée.
 
-**Première utilisation :** l'écran Réglages s'ouvre. Saisis le nom de la borne (par exemple `BORNE1`), la clé d'API et le taux de TVA. Le numéro de vente `BORNE1-000001` devient la référence de la pièce dans Sage.
+**Première utilisation :** l'écran Réglages s'ouvre. Saisis le nom de la borne (par exemple `BORNE1`) et la clé d'API. Le numéro de vente `BORNE1-000001` devient la référence de la pièce dans Sage.
 
 **Sur la tablette :** le cache hors ligne (service worker) n'est activé par le navigateur qu'en **HTTPS** ou sur `localhost`.
 - En `http://` depuis la tablette, la file d'envoi fonctionne quand même. En revanche, la page ne peut pas être rouverte si le serveur est coupé.

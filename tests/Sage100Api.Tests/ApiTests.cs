@@ -189,6 +189,10 @@ public sealed class ApiTests : IDisposable
         Assert.Equal("Carton de 12", tarifs.GetProperty("conditionnements")[0].GetProperty("enumere").GetString());
         Assert.Equal("Borne", json.GetProperty("souches")[1].GetProperty("intitule").GetString());
         Assert.Equal(JsonValueKind.Array, json.GetProperty("depots").ValueKind);
+        // TVA des articles dans Sage (estimation hors ligne) et catégorie comptable du client.
+        Assert.Equal(20m, json.GetProperty("tauxTva")[0].GetProperty("taux").GetDecimal());
+        Assert.Equal(1, json.GetProperty("clients")[0].GetProperty("categorieCompta").GetInt32());
+        Assert.Equal(1, json.GetProperty("commandesOuvertes")[0].GetProperty("typePiece").GetInt32());
     }
 
     [Fact]
@@ -821,6 +825,8 @@ public sealed class ApiTests : IDisposable
                 [new TarifConditionnement("ECRIN", 2, null, 2, 96)],
                 []));
         public Task<IReadOnlyList<Souche>> Souches() => Task.FromResult<IReadOnlyList<Souche>>([new Souche(0, "N° Pièce"), new Souche(1, "Borne")]);
+        public Task<IReadOnlyList<TauxTva>> TauxTva() =>
+            Task.FromResult<IReadOnlyList<TauxTva>>([new TauxTva("CHORFA", 1, 20m)]);
         public Task<IReadOnlyList<StockDepot>> StocksDepots(string? article = null) =>
             Task.FromResult<IReadOnlyList<StockDepot>>(Stocks.Where(x => article == null || x.Article == article).ToList());
     }

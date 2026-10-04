@@ -2,7 +2,7 @@
 // Tout ce qui est vendu est d'abord écrit ici, pour que la borne continue sans serveur.
 
 const CLE_REGLAGES = "borne.reglages";
-const REGLAGES_DEFAUT = { borne: "BORNE1", cle: "", tauxTva: 20, clientDefaut: "", prochainNumero: 1 };
+const REGLAGES_DEFAUT = { borne: "BORNE1", cle: "", clientDefaut: "", prochainNumero: 1 };
 
 export function lireReglages() {
   try {

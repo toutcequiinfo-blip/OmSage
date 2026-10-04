@@ -13,7 +13,7 @@
   <header>
     <div class="marque">Borne <span id="nom-borne"></span></div>
     <div id="client-actuel" class="client-actuel"></div>
-    <button id="btn-commandes" class="utilisateur" type="button" title="Encaisser une commande déjà enregistrée">À encaisser</button>
+    <button id="btn-commandes" class="utilisateur" type="button" title="Encaisser une pièce déjà enregistrée (BC, BL, facture)">À encaisser</button>
     <button id="utilisateur" class="utilisateur" type="button" title="Changer d'utilisateur" hidden></button>
     <button id="etat" class="etat" type="button" title="État de la connexion et file d'envoi">…</button>
     <button id="btn-saisie" class="icone" type="button" aria-label="Paramètres de saisie" title="Paramètres de saisie : type de document, souche, dépôt">🧾</button>
@@ -75,7 +75,7 @@
 
   <!-- 1 bis. Commandes déjà enregistrées, à encaisser (saisies dans Sage ou par un vendeur) -->
   <main id="ecran-commandes" class="ecran" hidden>
-    <h1>Commandes à encaisser</h1>
+    <h1>Pièces à encaisser</h1>
     <div class="barre-recherche">
       <input id="recherche-commande" class="recherche" type="search" placeholder="Rechercher (n° de pièce, client, référence)" autocomplete="off">
       <div class="bascule" role="group" aria-label="Affichage">
@@ -106,7 +106,7 @@
       <ul id="lignes" class="lignes"></ul>
       <div class="totaux">
         <div><span>Total HT</span><span id="total-ht">0</span></div>
-        <div><span>TVA estimée (<span id="taux-tva"></span> %)</span><span id="total-tva">0</span></div>
+        <div><span>TVA estimée (taux des articles dans Sage)</span><span id="total-tva">0</span></div>
         <div class="ttc"><span>Total TTC</span><span id="total-ttc">0</span></div>
       </div>
     </section>
@@ -200,7 +200,6 @@
     <form id="form-reglages" class="form">
       <label>Nom de la borne (10 caractères max.) <input name="borne" maxlength="10" required pattern="[A-Za-z0-9_]+"></label>
       <label>Clé d'API <input name="cle" type="password" required autocomplete="off"></label>
-      <label>Taux de TVA pour l'estimation (%) <input name="tauxTva" type="number" step="0.01" min="0" required></label>
       <label>Client par défaut (facultatif) <input name="clientDefaut" maxlength="17"></label>
       <div class="actions">
         <button type="submit" class="principal">Enregistrer</button>
