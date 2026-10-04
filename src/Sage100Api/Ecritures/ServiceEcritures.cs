@@ -20,7 +20,7 @@ public static class CodesApi
 }
 
 /// <summary>Enchaîne : journal (anti-doublon) -> worker Objets Métiers -> journal.</summary>
-public sealed class ServiceEcritures(JournalOperations journal, IWorkerClient worker, ILecturesSage lectures, ControleStock stock)
+public sealed class ServiceEcritures(JournalOperations journal, IWorkerClient worker, ILecturesSage lectures, ILecturesTarifs tarifs, ControleStock stock)
 {
     public const string TypeCommande = "commande";
     public const string TypeEncaissement = "encaissement";
@@ -39,8 +39,41 @@ public sealed class ServiceEcritures(JournalOperations journal, IWorkerClient wo
             return ResultatEcriture<CommandeResult>.Echec(CodesErreur.SageMetier, manque);
         }
 
+        c.TypeDocument = TypesPiece.Normaliser(c.TypeDocument);
+        await AppliquerTarifs(c);
         var reponse = await worker.Envoyer(Operations.CreerCommande, new CommandeWorkerRequest { Commande = c, Auteur = utilisateur?.Auteur() }, ct);
         return Conclure<CommandeResult>(cle, reponse, r => r.Piece);
+    }
+
+    /// <summary>
+    /// Prix de chaque ligne selon le tarif du client (sa fiche, sinon sa catégorie tarifaire), avec gamme, conditionnement
+    /// et remises. Le worker les impose sur la pièce si Sage en a calculé d'autres. Les prix envoyés par l'application sont ignorés.
+    /// </summary>
+    public async Task AppliquerTarifs(CommandeRequest c)
+    {
+        foreach (var l in c.Lignes) { l.PrixUnitaire = null; l.PrixTTC = false; l.Remises = null; }
+        var client = await lectures.Client(c.Client.Trim());
+        if (client is null) return; // client inconnu : le worker renverra 404
+        var donnees = await tarifs.Tarifs(client.Numero, client.CategorieTarif, c.Lignes.Select(l => l.Article).ToList());
+        foreach (var l in c.Lignes)
+        {
+            var article = await lectures.Article(l.Article.Trim());
+            if (article is null) continue;
+            Conditionnement? cond = null;
+            if (!string.IsNullOrEmpty(l.Conditionnement))
+            {
+                var qte = (decimal)(l.QuantiteConditionnement ?? 0);
+                cond = donnees.Conditionnements.FirstOrDefault(x => string.Equals(x.Article, article.Reference, StringComparison.OrdinalIgnoreCase)
+                           && string.Equals(x.Enumere.Trim(), l.Conditionnement!.Trim(), StringComparison.OrdinalIgnoreCase) && x.Quantite == qte)
+                       // Conditionnement inconnu : le worker le refusera ; le prix reste celui de l'unité multiplié.
+                       ?? new Conditionnement(article.Reference, 0, l.Conditionnement!, qte, null, null, false);
+            }
+            var p = Tarification.Calculer(donnees, article.Reference, article.PrixVenteHT, article.PrixTTC, client.Numero, client.CategorieTarif,
+                l.Gamme1, l.Gamme2, cond, (decimal)l.Quantite);
+            l.PrixUnitaire = (double)p.PrixUnitaire;
+            l.PrixTTC = p.PrixTTC;
+            l.Remises = p.Remises.Select(r => new RemiseLigne { Type = r.Type, Valeur = (double)r.Valeur }).ToList();
+        }
     }
 
     public async Task<ResultatEcriture<EncaissementResult>> CreerEncaissement(string idCommande, EncaissementRequest e, string application, Utilisateur? utilisateur, CancellationToken ct)

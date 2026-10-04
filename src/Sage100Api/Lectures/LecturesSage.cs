@@ -4,14 +4,18 @@ using Microsoft.Extensions.Options;
 
 namespace Sage100Api.Lectures;
 
-public sealed record Client(string Numero, string Intitule, string? Ville, string? Telephone, string? Email);
+/// <summary>CategorieTarif : catégorie tarifaire du client (N_CatTarif, 1 à 32), qui fixe ses prix (voir <see cref="Tarification"/>).</summary>
+public sealed record Client(string Numero, string Intitule, string? Ville, string? Telephone, string? Email, int CategorieTarif = 1);
 
 /// <summary>
 /// Gamme1 / Gamme2 : intitulés des gammes (par exemple « Taille »), null si l'article n'est pas à gamme.
 /// SuiviStock : faux pour un article sans suivi de stock (AR_SuiviStock = 0), jamais bloqué par le contrôle de stock.
+/// PrixVenteHT : prix de vente de la fiche (AR_PrixVen), TTC si PrixTTC ; le prix d'un client suit sa catégorie tarifaire.
+/// Unite : unité de vente (P_UNITE, par exemple « Pièce ») ; Conditionnement : type de conditionnement (P_CONDITIONNEMENT,
+/// par exemple « Carton »), les quantités de chaque conditionnement sont dans <see cref="Lectures.Conditionnement"/>.
 /// </summary>
 public sealed record Article(string Reference, string Designation, string? Famille, string? CodeBarre, decimal PrixVenteHT, decimal Stock, decimal StockReserve,
-    string? Gamme1 = null, string? Gamme2 = null, bool SuiviStock = true)
+    string? Gamme1 = null, string? Gamme2 = null, bool SuiviStock = true, string? Unite = null, bool PrixTTC = false, string? Conditionnement = null)
 {
     /// <summary>Stock réel moins les quantités réservées par les commandes clients (les commandes fournisseurs ne comptent pas).</summary>
     public decimal StockDisponible => Stock - StockReserve;
@@ -31,10 +35,13 @@ public sealed record EnumereGamme(string Article, string Gamme1, string? Gamme2,
 /// <summary>
 /// ControleStock : vrai si une commande dépassant le stock disponible est refusée (voir Sage:ControleStock).
 /// Authentification : la borne doit connecter un utilisateur Sage ; ExigerCaissier : seuls les caissiers encaissent.
+/// Tarifs : de quoi calculer hors ligne le prix de chaque client (voir <see cref="Tarification"/>).
+/// Souches, Depots, StocksDepots : choix de la souche et du dépôt dans les paramètres de saisie de la borne.
 /// </summary>
 public sealed record Catalogue(DateTime GenereLe, IReadOnlyList<Client> Clients, IReadOnlyList<Article> Articles, IReadOnlyList<ModeReglement> ModesReglement,
     IReadOnlyList<EnumereGamme> Gammes, bool ControleStock, bool Authentification = false, bool ExigerCaissier = false,
-    IReadOnlyList<CommandeOuverte>? CommandesOuvertes = null);
+    IReadOnlyList<CommandeOuverte>? CommandesOuvertes = null, DonneesTarifs? Tarifs = null, IReadOnlyList<Souche>? Souches = null,
+    IReadOnlyList<Depot>? Depots = null, IReadOnlyList<StockDepot>? StocksDepots = null);
 
 /// <summary>
 /// Bon de commande client pas encore livré ni clôturé, avec ce qui reste à encaisser.
@@ -68,6 +75,7 @@ public interface ILecturesSage
     /// <summary>Option « Autoriser la gestion des stocks négatifs » de Sage (P_PREFERENCES.PR_StockNeg).</summary>
     Task<bool> StockNegatifAutorise();
     Task<IReadOnlyList<EnumereGamme>> Gammes(string? article = null);
+    /// <summary>Pièce Sage (bon de commande, de livraison ou facture) créée avec cet identifiant externe, ou null.</summary>
     Task<string?> PieceCommande(string idExterne);
     /// <summary>Collaborateur dont le champ « Utilisateur » de la fiche désigne ce login Sage, ou null.</summary>
     Task<Collaborateur?> CollaborateurUtilisateur(string utilisateur);
@@ -81,7 +89,8 @@ public sealed class LecturesSql(IOptions<SageOptions> options) : ILecturesSage
 {
     // CT_Type = 0 : client ; CT_Sommeil / AR_Sommeil = 1 : mis en sommeil.
     const string SelectClient =
-        "SELECT CT_Num AS Numero, CT_Intitule AS Intitule, CT_Ville AS Ville, CT_Telephone AS Telephone, CT_EMail AS Email FROM F_COMPTET";
+        "SELECT CT_Num AS Numero, CT_Intitule AS Intitule, CT_Ville AS Ville, CT_Telephone AS Telephone, CT_EMail AS Email, " +
+    "CAST(CASE WHEN N_CatTarif > 0 THEN N_CatTarif ELSE 1 END AS int) AS CategorieTarif FROM F_COMPTET";
 
     const string SelectArticle =
         "SELECT a.AR_Ref AS Reference, a.AR_Design AS Designation, a.FA_CodeFamille AS Famille, a.AR_CodeBarre AS CodeBarre, " +
@@ -90,10 +99,15 @@ public sealed class LecturesSql(IOptions<SageOptions> options) : ILecturesSage
         // AR_Gamme1 / AR_Gamme2 : indice dans P_GAMME (0 = pas de gamme).
         "(SELECT TOP 1 G_Intitule FROM P_GAMME WHERE cbIndice = a.AR_Gamme1 AND a.AR_Gamme1 > 0) AS Gamme1, " +
         "(SELECT TOP 1 G_Intitule FROM P_GAMME WHERE cbIndice = a.AR_Gamme2 AND a.AR_Gamme2 > 0) AS Gamme2, " +
-        "CAST(CASE WHEN a.AR_SuiviStock <> 0 THEN 1 ELSE 0 END AS bit) AS SuiviStock " +
+        "CAST(CASE WHEN a.AR_SuiviStock <> 0 THEN 1 ELSE 0 END AS bit) AS SuiviStock, " +
+        // AR_UniteVen : indice dans P_UNITE ; AR_Condition : indice dans P_CONDITIONNEMENT (0 = article non conditionné).
+        "(SELECT TOP 1 NULLIF(U_Intitule, '') FROM P_UNITE WHERE cbIndice = a.AR_UniteVen) AS Unite, " +
+        "CAST(CASE WHEN a.AR_PrixTTC = 1 THEN 1 ELSE 0 END AS bit) AS PrixTTC, " +
+        "(SELECT TOP 1 NULLIF(P_Conditionnement, '') FROM P_CONDITIONNEMENT WHERE cbIndice = a.AR_Condition AND a.AR_Condition > 0) AS Conditionnement " +
         "FROM F_ARTICLE a LEFT JOIN F_ARTSTOCK s ON s.AR_Ref = a.AR_Ref";
 
-    const string GroupArticle = " GROUP BY a.AR_Ref, a.AR_Design, a.FA_CodeFamille, a.AR_CodeBarre, a.AR_PrixVen, a.AR_Gamme1, a.AR_Gamme2, a.AR_SuiviStock";
+    const string GroupArticle = " GROUP BY a.AR_Ref, a.AR_Design, a.FA_CodeFamille, a.AR_CodeBarre, a.AR_PrixVen, a.AR_Gamme1, a.AR_Gamme2, a.AR_SuiviStock, " +
+        "a.AR_UniteVen, a.AR_PrixTTC, a.AR_Condition";
 
     SqlConnection Cnx() => new(options.Value.ChaineSql);
 
@@ -167,9 +181,11 @@ public sealed class LecturesSql(IOptions<SageOptions> options) : ILecturesSage
 
     public async Task<string?> PieceCommande(string idExterne)
     {
+        // Bon de commande, bon de livraison ou facture (comptabilisée ou non) créé par la borne.
         using var c = Cnx();
         return await c.QueryFirstOrDefaultAsync<string>(
-            "SELECT TOP 1 DO_Piece FROM F_DOCENTETE WHERE DO_Domaine = 0 AND DO_Type = 1 AND DO_RefExterne = @idExterne", new { idExterne });
+            "SELECT TOP 1 DO_Piece FROM F_DOCENTETE WHERE DO_Domaine = 0 AND DO_Type IN (1, 3, 6, 7) AND DO_RefExterne = @idExterne ORDER BY DO_Type",
+            new { idExterne });
     }
 
     public async Task<Collaborateur?> CollaborateurUtilisateur(string utilisateur)

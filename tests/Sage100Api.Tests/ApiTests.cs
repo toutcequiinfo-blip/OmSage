@@ -23,6 +23,7 @@ public sealed class ApiTests : IDisposable
     readonly FauxWorker _worker = new();
     readonly FaussesLectures _lectures = new();
     readonly FaussesLecturesErp _erp = new();
+    readonly FaussesLecturesTarifs _tarifs = new();
     readonly WebApplicationFactory<Program> _usine;
     readonly HttpClient _http;
 
@@ -48,6 +49,8 @@ public sealed class ApiTests : IDisposable
                 s.AddSingleton<ILecturesSage>(_lectures);
                 s.RemoveAll<ILecturesErp>();
                 s.AddSingleton<ILecturesErp>(_erp);
+                s.RemoveAll<ILecturesTarifs>();
+                s.AddSingleton<ILecturesTarifs>(_tarifs);
             });
         });
 
@@ -131,6 +134,106 @@ public sealed class ApiTests : IDisposable
         var g = json.GetProperty("gammes")[0];
         Assert.Equal("BAOR01", g.GetProperty("article").GetString());
         Assert.Equal("52", g.GetProperty("gamme1").GetString());
+    }
+
+    [Fact]
+    public async Task Le_catalogue_contient_tarifs_souches_et_depots()
+    {
+        var json = await _http.GetFromJsonAsync<JsonElement>("/api/v1/catalogue");
+        Assert.Equal(2, json.GetProperty("clients")[0].GetProperty("categorieTarif").GetInt32());
+        var tarifs = json.GetProperty("tarifs");
+        Assert.Equal("Grossistes", tarifs.GetProperty("categories")[1].GetProperty("intitule").GetString());
+        Assert.Equal(900, tarifs.GetProperty("articles")[0].GetProperty("prix").GetDecimal());
+        Assert.Equal("Carton de 12", tarifs.GetProperty("conditionnements")[0].GetProperty("enumere").GetString());
+        Assert.Equal("Borne", json.GetProperty("souches")[1].GetProperty("intitule").GetString());
+        Assert.Equal(JsonValueKind.Array, json.GetProperty("depots").ValueKind);
+    }
+
+    [Fact]
+    public async Task La_commande_part_vers_Sage_au_prix_de_la_categorie_du_client()
+    {
+        _lectures.Stocks["CHORFA"] = new Article("CHORFA", "Chaîne forçat", null, null, 1071, 10, 0);
+        _lectures.Stocks["BAAR01"] = new Article("BAAR01", "Bague Argent", null, null, 372, 10, 0);
+        var c = Commande("BORNE1-000201");
+        c.Lignes[0].PrixUnitaire = 1; // un prix envoyé par l'application est ignoré
+        c.Lignes.Add(new LigneCommande { Article = "BAAR01", Quantite = 2 });
+
+        var r = await _http.PostAsJsonAsync("/api/v1/commandes", c);
+
+        Assert.Equal(HttpStatusCode.Created, r.StatusCode);
+        var envoyee = _worker.DerniereCommande!;
+        Assert.Equal("commande", envoyee.TypeDocument);
+        Assert.Equal(900, envoyee.Lignes[0].PrixUnitaire);
+        Assert.Empty(envoyee.Lignes[0].Remises!);
+        Assert.Equal(372, envoyee.Lignes[1].PrixUnitaire);
+        var remise = Assert.Single(envoyee.Lignes[1].Remises!);
+        Assert.Equal((1, 10d), (remise.Type, remise.Valeur));
+    }
+
+    [Fact]
+    public async Task Un_carton_part_avec_son_conditionnement_et_le_prix_par_unite()
+    {
+        _lectures.Stocks["ECRIN"] = new Article("ECRIN", "Écrin", null, null, 10, 100, 0, Unite: "Unité", Conditionnement: "Carton");
+        var c = Commande("BORNE1-000202");
+        c.TypeDocument = "Facture";
+        c.Souche = 1;
+        c.Depot = 1;
+        c.Lignes[0] = new LigneCommande { Article = "ECRIN", Quantite = 2, Conditionnement = "Carton de 12", QuantiteConditionnement = 12 };
+        _tarifs.Stocks.Add(new StockDepot("ECRIN", 1, null, null, 30, 0)); // stock du dépôt choisi : 24 unités demandées
+
+        var r = await _http.PostAsJsonAsync("/api/v1/commandes", c);
+
+        Assert.Equal(HttpStatusCode.Created, r.StatusCode);
+        var envoyee = _worker.DerniereCommande!;
+        Assert.Equal(("facture", 1, 1), (envoyee.TypeDocument, envoyee.Souche, envoyee.Depot));
+        Assert.Equal("Carton de 12", envoyee.Lignes[0].Conditionnement);
+        Assert.Equal(8, envoyee.Lignes[0].PrixUnitaire); // carton à 96 : 8 l'unité
+    }
+
+    [Theory]
+    [InlineData("avoir", null, null)]
+    [InlineData(null, "Carton de 12", null)]
+    public async Task Type_de_document_ou_conditionnement_invalide_renvoie_422(string? type, string? cond, double? contenu)
+    {
+        var c = Commande("BORNE1-000203");
+        c.TypeDocument = type;
+        c.Lignes[0].Conditionnement = cond;
+        c.Lignes[0].QuantiteConditionnement = contenu;
+        var r = await _http.PostAsJsonAsync("/api/v1/commandes", c);
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, r.StatusCode);
+        Assert.Equal(0, _worker.Appels(Operations.CreerCommande));
+    }
+
+    [Fact]
+    public async Task Le_stock_est_controle_en_unites_et_dans_le_depot_choisi()
+    {
+        _lectures.Stocks["ECRIN"] = new Article("ECRIN", "Écrin", null, null, 10, 20, 0);
+        var carton = new LigneCommande { Article = "ECRIN", Quantite = 2, Conditionnement = "Carton de 12", QuantiteConditionnement = 12 };
+        var c = Commande("BORNE1-000204");
+        c.Lignes[0] = carton;
+        var r = await _http.PostAsJsonAsync("/api/v1/commandes", c); // 24 unités demandées, 20 en stock
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, r.StatusCode);
+        Assert.Contains("24 demandé", await r.Content.ReadAsStringAsync());
+
+        _tarifs.Stocks.Add(new StockDepot("ECRIN", 2, null, null, 5, 0));
+        var d = Commande("BORNE1-000205");
+        d.Depot = 2;
+        d.Lignes[0] = new LigneCommande { Article = "ECRIN", Quantite = 6 };
+        r = await _http.PostAsJsonAsync("/api/v1/commandes", d);
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, r.StatusCode);
+        Assert.Contains("dans le dépôt 2", await r.Content.ReadAsStringAsync());
+        Assert.Equal(0, _worker.Appels(Operations.CreerCommande));
+    }
+
+    [Fact]
+    public async Task Le_prix_d_un_client_se_verifie_dans_Swagger()
+    {
+        _lectures.Stocks["ECRIN"] = new Article("ECRIN", "Écrin", null, null, 10, 100, 0, Unite: "Unité");
+        var json = await _http.GetFromJsonAsync<JsonElement>("/api/v1/tarifs?client=CISEL&article=ECRIN&conditionnement=Carton%20de%2012");
+        Assert.Equal(2, json.GetProperty("categorieTarif").GetInt32());
+        Assert.Equal("Grossistes", json.GetProperty("intituleCategorie").GetString());
+        Assert.Equal(96, json.GetProperty("prix").GetProperty("prix").GetDecimal());
+        Assert.Equal(HttpStatusCode.NotFound, (await _http.GetAsync("/api/v1/tarifs?client=INCONNU&article=ECRIN")).StatusCode);
     }
 
     [Fact]
@@ -557,6 +660,7 @@ public sealed class ApiTests : IDisposable
         public (string Code, string Message)? ProchaineErreur;
         public string? DernierePiece;
         public Auteur? DernierAuteur;
+        public CommandeRequest? DerniereCommande;
 
         public int Appels(string op) => _appels.GetValueOrDefault(op);
 
@@ -583,6 +687,7 @@ public sealed class ApiTests : IDisposable
         CommandeResult Commande(CommandeWorkerRequest c)
         {
             DernierAuteur = c.Auteur;
+            DerniereCommande = c.Commande;
             return new CommandeResult { IdExterne = c.Commande.IdExterne, Piece = "BC00100", NetAPayer = 1303.2 };
         }
 
@@ -633,8 +738,13 @@ public sealed class ApiTests : IDisposable
         public bool NegatifAutorise;
         public Task<bool> StockNegatifAutorise() => Task.FromResult(NegatifAutorise);
         public Task<IReadOnlyList<Client>> Clients(string? recherche, int page, int taille) =>
-            Task.FromResult<IReadOnlyList<Client>>(new[] { new Client("CISEL", "Ciselure", null, null, null) });
-        public Task<Client?> Client(string numero) => Task.FromResult<Client?>(null);
+            Task.FromResult<IReadOnlyList<Client>>(new[] { new Client("CISEL", "Ciselure", null, null, null, 2) });
+        public Task<Client?> Client(string numero) => Task.FromResult(numero switch
+        {
+            "CISEL" => new Client("CISEL", "Ciselure", null, null, null, 2),
+            "BAGUES" => new Client("BAGUES", "Bagues & Co", null, null, null, 1),
+            _ => (Client?)null,
+        });
         public Task<IReadOnlyList<Article>> Articles(string? recherche, string? famille, int page, int taille) =>
             Task.FromResult<IReadOnlyList<Article>>(Array.Empty<Article>());
         public Task<Article?> Article(string reference) => Task.FromResult(Stocks.GetValueOrDefault(reference));
@@ -654,5 +764,21 @@ public sealed class ApiTests : IDisposable
             ? new DetailPiece(new CommandeOuverte("BC00042", new DateTime(2026, 10, 2), "CISEL", "Ciselure", "BC00042", null, 1303.2m, 300m, 1003.2m), 1086m,
                 new[] { new LignePiece("CHORFA", "Chaîne forçat Or", null, null, 1, 1086m, 1086m, 1303.2m) })
             : null);
+    }
+
+    sealed class FaussesLecturesTarifs : ILecturesTarifs
+    {
+        public readonly List<StockDepot> Stocks = new();
+        public Task<DonneesTarifs> Tarifs(string? client = null, int? categorie = null, IReadOnlyCollection<string>? articles = null) =>
+            Task.FromResult(new DonneesTarifs(
+                [new CategorieTarif(1, "Détaillants", false), new CategorieTarif(2, "Grossistes", false)],
+                [new TarifArticle("CHORFA", 2, null, 900, false, 0, 0), new TarifArticle("BAAR01", 2, null, 0, false, 10, 0)],
+                [new TarifGamme("BAOR01", 2, null, "54", null, 2000)],
+                [new Conditionnement("ECRIN", 2, "Carton de 12", 12, null, "ECR12", false)],
+                [new TarifConditionnement("ECRIN", 2, null, 2, 96)],
+                []));
+        public Task<IReadOnlyList<Souche>> Souches() => Task.FromResult<IReadOnlyList<Souche>>([new Souche(0, "N° Pièce"), new Souche(1, "Borne")]);
+        public Task<IReadOnlyList<StockDepot>> StocksDepots(string? article = null) =>
+            Task.FromResult<IReadOnlyList<StockDepot>>(Stocks.Where(x => article == null || x.Article == article).ToList());
     }
 }

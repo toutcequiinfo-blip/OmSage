@@ -24,6 +24,10 @@ namespace Sage100Api.Contracts
             Texte(e, "client", c.Client, LongueurClient);
             if (c.Reference != null && c.Reference.Length > LongueurReference)
                 e.Add($"reference : {LongueurReference} caractères maximum.");
+            if (TypesPiece.Normaliser(c.TypeDocument) == null)
+                e.Add("typeDocument : commande, livraison ou facture.");
+            if (c.Souche.HasValue && (c.Souche < 0 || c.Souche > 49)) e.Add("souche : de 0 à 49.");
+            if (c.Depot.HasValue && c.Depot <= 0) e.Add("depot : numéro de dépôt Sage (DE_No).");
             if (c.Lignes == null || c.Lignes.Count == 0)
             {
                 e.Add("lignes : la commande doit contenir au moins une ligne.");
@@ -37,6 +41,12 @@ namespace Sage100Api.Contracts
                 if (l.Gamme1 != null && l.Gamme1.Length > LongueurEnumere) e.Add($"lignes[{i}].gamme1 : {LongueurEnumere} caractères maximum.");
                 if (l.Gamme2 != null && l.Gamme2.Length > LongueurEnumere) e.Add($"lignes[{i}].gamme2 : {LongueurEnumere} caractères maximum.");
                 if (!string.IsNullOrEmpty(l.Gamme2) && string.IsNullOrEmpty(l.Gamme1)) e.Add($"lignes[{i}].gamme2 : renseigner aussi gamme1.");
+                if (!string.IsNullOrEmpty(l.Conditionnement))
+                {
+                    if (l.Conditionnement!.Length > LongueurEnumere) e.Add($"lignes[{i}].conditionnement : {LongueurEnumere} caractères maximum.");
+                    if (!(l.QuantiteConditionnement > 0)) e.Add($"lignes[{i}].quantiteConditionnement : quantité du conditionnement obligatoire.");
+                    if (!string.IsNullOrEmpty(l.Gamme1)) e.Add($"lignes[{i}].conditionnement : un article à gamme n'a pas de conditionnement dans Sage.");
+                }
             }
             return e;
         }

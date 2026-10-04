@@ -30,6 +30,7 @@ builder.Services.Configure<SageOptions>(builder.Configuration.GetSection("Sage")
 builder.Services.Configure<AuthentificationOptions>(builder.Configuration.GetSection("Authentification"));
 builder.Services.AddSingleton<ILecturesSage, LecturesSql>();
 builder.Services.AddSingleton<ILecturesErp, LecturesErpSql>();
+builder.Services.AddSingleton<ILecturesTarifs, LecturesTarifsSql>();
 builder.Services.AddSingleton<Geolocalisation>();
 builder.Services.AddSingleton<Crm>();
 builder.Services.AddSingleton<Livraison>();
@@ -118,10 +119,37 @@ lectures.MapGet("/commandes-ouvertes/{piece}", async (ILecturesSage l, string pi
     await l.DetailCommande(piece) is { } d ? Results.Ok(d) : Results.NotFound());
 
 // Instantané complet pour le mode hors ligne de la borne (clients, articles avec prix et stock, modes de règlement, valeurs de gamme,
-// commandes à encaisser).
-lectures.MapGet("/catalogue", async (ILecturesSage l, ControleStock stock, ServiceAuthentification auth) =>
+// commandes à encaisser, tarifs par client et catégorie, conditionnements, souches, dépôts et stock par dépôt).
+lectures.MapGet("/catalogue", async (ILecturesSage l, ILecturesTarifs t, ILecturesErp erp, ControleStock stock, ServiceAuthentification auth) =>
     new Catalogue(DateTime.UtcNow, await l.Clients(null, 1, 100_000), await l.Articles(null, null, 1, 100_000), await l.ModesReglement(),
-        await l.Gammes(), await stock.Actif(), auth.Options.Active, auth.Options.Active && auth.Options.ExigerCaissier, await l.CommandesOuvertes(null, 500)));
+        await l.Gammes(), await stock.Actif(), auth.Options.Active, auth.Options.Active && auth.Options.ExigerCaissier, await l.CommandesOuvertes(null, 500),
+        await t.Tarifs(), await t.Souches(), await erp.Depots(), await t.StocksDepots()));
+
+lectures.MapGet("/souches", (ILecturesTarifs t) => t.Souches()).WithSummary("Souches de numérotation des documents de vente (numero = DO_Souche)");
+
+// Prix qu'aura une ligne pour ce client : pour vérifier dans Swagger que la catégorie tarifaire est bien suivie.
+lectures.MapGet("/tarifs", async (ILecturesSage l, ILecturesTarifs t, string client, string article, string? gamme1, string? gamme2,
+    string? conditionnement, decimal? quantiteConditionnement, decimal quantite = 1) =>
+{
+    var c = await l.Client(client.Trim());
+    var a = await l.Article(article.Trim());
+    if (c is null || a is null) return Results.NotFound(new { message = c is null ? $"Client inconnu : {client}" : $"Article inconnu : {article}" });
+    var donnees = await t.Tarifs(c.Numero, c.CategorieTarif, [a.Reference]);
+    Conditionnement? cond = null;
+    if (!string.IsNullOrWhiteSpace(conditionnement))
+    {
+        cond = donnees.Conditionnements.FirstOrDefault(x => string.Equals(x.Enumere.Trim(), conditionnement.Trim(), StringComparison.OrdinalIgnoreCase)
+            && (quantiteConditionnement is null || x.Quantite == quantiteConditionnement));
+        if (cond is null) return Results.NotFound(new { message = $"Conditionnement inconnu pour {a.Reference} : {conditionnement}" });
+    }
+    var prix = Tarification.Calculer(donnees, a.Reference, a.PrixVenteHT, a.PrixTTC, c.Numero, c.CategorieTarif, gamme1, gamme2, cond, quantite);
+    return Results.Ok(new
+    {
+        client = c.Numero, categorieTarif = c.CategorieTarif,
+        intituleCategorie = donnees.Categories.FirstOrDefault(x => x.Numero == c.CategorieTarif)?.Intitule,
+        article = a.Reference, unite = a.Unite, prixFiche = a.PrixVenteHT, conditionnement = cond, prix,
+    });
+}).WithSummary("Prix d'un article pour un client : tarif client, sinon catégorie tarifaire, gamme, conditionnement et remises");
 
 // ---------- Lectures pour les extensions : CRM, livraison, géolocalisation, recouvrement ----------
 static int Taille(int taille) => Math.Clamp(taille, 1, 1000);

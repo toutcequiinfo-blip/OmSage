@@ -255,6 +255,39 @@ label input { font: inherit; color: var(--texte); min-height: 52px; padding: 0 1
   .form, .saisie-paiement, .montants { grid-template-columns: 1fr; }
 }
 
+/* Paramètres de saisie : type de document, souche, dépôt */
+.saisie { max-width: 860px; margin: 0 auto; width: 100%; }
+.saisie h1 { margin-bottom: 4px; }
+.choix { border: 1px solid var(--bord); border-radius: 12px; background: var(--carte); padding: 12px 16px 16px; margin: 0 0 14px; min-width: 0; }
+.choix legend { font-weight: 700; padding: 0 6px; }
+.options { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 8px; }
+.options button { min-height: 64px; display: flex; flex-direction: column; align-items: flex-start; justify-content: center; gap: 2px; text-align: left; padding: 8px 14px; }
+.options button strong { font-size: 1rem; }
+.options button span { font-size: .78rem; color: var(--discret); }
+.options button.actif { background: var(--principal); border-color: var(--principal); color: #fff; box-shadow: inset 0 0 0 2px rgba(255,255,255,.35); }
+.options button.actif span { color: rgba(255,255,255,.85); }
+.choix .info { margin: 10px 0 0; }
+.choix .info:empty { display: none; }
+.ligne-info.document { width: 100%; min-height: 0; border: 0; border-radius: 0; border-bottom: 1px solid var(--bord); background: #fff8e1; font-size: .9rem; text-align: left; color: var(--texte); }
+.ligne-info.document span { font-weight: 700; }
+.ligne-info.document.mouvement { background: #fdecea; }
+
+/* Unités, conditionnements et remises sur le ticket et les tuiles */
+.lignes .detail { flex-wrap: wrap; row-gap: 2px; }
+.lignes .detail .pu { white-space: nowrap; }
+.lignes .detail .montant { margin-left: auto; }
+.lignes .detail .unite { color: var(--texte); white-space: nowrap; }
+.lignes .detail .contenu { font-size: .75rem; }
+.remise { font-size: .72rem; font-weight: 600; color: #fff; background: var(--ok); border-radius: 4px; padding: 1px 5px; white-space: nowrap; }
+.tuile .unite-prix { font-weight: 400; font-size: .72rem; color: var(--discret); }
+.tuile .bas .prix { flex-basis: 100%; text-align: right; white-space: normal; }
+.tuile .prix > span { white-space: nowrap; }
+.tuile .barre { text-decoration: line-through; font-weight: 400; color: var(--discret); font-size: .72rem; margin-right: 4px; }
+.cond { font-size: .72rem; color: #6a3d9a; background: #f1e9f9; border-radius: 4px; padding: 1px 6px; white-space: nowrap; }
+.valeurs.conditionnements { grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); }
+.valeur .prix-valeur { font-size: .8rem; font-weight: 700; color: var(--principal); }
+.valeur .contenu { font-size: .75rem; font-weight: 400; color: var(--discret); }
+
 /* Choix de la valeur de gamme */
 .dialogue { border: none; border-radius: 14px; padding: 20px; width: min(560px, 92vw); background: var(--carte); color: var(--texte); }
 .dialogue::backdrop { background: rgba(0, 0, 0, .45); }

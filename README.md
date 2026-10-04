@@ -39,8 +39,10 @@ Borne / applications ──HTTPS + X-Api-Key──► Sage100Api (.NET 8, 64 bit
 | GET | `/api/v1/articles/{reference}` | Un article (`gamme1` / `gamme2` : intitulés des gammes, ou null) |
 | GET | `/api/v1/articles/{reference}/gammes` | Valeurs de gamme vendables d'un article |
 | GET | `/api/v1/modes-reglement` | Modes de règlement Sage |
-| GET | `/api/v1/catalogue` | Instantané complet pour le mode hors ligne de la borne |
-| POST | `/api/v1/commandes` | Crée un bon de commande. **Idempotent** sur `idExterne` : 201 à la création, 200 si déjà reçu. |
+| GET | `/api/v1/catalogue` | Instantané complet pour le mode hors ligne de la borne (avec tarifs, conditionnements, souches, dépôts et stock par dépôt) |
+| GET | `/api/v1/souches` | Souches de numérotation des documents de vente (`numero` = DO_Souche, 0 pour la première) |
+| GET | `/api/v1/tarifs?client=&article=&gamme1=&conditionnement=&quantite=` | Prix qu'aura une ligne pour ce client : tarif client, sinon catégorie tarifaire, gamme, conditionnement, remises. Pour vérifier les tarifs dans Swagger. |
+| POST | `/api/v1/commandes` | Crée un bon de commande, un bon de livraison ou une facture (`typeDocument`), dans la souche et le dépôt demandés. **Idempotent** sur `idExterne` : 201 à la création, 200 si déjà reçu. |
 | GET | `/api/v1/commandes/{idExterne}` | Pièce Sage d'une commande |
 | POST | `/api/v1/commandes/{idExterne}/encaissements` | Encaissement, enregistré comme acompte. Idempotent sur son propre `idExterne`. |
 | GET | `/api/v1/commandes-ouvertes?recherche=&taille=` | Bons de commande non clôturés avec un reste à payer (total TTC moins acomptes) et leur net à payer Sage, les plus récents d'abord |
@@ -115,7 +117,21 @@ X-Api-Key: changer-cette-cle
               { "article": "BAOR01", "quantite": 1, "gamme1": "52" } ] }
 ```
 
-**Contrôle du stock :** la fenêtre « Indisponibilité en stock » de la saisie Sage n'existe pas dans les Objets Métiers, donc c'est l'API qui contrôle. Une commande qui dépasse le stock disponible (stock réel moins réservé, tous dépôts confondus) est refusée en 422, avec le détail par article. Les articles sans suivi de stock ne sont pas contrôlés. Le réglage `Sage:ControleStock` vaut :
+Champs facultatifs de la pièce :
+- `typeDocument` : `commande` (par défaut), `livraison` ou `facture`. Le bon de livraison et la facture font sortir le stock dès leur création.
+- `souche` : numéro de souche (`GET /souches`). Vide : souche par défaut de Sage.
+- `depot` : numéro de dépôt (`DE_No`, voir `GET /depots`). Vide : dépôt du client ou dépôt principal.
+
+Sur une ligne, `conditionnement` et `quantiteConditionnement` vendent un conditionnement : `{ "article": "ECRIN", "quantite": 2, "conditionnement": "Carton de 12", "quantiteConditionnement": 12 }` fait 24 unités dans Sage.
+
+**Prix et catégories tarifaires :** les Objets Métiers ne prennent que le tarif propre au client, puis le prix de la fiche article ; ils ignorent la catégorie tarifaire du client et ne posent pas les remises (manuel OM, SetDefaultArticle). L'API calcule donc le prix de chaque ligne comme la saisie Sage, et le worker l'impose sur la ligne si Sage en a mis un autre :
+1. tarif propre au client (F_ARTCLIENT avec son numéro), sinon celui de sa catégorie tarifaire (`N_CatTarif` de la fiche client), sinon prix de la fiche article ;
+2. prix propre à une valeur de gamme (F_TARIFGAM) ou à un conditionnement (F_TARIFCOND) ; sans prix propre, un « Carton de 12 » vaut 12 fois l'unité ;
+3. remise générale du tarif (sauf « hors remise »), ou tranches par quantité ou par montant, ou prix net par quantité (F_TARIFQTE).
+
+Les prix envoyés par l'application sont ignorés. Le worker écrit dans sa console chaque prix remplacé.
+
+**Contrôle du stock :** la fenêtre « Indisponibilité en stock » de la saisie Sage n'existe pas dans les Objets Métiers, donc c'est l'API qui contrôle. Une commande qui dépasse le stock disponible (stock réel moins réservé, dans le dépôt demandé, ou tous dépôts confondus sans dépôt) est refusée en 422, avec le détail par article. Un conditionnement compte son contenu (2 cartons de 12 = 24). Les articles sans suivi de stock ne sont pas contrôlés. Le réglage `Sage:ControleStock` vaut :
 - `Auto` (par défaut) : refus si l'option « Autoriser la gestion des stocks négatifs » est décochée dans Sage ;
 - `Bloquer` : refus dans tous les cas ;
 - `Aucun` : aucun contrôle.
@@ -156,7 +172,13 @@ POST /api/v1/commandes/BORNE1-20260929-0001/encaissements
 
 L'API sert l'application sur **http://<serveur>:5080/borne/**. Il n'y a rien à installer à part : c'est une page web installable (PWA).
 
-**Parcours :** connexion avec le login Sage (si `Authentification:Active`), choix du client (ou client par défaut des réglages), puis l'écran caisse, puis encaissement (plusieurs modes possibles pour une même vente, avec la monnaie à rendre en espèces), puis fin.
+**Parcours :** connexion avec le login Sage (si `Authentification:Active`), paramètres de saisie à la première vente, choix du client (ou client par défaut des réglages), puis l'écran caisse, puis encaissement (plusieurs modes possibles pour une même vente, avec la monnaie à rendre en espèces), puis fin.
+
+**Paramètres de saisie** (icône 🧾 en haut, ou la ligne jaune en tête du ticket) : la pièce que la borne crée dans Sage (bon de commande, bon de livraison ou facture), la souche et le dépôt, puis « Enregistrer ». Les choix restent sur la tablette. Avec un bon de livraison ou une facture, le stock bouge dès l'envoi à Sage ; la ligne en tête du ticket passe alors en rose. Le stock affiché et contrôlé est celui du dépôt choisi.
+
+**Prix :** chaque article s'affiche au prix du client du ticket (tarif client, sinon sa catégorie tarifaire, remise comprise ; le prix de la fiche est barré quand une remise s'applique). Changer de client recalcule le ticket. La catégorie du client s'affiche en tête du ticket.
+
+**Unités et conditionnements :** les tuiles et le ticket montrent l'unité de vente (« Pièce », « Unité »…). Un article vendu par conditionnement ouvre le choix du conditionnement (Unité, Carton de 12…), avec son contenu, son prix et le nombre disponible. Sur le ticket : « 2 Carton de 12 (24 Unité) ». Le code-barres d'un conditionnement l'ajoute directement.
 
 **Écran caisse** (présenté comme une caisse : ticket à gauche, articles au centre, pavé numérique à droite) :
 - Un article à gamme ouvre le choix de sa valeur ; le code-barres d'une valeur l'ajoute directement.
@@ -252,7 +274,7 @@ Ce qui est installé dans `C:\Sage100Api` :
 dotnet test tests/Sage100Api.Tests
 ```
 
-24 tests couvrent la balance âgée, les positions GPS, les routes des documents, le détail d'un bon de commande, le stock par valeur de gamme, l'encaissement par numéro de pièce, la clé d'API, la connexion des utilisateurs (jeton, collaborateur, caissier, blocage), l'accès à l'application borne, la validation (dont les gammes), le contrôle du stock, le catalogue, les doublons de commandes et d'encaissements, et la conversion des erreurs Sage et du worker en codes HTTP. Ils tournent sans Sage.
+49 tests couvrent les règles de prix (tarif client, catégorie tarifaire, gammes, conditionnements, remises et tranches), les prix envoyés au worker, le type de pièce, la souche et le dépôt, le stock par dépôt et par conditionnement, la balance âgée, les positions GPS, les routes des documents, le détail d'un bon de commande, le stock par valeur de gamme, l'encaissement par numéro de pièce, la clé d'API, la connexion des utilisateurs (jeton, collaborateur, caissier, blocage), l'accès à l'application borne, la validation (dont les gammes), le contrôle du stock, le catalogue, les doublons de commandes et d'encaissements, et la conversion des erreurs Sage et du worker en codes HTTP. Ils tournent sans Sage.
 
 ## Reste à faire
 

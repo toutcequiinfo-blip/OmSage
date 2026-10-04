@@ -16,7 +16,8 @@
     <button id="btn-commandes" class="utilisateur" type="button" title="Encaisser une commande déjà enregistrée">À encaisser</button>
     <button id="utilisateur" class="utilisateur" type="button" title="Changer d'utilisateur" hidden></button>
     <button id="etat" class="etat" type="button" title="État de la connexion et file d'envoi">…</button>
-    <button id="btn-reglages" class="icone" type="button" aria-label="Réglages">⚙</button>
+    <button id="btn-saisie" class="icone" type="button" aria-label="Paramètres de saisie" title="Paramètres de saisie : type de document, souche, dépôt">🧾</button>
+    <button id="btn-reglages" class="icone" type="button" aria-label="Réglages" title="Réglages de la borne">⚙</button>
   </header>
 
   <div id="bandeau" class="bandeau" hidden></div>
@@ -30,6 +31,31 @@
       <div id="utilisateurs-connus" class="familles"></div>
       <label>Mot de passe <input name="motDePasse" type="password" autocomplete="current-password"></label>
       <button id="btn-connexion" type="submit" class="principal grand">Se connecter</button>
+    </form>
+  </main>
+
+  <!-- 0 bis. Paramètres de saisie : pièce à créer dans Sage, souche, dépôt (gardés sur cette tablette) -->
+  <main id="ecran-saisie" class="ecran saisie" hidden>
+    <h1>Paramètres de saisie</h1>
+    <p class="discret">Choisissez la pièce que la borne crée dans Sage, sa souche et le dépôt. Ces choix restent sur cette tablette.</p>
+    <form id="form-saisie">
+      <fieldset class="choix">
+        <legend>Type de document</legend>
+        <div id="choix-type" class="options"></div>
+        <p id="info-type" class="info"></p>
+      </fieldset>
+      <fieldset class="choix">
+        <legend>Souche</legend>
+        <div id="choix-souche" class="options"></div>
+      </fieldset>
+      <fieldset class="choix">
+        <legend>Dépôt</legend>
+        <div id="choix-depot" class="options"></div>
+      </fieldset>
+      <div class="actions">
+        <button type="submit" class="principal grand">Enregistrer</button>
+        <button id="btn-annuler-saisie" type="button" class="secondaire grand">Annuler</button>
+      </div>
     </form>
   </main>
 
@@ -68,7 +94,11 @@
     <section class="ticket">
       <div class="ticket-entete">
         <div class="ligne-info"><span id="t-date"></span><span>Ticket <strong id="t-numero">nouveau</strong></span></div>
+        <button id="btn-document-ticket" class="ligne-info document" type="button" title="Paramètres de saisie">
+          <span id="t-document"></span><strong id="t-depot"></strong>
+        </button>
         <div class="ligne-info"><span>Commercial / collaborateur</span><strong id="t-vendeur"></strong></div>
+        <div class="ligne-info" id="ligne-tarif" hidden><span>Tarif</span><strong id="t-tarif"></strong></div>
         <button id="btn-client-ticket" class="ticket-client" type="button" title="Changer de client">
           <span>Client :</span> <strong id="t-client"></strong> <span class="crayon" aria-hidden="true">✎</span>
         </button>
@@ -185,7 +215,7 @@
     <ul id="file" class="file"></ul>
   </main>
 
-  <!-- Choix de la valeur pour un article à gamme -->
+  <!-- Choix de la valeur pour un article à gamme, ou du conditionnement (carton, pack...) -->
   <dialog id="choix-gamme" class="dialogue">
     <h2 id="gamme-titre"></h2>
     <div id="gamme-valeurs" class="valeurs"></div>

@@ -1,5 +1,6 @@
 // Borne de prise de commande et d'encaissement (Sage 100).
-// Parcours : connexion (login Sage) -> client -> caisse (ticket, articles, pavé numérique) -> encaissement -> fin.
+// Parcours : connexion (login Sage) -> paramètres de saisie (pièce, souche, dépôt) -> client -> caisse (ticket, articles,
+// pavé numérique) -> encaissement -> fin.
 // Sur téléphone, la caisse passe en deux onglets : Articles et Ticket.
 // Fonctionne hors ligne grâce à la file d'envoi.
 
@@ -11,6 +12,7 @@ import {
 } from "./stockage.js";
 import { etatConnexion, rechargerCatalogue, synchroniser, commandesOuvertes, detailCommande } from "./synchro.js";
 import { seConnecter } from "./connexion.js";
+import { prixLigne, conditionnementsDe, categorieDe, texteRemises, enHT } from "./tarifs.js";
 
 const $ = (s) => document.querySelector(s);
 const euros = new Intl.NumberFormat("fr-FR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -19,7 +21,8 @@ const MODES_ESPECES = /esp[eè]ce/i;
 
 let catalogue = null;
 let connexion = "hors-ligne";
-// { id, numero, client, lignes: Map(cle -> {article, enumere, quantite}), paiements: [], validee }
+// { id, numero, client, lignes: Map(cle -> {article, enumere, cond, quantite}), paiements: [], validee, typeDocument }
+// cond : conditionnement vendu (Carton de 12...), la quantité est alors un nombre de cartons.
 // Commande déjà enregistrée : existante, piece (Sage) ou idCommande (encore dans la file), totalTTC, dejaRegle.
 let vente = null;
 let famille = null;
@@ -41,6 +44,7 @@ function afficher(ecran) {
   if (ecran === "vente") { dessinerFamilles(); dessinerArticles(); dessinerPanier(); majRaccourcis(); }
   if (ecran === "paiement") dessinerPaiement();
   if (ecran === "reglages") dessinerReglages();
+  if (ecran === "saisie") dessinerSaisie();
   if (ecran === "connexion") dessinerConnexion();
   if (ecran === "commandes") { $("#recherche-commande").value = ""; dessinerCommandes(); }
   majBoutonCommandes();
@@ -61,6 +65,110 @@ function element(balise, attributs = {}, ...enfants) {
   }
   el.append(...enfants.filter((e) => e != null));
   return el;
+}
+
+// ---------- Paramètres de saisie : pièce créée dans Sage, souche, dépôt ----------
+// Bon de livraison et facture font sortir le stock dans Sage dès leur enregistrement ; le bon de commande le réserve.
+
+const TYPES = {
+  commande: { libelle: "Bon de commande", valider: "Valider la commande", detail: "Réserve le stock. Livraison et facture se font ensuite dans Sage." },
+  livraison: { libelle: "Bon de livraison", valider: "Valider le bon de livraison", detail: "Le stock sort du dépôt dès l'enregistrement dans Sage." },
+  facture: { libelle: "Facture", valider: "Valider la facture", detail: "Le stock sort du dépôt dès l'enregistrement dans Sage. Facture à valider dans Sage." },
+};
+
+/** { typeDocument, souche, depot } de cette tablette (souche et dépôt null : ceux que Sage choisit). */
+function parametres() {
+  const r = lireReglages();
+  return { typeDocument: TYPES[r.typeDocument] ? r.typeDocument : "commande", souche: r.souche ?? null, depot: r.depot ?? null };
+}
+
+const nomSouche = (n) => (n == null ? "Souche par défaut" : (catalogue?.souches || []).find((x) => x.numero === n)?.intitule || `Souche ${n + 1}`);
+const nomDepot = (n) => (n == null ? "Dépôt du client" : (catalogue?.depots || []).find((x) => x.numero === n)?.intitule || `Dépôt ${n}`);
+
+let choixSaisie = null; // choix en cours sur l'écran, enregistrés par le bouton Enregistrer
+
+function dessinerSaisie() {
+  choixSaisie ??= parametres();
+  const option = (actif, titre, detail, onclick) => element("button", { type: "button", class: actif ? "actif" : "", "aria-pressed": String(actif), onclick },
+    element("strong", {}, titre), detail ? element("span", {}, detail) : null);
+  const redessiner = (champ, valeur) => () => { choixSaisie[champ] = valeur; dessinerSaisie(); };
+  $("#choix-type").replaceChildren(...Object.entries(TYPES).map(([cle, t]) =>
+    option(choixSaisie.typeDocument === cle, t.libelle, cle === "commande" ? "Le stock est réservé" : "Le stock bouge en temps réel", redessiner("typeDocument", cle))));
+  $("#info-type").textContent = TYPES[choixSaisie.typeDocument].detail;
+  const souches = catalogue?.souches || [];
+  $("#choix-souche").replaceChildren(
+    option(choixSaisie.souche == null, "Souche par défaut", "Celle de Sage", redessiner("souche", null)),
+    ...souches.map((x) => option(choixSaisie.souche === x.numero, x.intitule, `N° ${x.numero + 1}`, redessiner("souche", x.numero))));
+  const depots = catalogue?.depots || [];
+  $("#choix-depot").replaceChildren(
+    option(choixSaisie.depot == null, "Dépôt du client", "Celui de la fiche client ou le principal", redessiner("depot", null)),
+    ...depots.map((d) => option(choixSaisie.depot === d.numero, d.intitule || `Dépôt ${d.numero}`, [`N° ${d.numero}`, d.ville].filter(Boolean).join(" · "), redessiner("depot", d.numero))));
+  $("#btn-annuler-saisie").hidden = !lireReglages().saisieReglee;
+}
+
+function enregistrerSaisie(ev) {
+  ev.preventDefault();
+  const c = choixSaisie || parametres();
+  ecrireReglages({ ...lireReglages(), typeDocument: c.typeDocument, souche: c.souche, depot: c.depot, saisieReglee: true });
+  choixSaisie = null;
+  bandeau(`${TYPES[c.typeDocument].libelle} · ${nomSouche(c.souche)} · ${nomDepot(c.depot)}`, "ok");
+  revenirALaVente();
+}
+
+function ouvrirSaisie() {
+  if (vente?.validee) return bandeau("Terminez d'abord l'encaissement en cours.", "info");
+  choixSaisie = null;
+  afficher("saisie");
+}
+
+/** Retour à l'écran de travail : la vente en cours, sinon une nouvelle vente. */
+function revenirALaVente() {
+  if (vente?.validee) afficher("paiement");
+  else if (vente) afficher("vente");
+  else nouvelleVente();
+}
+
+// ---------- Prix, unités et stock ----------
+
+/** Prix de la ligne pour le client du ticket (tarif client, catégorie tarifaire, gamme, conditionnement, remises). */
+const tarif = (l) => prixLigne(catalogue, vente?.client, l.article, { enumere: l.enumere, conditionnement: l.cond, quantite: l.quantite });
+const tauxTva = () => lireReglages().tauxTva;
+/** Prix HT de l'unité vendue après remise (un tarif TTC est ramené en HT avec le taux des réglages). */
+const prixNetHT = (p) => enHT(p.prixNet, p.ttc, tauxTva());
+const montantLigne = (l) => arrondi(prixNetHT(tarif(l)) * l.quantite);
+/** Quantité en unités de vente : 3 cartons de 12 = 36. */
+const contenu = (cond) => (cond?.quantite > 0 ? cond.quantite : 1);
+const uniteDe = (article) => article.unite || "";
+const libelleUnite = (l) => (l.cond ? l.cond.enumere : uniteDe(l.article));
+
+const stocksIndex = new WeakMap();
+/** Lignes de stock du dépôt choisi pour cet article, ou null si aucun dépôt n'est choisi (stock de tous les dépôts). */
+function stocksDuDepot(article) {
+  const depot = parametres().depot;
+  if (depot == null || !catalogue.stocksDepots) return null;
+  let parArticle = stocksIndex.get(catalogue);
+  if (!parArticle) {
+    parArticle = new Map();
+    for (const s of catalogue.stocksDepots) {
+      if (!parArticle.has(s.article)) parArticle.set(s.article, []);
+      parArticle.get(s.article).push(s);
+    }
+    stocksIndex.set(catalogue, parArticle);
+  }
+  return (parArticle.get(article.reference) || []).filter((s) => s.depot === depot);
+}
+const dispo = (s) => s.stock - s.stockReserve;
+/** Stock disponible de l'article dans le dépôt choisi (tous dépôts sinon), en unités de vente. */
+function stockArticle(article) {
+  const lignes = stocksDuDepot(article);
+  return lignes ? lignes.filter((s) => !s.gamme1).reduce((t, s) => t + dispo(s), 0) : article.stockDisponible;
+}
+/** Stock disponible d'une valeur de gamme dans le dépôt choisi, ou null si inconnu (ancien catalogue). */
+function stockValeur(article, e) {
+  const lignes = stocksDuDepot(article);
+  if (!lignes) return e.stockDisponible ?? null;
+  return lignes.filter((s) => s.gamme1 && memeValeur({ article: article.reference, gamme1: s.gamme1, gamme2: s.gamme2 }, { ...e, article: article.reference }))
+    .reduce((t, s) => t + dispo(s), 0);
 }
 
 // ---------- Affichage en liste ou en boutons ----------
@@ -176,27 +284,38 @@ function dessinerArticles() {
   if (articles.length === 0) return zone.replaceChildren(element("p", { class: "vide" }, "Aucun article."));
   const stock = (a) => {
     if (a.suiviStock === false) return null;
-    const dispo = a.stockDisponible;
-    return element("span", { class: dispo > 0 ? "stock" : "stock rupture" }, dispo > 0 ? quantiteTexte(dispo) : "Rupture");
+    const d = stockArticle(a);
+    return element("span", { class: d > 0 ? "stock" : "stock rupture" }, d > 0 ? `${quantiteTexte(d)}${a.unite ? " " + a.unite : ""}` : "Rupture");
   };
   const gamme = (a) => (aGamme(a) ? element("span", { class: "gamme" }, [a.gamme1, a.gamme2].filter(Boolean).join(" / ") || "Gamme") : null);
+  const cond = (a) => (conditionnementsDe(catalogue, a).length ? element("span", { class: "cond", title: "Vendu par conditionnement" }, a.conditionnement || "Cond.") : null);
+  // Prix de l'unité de vente pour le client du ticket : tarif client ou catégorie tarifaire, remise comprise.
+  const prix = (a) => {
+    const p = prixLigne(catalogue, vente?.client, a);
+    const ht = prixNetHT(p);
+    const avant = enHT(p.prix, p.ttc, tauxTva());
+    // Espaces entre les morceaux : la tuile passe à la ligne entre eux, jamais au milieu d'un prix.
+    return element("span", { class: "prix" }, ht < avant - 0.005 ? element("span", { class: "barre" }, euros.format(avant)) : null, " ",
+      element("span", {}, `${euros.format(ht)} HT`), " ", a.unite ? element("span", { class: "unite-prix" }, `/ ${a.unite}`) : null);
+  };
+  const rupture = (a) => a.suiviStock !== false && stockArticle(a) <= 0;
   if (enListe) {
     zone.replaceChildren(tableau(
       [{ titre: "Code", classe: "code" }, { titre: "Désignation" }, { titre: "Famille", classe: "secondaire" },
-        { titre: "PV HT", classe: "nombre" }, { titre: "Stock", classe: "nombre" }],
+        { titre: "Unité", classe: "secondaire" }, { titre: "PU HT", classe: "nombre" }, { titre: "Stock", classe: "nombre" }],
       articles.map((a) => ({
-        classe: a.suiviStock !== false && a.stockDisponible <= 0 ? "article rupture" : "article",
-        cellules: [a.reference, element("span", {}, a.designation || a.reference, gamme(a)), a.famille || "", euros.format(a.prixVenteHT), stock(a)],
+        classe: rupture(a) ? "article rupture" : "article",
+        cellules: [a.reference, element("span", {}, a.designation || a.reference, gamme(a), cond(a)), a.famille || "", a.unite || "", prix(a), stock(a)],
         onclick: () => toucherArticle(a),
       }))));
   } else {
     zone.replaceChildren(...articles.map((a) => element("button", {
-      type: "button", class: a.suiviStock !== false && a.stockDisponible <= 0 ? "tuile rupture" : "tuile",
+      type: "button", class: rupture(a) ? "tuile rupture" : "tuile",
       style: `--teinte: ${teinte(a.famille)}`, title: a.famille || "", onclick: () => toucherArticle(a),
     },
       element("span", { class: "haut" }, element("span", { class: "code" }, a.reference), stock(a)),
       element("span", { class: "designation" }, a.designation || a.reference),
-      element("span", { class: "bas" }, gamme(a), element("span", { class: "prix" }, `${euros.format(a.prixVenteHT)} HT`)))));
+      element("span", { class: "bas" }, gamme(a), cond(a), prix(a)))));
   }
 }
 
@@ -209,8 +328,10 @@ const libelleGamme = (e) => (e ? [e.gamme1, e.gamme2].filter(Boolean).join(" / "
 function toucherArticle(article) {
   // Quantité tapée au pavé avant de toucher l'article (comme sur une caisse : 3 puis l'article).
   const q = prendreSaisie() ?? 1;
+  const conds = conditionnementsDe(catalogue, article);
+  if (conds.length) return choisirConditionnement(article, conds, q);
   if (!aGamme(article)) return ajouterArticle(article, q);
-  if (stockControle(article) && quantiteAuPanier(article) + q > article.stockDisponible) return ajouterArticle(article, q); // affiche le refus
+  if (stockControle(article) && quantiteAuPanier(article) + q > stockArticle(article)) return ajouterArticle(article, q); // affiche le refus
   const valeurs = enumeres(article);
   if (valeurs.length === 0) {
     bandeau(`${article.designation || article.reference} est géré en gamme : rechargez le catalogue (Réglages) pour voir ses valeurs.`, "erreur");
@@ -218,40 +339,72 @@ function toucherArticle(article) {
   }
   const d = $("#choix-gamme");
   $("#gamme-titre").textContent = `${article.designation || article.reference} : ${[article.gamme1, article.gamme2].filter(Boolean).join(" / ") || "choisir"}`;
+  $("#gamme-valeurs").className = "valeurs";
   // Stock de chaque valeur (taille, couleur...) : une valeur épuisée reste visible mais ne s'ajoute pas.
   $("#gamme-valeurs").replaceChildren(...valeurs.map((e) => {
-    const dispo = e.stockDisponible == null ? null : e.stockDisponible - quantiteValeurAuPanier(e);
-    const epuise = stockControle(article) && dispo != null && dispo <= 0;
+    const s = stockValeur(article, e);
+    const reste = s == null ? null : s - quantiteValeurAuPanier(e);
+    const epuise = stockControle(article) && reste != null && reste <= 0;
+    const p = prixLigne(catalogue, vente.client, article, { enumere: e, quantite: q });
     return element("button", { type: "button", class: epuise ? "valeur epuise" : "valeur", onclick: () => { d.close(); ajouterArticle(article, q, e); } },
       element("span", {}, libelleGamme(e)),
-      article.suiviStock === false || dispo == null ? null
-        : element("span", { class: dispo > 0 ? "stock" : "stock rupture" }, dispo > 0 ? `Stock ${dispo}` : "Rupture"));
+      element("span", { class: "prix-valeur" }, `${euros.format(prixNetHT(p))} HT`),
+      article.suiviStock === false || reste == null ? null
+        : element("span", { class: reste > 0 ? "stock" : "stock rupture" }, reste > 0 ? `Stock ${quantiteTexte(reste)}` : "Rupture"));
+  }));
+  d.showModal();
+}
+
+/** Article vendu par conditionnement : choix du carton, du pack... avec son contenu, son prix et le nombre disponible. */
+function choisirConditionnement(article, conds, q) {
+  const d = $("#choix-gamme");
+  $("#gamme-titre").textContent = `${article.designation || article.reference} : conditionnement`;
+  $("#gamme-valeurs").className = "valeurs conditionnements";
+  const libre = stockControle(article) ? stockArticle(article) - quantiteAuPanier(article) : null;
+  $("#gamme-valeurs").replaceChildren(...conds.map((c) => {
+    const nb = libre == null ? null : Math.floor(libre / contenu(c) + 1e-9);
+    const p = prixLigne(catalogue, vente.client, article, { conditionnement: c, quantite: q });
+    return element("button", { type: "button", class: nb != null && nb <= 0 ? "valeur epuise" : "valeur", onclick: () => { d.close(); ajouterArticle(article, q, null, c); } },
+      element("span", {}, c.enumere),
+      element("span", { class: "contenu" }, `${quantiteTexte(c.quantite)} ${uniteDe(article)}`.trim()),
+      element("span", { class: "prix-valeur" }, `${euros.format(prixNetHT(p))} HT`),
+      nb == null ? null : element("span", { class: nb > 0 ? "stock" : "stock rupture" }, nb > 0 ? `${nb} disponible(s)` : "Rupture"));
   }));
   d.showModal();
 }
 
 // Même règle que la fenêtre « Indisponibilité en stock » de Sage : l'API refuse aussi la commande, la borne prévient avant.
 const stockControle = (article) => !!catalogue.controleStock && article.suiviStock !== false;
+/** Quantité de l'article déjà au ticket, en unités de vente (les cartons comptent leur contenu). */
 const quantiteAuPanier = (article) =>
-  [...vente.lignes.values()].filter((l) => l.article.reference === article.reference).reduce((s, l) => s + l.quantite, 0);
+  [...vente.lignes.values()].filter((l) => l.article.reference === article.reference).reduce((s, l) => s + l.quantite * contenu(l.cond), 0);
 const memeValeur = (a, b) => a.article === b.article && a.gamme1 === b.gamme1 && (a.gamme2 || "") === (b.gamme2 || "");
 const quantiteValeurAuPanier = (e) =>
   [...vente.lignes.values()].filter((l) => l.enumere && memeValeur(l.enumere, e)).reduce((s, l) => s + l.quantite, 0);
 /** Vrai si cette valeur de gamme dépasse son propre stock (catalogue récent : stock connu par valeur). */
-const valeurEnManque = (article, e, ajout = 0) =>
-  !!e && e.stockDisponible != null && article.suiviStock !== false && quantiteValeurAuPanier(e) + ajout > e.stockDisponible;
+function valeurEnManque(article, e, ajout = 0) {
+  if (!e || article.suiviStock === false) return false;
+  const s = stockValeur(article, e);
+  return s != null && quantiteValeurAuPanier(e) + ajout > s;
+}
 
-function ajouterArticle(article, delta = 1, enumere = null) {
-  if (delta > 0 && stockControle(article) && quantiteAuPanier(article) + delta > article.stockDisponible) {
-    bandeau(`Stock insuffisant pour ${article.designation || article.reference} : ${Math.max(0, article.stockDisponible)} disponible(s).`, "erreur");
+const cleLigne = (article, enumere, cond) =>
+  enumere ? `${article.reference}|${enumere.gamme1}|${enumere.gamme2 || ""}` : cond ? `${article.reference}#${cond.numero}` : article.reference;
+const ou = () => (parametres().depot == null ? "" : ` dans ${nomDepot(parametres().depot)}`);
+
+function ajouterArticle(article, delta = 1, enumere = null, cond = null) {
+  const unites = delta * contenu(cond);
+  if (delta > 0 && stockControle(article) && quantiteAuPanier(article) + unites > stockArticle(article)) {
+    const d = Math.max(0, stockArticle(article));
+    bandeau(`Stock insuffisant pour ${article.designation || article.reference} : ${quantiteTexte(d)}${uniteDe(article) ? " " + uniteDe(article) : ""} disponible(s)${ou()}.`, "erreur");
     return;
   }
   if (delta > 0 && stockControle(article) && valeurEnManque(article, enumere, delta)) {
-    bandeau(`Stock insuffisant pour ${article.designation || article.reference} ${libelleGamme(enumere)} : ${Math.max(0, enumere.stockDisponible)} disponible(s).`, "erreur");
+    bandeau(`Stock insuffisant pour ${article.designation || article.reference} ${libelleGamme(enumere)} : ${Math.max(0, stockValeur(article, enumere))} disponible(s)${ou()}.`, "erreur");
     return;
   }
-  const cle = enumere ? `${article.reference}|${enumere.gamme1}|${enumere.gamme2 || ""}` : article.reference;
-  const l = vente.lignes.get(cle) || { article, enumere, quantite: 0 };
+  const cle = cleLigne(article, enumere, cond);
+  const l = vente.lignes.get(cle) || { article, enumere, cond, quantite: 0 };
   l.quantite = arrondi(l.quantite + delta);
   if (l.quantite <= 0) vente.lignes.delete(cle);
   else vente.lignes.set(cle, l);
@@ -284,12 +437,12 @@ function toucherPave(touche) {
   else if (touche === "plus" || touche === "moins") {
     if (!l) return bandeau("Choisissez d'abord une ligne du ticket.", "info");
     const n = prendreSaisie() ?? 1;
-    return ajouterArticle(l.article, touche === "plus" ? n : -n, l.enumere);
+    return ajouterArticle(l.article, touche === "plus" ? n : -n, l.enumere, l.cond);
   } else if (touche === "quantite" || touche === "entree") {
     if (!l) return bandeau("Choisissez d'abord une ligne du ticket.", "info");
     const n = prendreSaisie();
     if (n == null) return bandeau("Tapez la quantité puis appuyez sur Quantité.", "info");
-    return ajouterArticle(l.article, arrondi(n - l.quantite), l.enumere);
+    return ajouterArticle(l.article, arrondi(n - l.quantite), l.enumere, l.cond);
   }
   if (saisie.length > 8) saisie = saisie.slice(0, 8);
   majSaisie();
@@ -307,7 +460,7 @@ function totaux() {
     const paye = arrondi(vente.dejaRegle + vente.paiements.reduce((s, p) => s + p.montant, 0));
     return { ht: 0, tva: 0, ttc: vente.totalTTC, paye, reste: Math.max(0, arrondi(vente.totalTTC - paye)) };
   }
-  const ht = arrondi([...vente.lignes.values()].reduce((s, l) => s + l.article.prixVenteHT * l.quantite, 0));
+  const ht = arrondi([...vente.lignes.values()].reduce((s, l) => s + montantLigne(l), 0));
   const tva = arrondi(ht * lireReglages().tauxTva / 100);
   const ttc = arrondi(ht + tva);
   const paye = arrondi(vente.paiements.reduce((s, p) => s + p.montant, 0));
@@ -318,9 +471,11 @@ function dessinerPanier() {
   const ul = $("#lignes");
   ul.replaceChildren();
   for (const [cle, l] of vente.lignes) {
-    const alerte = (l.article.suiviStock !== false && quantiteAuPanier(l.article) > l.article.stockDisponible) || valeurEnManque(l.article, l.enumere);
+    const alerte = stockControle(l.article) && (quantiteAuPanier(l.article) > stockArticle(l.article) || valeurEnManque(l.article, l.enumere));
     const classes = [alerte ? "alerte" : "", cle === ligneChoisie ? "choisie" : ""].filter(Boolean).join(" ");
-    // Comme un ticket de caisse : code et désignation, puis quantité × prix unitaire et montant.
+    const p = tarif(l);
+    const remises = texteRemises(p.remises);
+    // Comme un ticket de caisse : code et désignation, puis quantité, unité (ou conditionnement), prix unitaire et montant.
     ul.append(element("li", { class: classes, onclick: () => { ligneChoisie = cle; dessinerPanier(); } },
       element("div", { class: "libelle" },
         element("span", { class: "code" }, l.article.reference),
@@ -328,11 +483,13 @@ function dessinerPanier() {
         alerte ? element("span", { class: "alerte-stock" }, "Stock insuffisant") : null),
       element("div", { class: "detail" },
         element("div", { class: "quantite" },
-          element("button", { type: "button", "aria-label": "Retirer un", onclick: (e) => { e.stopPropagation(); ajouterArticle(l.article, -1, l.enumere); } }, "−"),
+          element("button", { type: "button", "aria-label": "Retirer un", onclick: (e) => { e.stopPropagation(); ajouterArticle(l.article, -1, l.enumere, l.cond); } }, "−"),
           element("span", {}, quantiteTexte(l.quantite)),
-          element("button", { type: "button", "aria-label": "Ajouter un", onclick: (e) => { e.stopPropagation(); ajouterArticle(l.article, 1, l.enumere); } }, "+")),
-        element("span", { class: "pu" }, `× ${euros.format(l.article.prixVenteHT)} HT`),
-        element("span", { class: "montant" }, euros.format(l.article.prixVenteHT * l.quantite)))));
+          element("button", { type: "button", "aria-label": "Ajouter un", onclick: (e) => { e.stopPropagation(); ajouterArticle(l.article, 1, l.enumere, l.cond); } }, "+")),
+        element("span", { class: "unite" }, libelleUnite(l),
+          l.cond && contenu(l.cond) !== 1 ? element("span", { class: "contenu" }, ` (${quantiteTexte(arrondi(l.quantite * contenu(l.cond)))}${uniteDe(l.article) ? " " + uniteDe(l.article) : ""})`) : null),
+        element("span", { class: "pu" }, `× ${euros.format(enHT(p.prix, p.ttc, tauxTva()))} HT`, remises ? " " : null, remises ? element("span", { class: "remise" }, remises) : null),
+        element("span", { class: "montant" }, euros.format(montantLigne(l))))));
   }
   if (vente.lignes.size === 0) ul.append(element("li", { class: "vide" }, "Touchez un article pour l'ajouter."));
   const t = totaux();
@@ -342,7 +499,7 @@ function dessinerPanier() {
   $("#taux-tva").textContent = lireReglages().tauxTva;
   const vide = vente.lignes.size === 0;
   // Un vendeur sans la case Caissier enregistre la commande ; le caissier choisit directement le mode de règlement.
-  $("#btn-valider").textContent = peutEncaisser() ? "Régler" : "Valider la commande";
+  $("#btn-valider").textContent = peutEncaisser() ? "Régler" : TYPES[parametres().typeDocument].valider;
   $("#btn-valider").disabled = vide;
   $("#modes-rapides").replaceChildren(...(peutEncaisser() ? catalogue.modesReglement : []).map((m) =>
     element("button", { type: "button", class: "mode-rapide", disabled: vide, onclick: () => reglerAvec(m.intitule) }, m.intitule)));
@@ -359,6 +516,14 @@ function majEntete() {
   $("#t-numero").textContent = vente?.numero || "nouveau";
   $("#t-vendeur").textContent = nomUtilisateur(utilisateur) || "—";
   $("#t-client").textContent = vente?.client ? `${vente.client.intitule || vente.client.numero} (${vente.client.numero})` : "";
+  // Pièce créée dans Sage : rouge pâle quand le stock bouge à l'enregistrement (bon de livraison, facture).
+  const pr = parametres();
+  $("#t-document").textContent = `${TYPES[pr.typeDocument].libelle} · ${nomSouche(pr.souche)}`;
+  $("#t-depot").textContent = nomDepot(pr.depot);
+  $("#btn-document-ticket").classList.toggle("mouvement", pr.typeDocument !== "commande");
+  const cat = vente?.client ? categorieDe(catalogue, vente.client) : null;
+  $("#ligne-tarif").hidden = !cat;
+  $("#t-tarif").textContent = cat?.intitule || "";
 }
 
 function majRaccourcis() {
@@ -390,8 +555,10 @@ async function validerCommande() {
   vente.validee = true;
   $("#btn-valider").disabled = true;
   const r = lireReglages();
+  const pr = parametres();
   vente.id = nouvelIdVente(r.borne);
   vente.numero = prochainNumeroVente();
+  vente.typeDocument = pr.typeDocument;
   const t = totaux();
   await ajouterOperation({
     cle: `commande:${vente.id}`,
@@ -401,13 +568,18 @@ async function validerCommande() {
       idExterne: vente.id,
       client: vente.client.numero,
       reference: vente.numero,
+      // Pièce à créer dans Sage, souche et dépôt choisis dans les paramètres de saisie. Les prix sont recalculés par l'API.
+      typeDocument: pr.typeDocument,
+      ...(pr.souche != null ? { souche: pr.souche } : {}),
+      ...(pr.depot != null ? { depot: pr.depot } : {}),
       lignes: [...vente.lignes.values()].map((l) => ({
         article: l.article.reference,
         quantite: l.quantite,
         ...(l.enumere ? { gamme1: l.enumere.gamme1, gamme2: l.enumere.gamme2 || null } : {}),
+        ...(l.cond ? { conditionnement: l.cond.enumere, quantiteConditionnement: l.cond.quantite } : {}),
       })),
     },
-    vente: { numero: vente.numero, client: vente.client.intitule || vente.client.numero, totalTtcEstime: t.ttc },
+    vente: { numero: vente.numero, client: vente.client.intitule || vente.client.numero, totalTtcEstime: t.ttc, typeDocument: pr.typeDocument },
     ...auteur(),
   });
   synchroniserPuisAfficher();
@@ -418,7 +590,7 @@ async function validerCommande() {
 
 function dessinerPaiement() {
   const t = totaux();
-  $("#paiement-numero").textContent = vente.numero;
+  $("#paiement-numero").textContent = [vente.typeDocument && !vente.existante ? TYPES[vente.typeDocument].libelle : null, vente.numero].filter(Boolean).join(" ");
   $("#p-total-libelle").textContent = vente.existante && vente.piece ? "Total TTC" : "Total TTC estimé";
   $("#p-total").textContent = euros.format(t.ttc);
   $("#p-paye").textContent = euros.format(t.paye);
@@ -508,7 +680,8 @@ function terminer() {
   recap.replaceChildren(
     element("p", {}, element("strong", {}, vente.numero), ` · ${vente.client.intitule || vente.client.numero}`),
     vente.existante ? null
-      : element("ul", {}, ...[...vente.lignes.values()].map((l) => element("li", {}, `${l.quantite} × ${l.article.designation || l.article.reference}${l.enumere ? ` (${libelleGamme(l.enumere)})` : ""}`))),
+      : element("ul", {}, ...[...vente.lignes.values()].map((l) => element("li", {},
+        `${[quantiteTexte(l.quantite), libelleUnite(l)].filter(Boolean).join(" ")} × ${l.article.designation || l.article.reference}${l.enumere ? ` (${libelleGamme(l.enumere)})` : ""}`))),
     element("p", {}, `${vente.existante ? "Total TTC" : "Total TTC estimé"} : ${euros.format(t.ttc)} · Encaissé : ${euros.format(t.paye)} · Reste : ${euros.format(t.reste)}`),
     element("p", { class: "discret" }, connexion === "sage"
       ? "La vente est envoyée à Sage."
@@ -519,6 +692,8 @@ function terminer() {
 
 function nouvelleVente() {
   if (connexionExigee() && !utilisateur) return afficher("connexion");
+  // Première vente sur cette tablette : choisir d'abord la pièce, la souche et le dépôt.
+  if (!lireReglages().saisieReglee) return afficher("saisie");
   changementClient = false;
   const client = clientDefaut();
   if (client) demarrerVente(client);
@@ -536,6 +711,7 @@ function mettreEnAttente() {
     lignes: [...vente.lignes.values()].map((l) => ({
       reference: l.article.reference, quantite: l.quantite,
       ...(l.enumere ? { gamme1: l.enumere.gamme1, gamme2: l.enumere.gamme2 || null } : {}),
+      ...(l.cond ? { conditionnement: l.cond.numero } : {}),
     })),
     totalTtcEstime: totaux().ttc,
     utilisateur: utilisateur?.utilisateur || null,
@@ -577,9 +753,10 @@ function rappelerTicket(id) {
   for (const l of t.lignes) {
     const article = catalogue.articles.find((a) => a.reference === l.reference);
     const enumere = l.gamme1 ? enumeres(article || {}).find((e) => memeValeur(e, { article: l.reference, gamme1: l.gamme1, gamme2: l.gamme2 })) : null;
-    if (!article || (l.gamme1 && !enumere)) { manquants.push(l.reference); continue; }
-    const cle = enumere ? `${article.reference}|${enumere.gamme1}|${enumere.gamme2 || ""}` : article.reference;
-    vente.lignes.set(cle, { article, enumere, quantite: l.quantite });
+    const cond = l.conditionnement != null && article ? conditionnementsDe(catalogue, article).find((c) => c.numero === l.conditionnement) : null;
+    if (!article || (l.gamme1 && !enumere) || (l.conditionnement != null && !cond)) { manquants.push(l.reference); continue; }
+    const cle = cleLigne(article, enumere, cond);
+    vente.lignes.set(cle, { article, enumere, cond, quantite: l.quantite });
     ligneChoisie = cle;
   }
   ecrireAttente(lireAttente().filter((x) => x.id !== id));
@@ -612,7 +789,7 @@ async function ouvrirX() {
     element("table", { class: "tableau" },
       element("thead", {}, element("tr", {}, element("th", {}, ""), element("th", {}, "Nombre"), element("th", { class: "montant" }, "Montant"))),
       element("tbody", {},
-        ligne("Commandes (TTC estimé)", String(commandes.length), euros.format(totalCommandes)),
+        ligne("Ventes enregistrées (TTC estimé)", String(commandes.length), euros.format(totalCommandes)),
         ...[...parMode].map(([mode, m]) => ligne(mode, String(m.nombre), euros.format(m.montant))),
         ligne(element("strong", {}, "Total encaissé"), String(encaissements.length), element("strong", {}, euros.format(totalEncaisse))))),
     element("p", { class: "discret" }, enAttente
@@ -638,10 +815,15 @@ function ticketAImprimer() {
   return {
     numero: vente.numero || "Ticket en cours", client: vente.client.intitule || vente.client.numero, vendeur: nomUtilisateur(utilisateur),
     date: new Date(), existante: !!vente.existante, taux: lireReglages().tauxTva,
-    lignes: [...vente.lignes.values()].map((l) => ({
-      libelle: `${l.article.designation || l.article.reference}${l.enumere ? " " + libelleGamme(l.enumere) : ""}`,
-      quantite: l.quantite, prix: l.article.prixVenteHT, montant: arrondi(l.article.prixVenteHT * l.quantite),
-    })),
+    document: vente.existante ? null : TYPES[vente.typeDocument || parametres().typeDocument].libelle,
+    lignes: [...vente.lignes.values()].map((l) => {
+      const p = tarif(l);
+      return {
+        libelle: `${l.article.designation || l.article.reference}${l.enumere ? " " + libelleGamme(l.enumere) : ""}`,
+        quantite: l.quantite, unite: libelleUnite(l), prix: arrondi(enHT(p.prix, p.ttc, tauxTva())), remise: texteRemises(p.remises),
+        montant: montantLigne(l),
+      };
+    }),
     ...t, paiements: vente.paiements.slice(),
   };
 }
@@ -652,13 +834,13 @@ function imprimer(ticket) {
   $("#impression").replaceChildren(
     element("h3", {}, `Borne ${lireReglages().borne}`),
     element("p", {}, ticket.date.toLocaleString("fr-FR")),
-    element("p", {}, ticket.numero),
+    element("p", {}, [ticket.document, ticket.numero].filter(Boolean).join(" ")),
     element("p", {}, `Client : ${ticket.client}`),
     ticket.vendeur ? element("p", {}, `Vendeur : ${ticket.vendeur}`) : null,
     element("hr"),
     ...ticket.lignes.map((l) => element("div", {},
       element("div", {}, l.libelle),
-      ligne(`  ${String(l.quantite).replace(".", ",")} x ${euros.format(l.prix)}`, euros.format(l.montant)))),
+      ligne(`  ${String(l.quantite).replace(".", ",")}${l.unite ? " " + l.unite : ""} x ${euros.format(l.prix)}${l.remise ? " " + l.remise : ""}`, euros.format(l.montant)))),
     element("hr"),
     ticket.existante ? null : ligne("Total HT", euros.format(ticket.ht)),
     ticket.existante ? null : ligne(`TVA estimée ${ticket.taux} %`, euros.format(ticket.tva)),
@@ -790,13 +972,16 @@ async function consulterCommande(c) {
     element("div", { class: fort ? "fort" : "" }, element("span", {}, libelle), element("span", {}, valeur))));
 
   if (c.local) {
+    const client = catalogue.clients.find((x) => x.numero === c.client) || { numero: c.client };
     const lignes = c.operation.corps.lignes.map((l) => {
       const a = catalogue.articles.find((x) => x.reference === l.article);
-      const prix = a?.prixVenteHT || 0;
-      return { article: l.article, designation: a?.designation || l.article, gamme: [l.gamme1, l.gamme2].filter(Boolean).join(" / "),
-        quantite: l.quantite, prix, montant: arrondi(prix * l.quantite) };
+      const cond = l.conditionnement && a ? conditionnementsDe(catalogue, a).find((x) => x.enumere === l.conditionnement && x.quantite === l.quantiteConditionnement) : null;
+      const p = a ? prixLigne(catalogue, client, a, { enumere: l.gamme1 ? { gamme1: l.gamme1, gamme2: l.gamme2 } : null, conditionnement: cond, quantite: l.quantite }) : null;
+      const prix = p ? arrondi(prixNetHT(p)) : 0;
+      return { article: l.article, designation: [a?.designation || l.article, l.conditionnement].filter(Boolean).join(" · "),
+        gamme: [l.gamme1, l.gamme2].filter(Boolean).join(" / "), quantite: l.quantite, prix, montant: arrondi(prix * l.quantite) };
     });
-    return ouvrirListe(titre, [entete(c.date, null), element("p", { class: "info" }, "Commande pas encore envoyée à Sage : prix du catalogue, TTC estimé."),
+    return ouvrirListe(titre, [entete(c.date, null), element("p", { class: "info" }, "Pas encore envoyée à Sage : prix du tarif du client sur la borne, TTC estimé."),
       tableauLignes(lignes),
       totaux([["Total TTC estimé", euros.format(c.totalTTC)], ["Déjà encaissé", euros.format(c.dejaRegle)], ["Reste à payer", euros.format(arrondi(c.totalTTC - c.dejaRegle)), true]]),
       encaisser], false);
@@ -879,9 +1064,7 @@ async function connecter(ev) {
     majUtilisateur();
     bandeau(utilisateur.horsLigne ? "Connecté hors ligne : les ventes partiront vers Sage au retour du serveur." : "", "info");
     // Après un verrouillage, on retrouve le ticket ou l'encaissement en cours.
-    if (vente?.validee) afficher("paiement");
-    else if (vente) afficher("vente");
-    else nouvelleVente();
+    revenirALaVente();
     synchroniserPuisAfficher();
   } catch (e) {
     bandeau(e.message, "erreur");
@@ -921,7 +1104,7 @@ async function dessinerFile() {
   const ops = (await lireFile()).reverse();
   for (const op of ops) {
     const titre = op.type === "commande"
-      ? `Commande ${op.vente?.numero || op.idExterne} · ${op.vente?.client || op.corps.client}`
+      ? `${TYPES[op.corps.typeDocument]?.libelle || "Commande"} ${op.vente?.numero || op.idExterne} · ${op.vente?.client || op.corps.client}`
       : `Encaissement ${op.corps.mode} ${euros.format(op.corps.montant)} · ${op.vente?.numero || op.idCommande}`;
     const etat = op.statut === "ok"
       ? (op.type === "commande" ? `Dans Sage : ${op.resultat?.piece}, net à payer ${euros.format(op.resultat?.netAPayer ?? 0)}` : "Dans Sage")
@@ -1014,9 +1197,12 @@ function brancher() {
     const code = e.target.value.trim();
     // Le code-barres d'une valeur de gamme désigne directement l'article et sa valeur.
     const g = (catalogue.gammes || []).find((x) => x.codeBarre && x.codeBarre === code);
-    const a = catalogue.articles.find((x) => (g ? x.reference === g.article : x.codeBarre === code || x.reference === code.toUpperCase()));
+    // Le code-barres d'un conditionnement (carton...) désigne l'article et ce conditionnement.
+    const c = g ? null : (catalogue.tarifs?.conditionnements || []).find((x) => (x.codeBarre && x.codeBarre === code) || (x.reference && x.reference === code.toUpperCase()));
+    const a = catalogue.articles.find((x) => (g ? x.reference === g.article : c ? x.reference === c.article : x.codeBarre === code || x.reference === code.toUpperCase()));
     if (!a) return;
     if (g) ajouterArticle(a, 1, g);
+    else if (c) ajouterArticle(a, prendreSaisie() ?? 1, null, c);
     else toucherArticle(a);
     e.target.value = "";
     dessinerArticles();
@@ -1048,12 +1234,12 @@ function brancher() {
   $("#btn-terminer").addEventListener("click", terminer);
   $("#btn-nouvelle").addEventListener("click", nouvelleVente);
   $("#btn-reglages").addEventListener("click", () => afficher("reglages"));
+  $("#btn-saisie").addEventListener("click", ouvrirSaisie);
+  $("#btn-document-ticket").addEventListener("click", ouvrirSaisie);
+  $("#form-saisie").addEventListener("submit", enregistrerSaisie);
+  $("#btn-annuler-saisie").addEventListener("click", () => { choixSaisie = null; revenirALaVente(); });
   $("#etat").addEventListener("click", () => afficher("reglages"));
-  $("#btn-fermer-reglages").addEventListener("click", () => {
-    if (vente?.validee) afficher("paiement");
-    else if (vente) afficher("vente");
-    else nouvelleVente();
-  });
+  $("#btn-fermer-reglages").addEventListener("click", revenirALaVente);
   $("#form-connexion").addEventListener("submit", connecter);
   $("#btn-commandes").addEventListener("click", ouvrirCommandes);
   $("#btn-fermer-commandes").addEventListener("click", nouvelleVente);
