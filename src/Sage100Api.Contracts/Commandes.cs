@@ -108,6 +108,10 @@ namespace Sage100Api.Contracts
         public string PieceCommande { get; set; } = "";
         public double Montant { get; set; }
         public bool DejaExistant { get; set; }
+        /// <summary>« acompte » sur un bon de commande ou de livraison, « reglement » (règlement client) sur une facture.</summary>
+        public string Nature { get; set; } = "acompte";
+        /// <summary>Règlement imputé sur l'échéance de la facture ; faux s'il reste à lettrer dans Sage (facture pas encore validée).</summary>
+        public bool Impute { get; set; }
     }
 
     /// <summary>Login de la borne : nom et mot de passe de l'utilisateur Sage (Fichier > Autorisations d'accès).</summary>

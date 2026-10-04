@@ -38,6 +38,9 @@ public sealed class JournalOperations
 
     public static string Cle(string type, string idExterne) => $"{type}:{idExterne}";
 
+    /// <summary>Au-delà, une opération restée « en cours » est considérée comme interrompue.</summary>
+    public static readonly TimeSpan DelaiAbandon = TimeSpan.FromMinutes(5);
+
     /// <summary>
     /// Réserve la clé. Renvoie null si l'opération peut démarrer ; sinon l'opération existante
     /// (déjà réussie, ou en cours dans une autre requête).
@@ -48,7 +51,11 @@ public sealed class JournalOperations
         {
             using var c = Ouvrir();
             var existante = Lire(c, cle);
-            if (existante is { Statut: StatutOperation.Ok or StatutOperation.EnCours }) return existante;
+            // Une opération « en cours » depuis plus de DelaiAbandon a été interrompue (arrêt de l'API, erreur avant le
+            // worker) : elle peut repartir, le worker retrouvant dans Sage une pièce déjà créée (DO_RefExterne, empreinte).
+            if (existante is { Statut: StatutOperation.Ok }
+                || existante is { Statut: StatutOperation.EnCours } && DateTime.UtcNow - existante.MajLe.ToUniversalTime() < DelaiAbandon)
+                return existante;
 
             var maintenant = DateTime.UtcNow.ToString("O");
             using var cmd = c.CreateCommand();

@@ -30,7 +30,12 @@ public sealed class ServiceEcritures(JournalOperations journal, IWorkerClient wo
         var cle = JournalOperations.Cle(TypeCommande, c.IdExterne);
         var existante = journal.Reserver(cle, TypeCommande, Origine(application, utilisateur));
         if (existante != null) return DejaVue<CommandeResult>(existante, r => r.DejaExistante = true);
+        try { return await CreerCommandeReservee(cle, c, utilisateur, ct); }
+        catch (Exception e) { Liberer(cle, e); throw; }
+    }
 
+    async Task<ResultatEcriture<CommandeResult>> CreerCommandeReservee(string cle, CommandeRequest c, Utilisateur? utilisateur, CancellationToken ct)
+    {
         // Une commande déjà dans Sage (renvoi après perte du journal) a déjà réservé son stock : pas de contrôle,
         // le worker la retrouvera par DO_RefExterne.
         if (await lectures.PieceCommande(c.IdExterne) is null && await stock.Verifier(c) is { } manque)
@@ -99,10 +104,20 @@ public sealed class ServiceEcritures(JournalOperations journal, IWorkerClient wo
         var existante = journal.Reserver(cle, TypeEncaissement, Origine(application, utilisateur));
         if (existante != null) return DejaVue<EncaissementResult>(existante, r => r.DejaExistant = true);
 
-        var reponse = await worker.Envoyer(Operations.CreerEncaissement,
-            new EncaissementCommandeRequest { PieceCommande = piece, Encaissement = e, Auteur = utilisateur?.Auteur() }, ct);
-        return Conclure<EncaissementResult>(cle, reponse, r => r.PieceCommande);
+        try
+        {
+            var reponse = await worker.Envoyer(Operations.CreerEncaissement,
+                new EncaissementCommandeRequest { PieceCommande = piece, Encaissement = e, Auteur = utilisateur?.Auteur() }, ct);
+            return Conclure<EncaissementResult>(cle, reponse, r => r.PieceCommande);
+        }
+        catch (Exception ex) { Liberer(cle, ex); throw; }
     }
+
+    /// <summary>
+    /// Erreur imprévue après la réservation (lecture SQL, tarifs...) : l'opération passe en erreur pour pouvoir être renvoyée,
+    /// au lieu de rester « en cours » et de refuser tous les renvois.
+    /// </summary>
+    void Liberer(string cle, Exception e) => journal.Terminer(cle, StatutOperation.Erreur, null, e.Message);
 
     /// <summary>Pièce Sage d'une commande : d'abord le journal, sinon la base Sage (DO_RefExterne).</summary>
     public async Task<string?> PieceCommande(string idExterne) =>
