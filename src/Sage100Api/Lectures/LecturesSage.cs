@@ -224,6 +224,7 @@ public sealed class LecturesSql(IOptions<SageOptions> options) : ILecturesSage
     {
         // Bons de commande et de livraison non clôturés, factures et factures comptabilisées, avec un reste à payer.
         // Une pièce transformée change de DO_Type : elle apparaît sous son nouveau type.
+        // Les factures d'acompte (DO_PieceAcompte d'un acompte) sont exclues : elles sont elles-mêmes le règlement.
         using var c = Cnx();
         var r = await c.QueryAsync<CommandeOuverte>(
             "SELECT TOP (@taille) x.Piece, x.Date, x.Client, x.Intitule, x.Reference, x.IdExterne, x.TotalTTC, x.DejaRegle, x.NetAPayer, x.TypePiece FROM (" +
@@ -232,7 +233,8 @@ public sealed class LecturesSql(IOptions<SageOptions> options) : ILecturesSage
             "CAST(e.DO_TotalTTC AS decimal(18,2)) AS TotalTTC, CAST(" + Regle + " AS decimal(18,2)) AS DejaRegle, " +
             "CAST(e.DO_NetAPayer AS decimal(18,2)) AS NetAPayer, CAST(e.DO_Type AS int) AS TypePiece " +
             "FROM F_DOCENTETE e LEFT JOIN F_COMPTET t ON t.CT_Num = e.DO_Tiers " +
-            "WHERE e.DO_Domaine = 0 AND (e.DO_Type IN (1, 3) AND e.DO_Cloture = 0 OR e.DO_Type IN (6, 7)) " +
+            "WHERE e.DO_Domaine = 0 AND (e.DO_Type IN (1, 3) AND e.DO_Cloture = 0 OR e.DO_Type IN (6, 7) " +
+            "AND NOT EXISTS (SELECT 1 FROM F_DOCREGL fa WHERE fa.DO_PieceAcompte = e.DO_Piece)) " +
             "AND (@q IS NULL OR e.DO_Piece LIKE @q OR e.DO_Tiers LIKE @q OR t.CT_Intitule LIKE @q OR e.DO_Ref LIKE @q)" +
             ") x WHERE x.TotalTTC - x.DejaRegle > 0.005 ORDER BY x.Date DESC, x.Piece DESC",
             new { q = Motif(recherche), taille });
