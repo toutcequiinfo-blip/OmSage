@@ -120,10 +120,31 @@ lectures.MapGet("/commandes-ouvertes/{piece}", async (ILecturesSage l, string pi
 
 // Instantané complet pour le mode hors ligne de la borne (clients, articles avec prix et stock, modes de règlement, valeurs de gamme,
 // commandes à encaisser, tarifs par client et catégorie, conditionnements, souches, dépôts et stock par dépôt).
-lectures.MapGet("/catalogue", async (ILecturesSage l, ILecturesTarifs t, ILecturesErp erp, ControleStock stock, ServiceAuthentification auth) =>
-    new Catalogue(DateTime.UtcNow, await l.Clients(null, 1, 100_000), await l.Articles(null, null, 1, 100_000), await l.ModesReglement(),
-        await l.Gammes(), await stock.Actif(), auth.Options.Active, auth.Options.Active && auth.Options.ExigerCaissier, await l.CommandesOuvertes(null, 500),
-        await t.Tarifs(), await t.Souches(), await erp.Depots(), await t.StocksDepots()));
+// Une partie annexe illisible (tarifs, souches, dépôts...) ne bloque pas le catalogue : elle est vide et signalée dans Avertissements.
+lectures.MapGet("/catalogue", async (ILecturesSage l, ILecturesTarifs t, ILecturesErp erp, ControleStock stock, ServiceAuthentification auth,
+    ILoggerFactory journaux) =>
+{
+    var log = journaux.CreateLogger("Catalogue");
+    var avertissements = new List<string>();
+    async Task<T?> Annexe<T>(string nom, Func<Task<T>> lire) where T : class
+    {
+        try { return await lire(); }
+        catch (Exception e)
+        {
+            log.LogError(e, "Catalogue : lecture des {Partie} impossible", nom);
+            avertissements.Add($"{nom} : {e.Message}");
+            return null;
+        }
+    }
+    var commandes = await Annexe("commandes à encaisser", () => l.CommandesOuvertes(null, 500));
+    var tarifs = await Annexe("tarifs", () => t.Tarifs());
+    var souches = await Annexe("souches", () => t.Souches());
+    var depots = await Annexe("dépôts", () => erp.Depots());
+    var stocksDepots = await Annexe("stocks par dépôt", () => t.StocksDepots());
+    return new Catalogue(DateTime.UtcNow, await l.Clients(null, 1, 100_000), await l.Articles(null, null, 1, 100_000), await l.ModesReglement(),
+        await l.Gammes(), await stock.Actif(), auth.Options.Active, auth.Options.Active && auth.Options.ExigerCaissier, commandes,
+        tarifs, souches, depots, stocksDepots, avertissements.Count > 0 ? avertissements : null);
+});
 
 lectures.MapGet("/souches", (ILecturesTarifs t) => t.Souches()).WithSummary("Souches de numérotation des documents de vente (numero = DO_Souche)");
 

@@ -137,6 +137,17 @@ public sealed class ApiTests : IDisposable
     }
 
     [Fact]
+    public async Task Des_tarifs_illisibles_ne_bloquent_pas_le_catalogue_et_sont_signales()
+    {
+        _tarifs.Panne = true;
+        var json = await _http.GetFromJsonAsync<JsonElement>("/api/v1/catalogue");
+        Assert.Equal(2, json.GetProperty("clients")[0].GetProperty("categorieTarif").GetInt32());
+        Assert.Equal(JsonValueKind.Null, json.GetProperty("tarifs").ValueKind);
+        Assert.Contains("tarifs : colonne inconnue", json.GetProperty("avertissements")[0].GetString());
+        Assert.Equal("Borne", json.GetProperty("souches")[1].GetProperty("intitule").GetString());
+    }
+
+    [Fact]
     public async Task Le_catalogue_contient_tarifs_souches_et_depots()
     {
         var json = await _http.GetFromJsonAsync<JsonElement>("/api/v1/catalogue");
@@ -769,8 +780,9 @@ public sealed class ApiTests : IDisposable
     sealed class FaussesLecturesTarifs : ILecturesTarifs
     {
         public readonly List<StockDepot> Stocks = new();
+        public bool Panne;
         public Task<DonneesTarifs> Tarifs(string? client = null, int? categorie = null, IReadOnlyCollection<string>? articles = null) =>
-            Task.FromResult(new DonneesTarifs(
+            Panne ? throw new InvalidOperationException("colonne inconnue") : Task.FromResult(new DonneesTarifs(
                 [new CategorieTarif(1, "Détaillants", false), new CategorieTarif(2, "Grossistes", false)],
                 [new TarifArticle("CHORFA", 2, null, 900, false, 0, 0), new TarifArticle("BAAR01", 2, null, 0, false, 10, 0)],
                 [new TarifGamme("BAOR01", 2, null, "54", null, 2000)],

@@ -80,8 +80,10 @@ public sealed class LecturesTarifsSql(IOptions<SageOptions> options) : ILectures
             return $" AND {col} IN @refs";
         }
 
+        // Types exacts (CAST) : Dapper ne remplit un record positionnel que si chaque colonne a le type du paramètre ;
+        // cbIndice est un smallint dans Sage, un int dans le record.
         var categories = (await c.QueryAsync<CategorieTarif>(
-            "SELECT cbIndice AS Numero, CT_Intitule AS Intitule, CAST(CASE WHEN CT_PrixTTC = 1 THEN 1 ELSE 0 END AS bit) AS PrixTTC " +
+            "SELECT CAST(cbIndice AS int) AS Numero, CT_Intitule AS Intitule, CAST(CASE WHEN CT_PrixTTC = 1 THEN 1 ELSE 0 END AS bit) AS PrixTTC " +
             "FROM P_CATTARIF WHERE CT_Intitule <> '' ORDER BY cbIndice")).AsList();
 
         // AC_Categorie : numéro de catégorie (= N_CatTarif) pour une ligne de catégorie ; une ligne de client porte CT_Num.
@@ -101,7 +103,7 @@ public sealed class LecturesTarifsSql(IOptions<SageOptions> options) : ILectures
             "WHERE t.TG_Prix <> 0 AND " + FiltreRefCF("t.TG_RefCF", client, categorie) + FiltreArticle("t.AR_Ref"), p);
 
         var conditionnements = (await c.QueryAsync<Conditionnement>(
-            "SELECT co.AR_Ref AS Article, co.CO_No AS Numero, co.EC_Enumere AS Enumere, CAST(co.EC_Quantite AS decimal(18,6)) AS Quantite, " +
+            "SELECT co.AR_Ref AS Article, CAST(co.CO_No AS int) AS Numero, co.EC_Enumere AS Enumere, CAST(co.EC_Quantite AS decimal(18,6)) AS Quantite, " +
             "NULLIF(co.CO_Ref, '') AS Reference, NULLIF(co.CO_CodeBarre, '') AS CodeBarre, CAST(CASE WHEN co.CO_Principal = 1 THEN 1 ELSE 0 END AS bit) AS Principal " +
             "FROM F_CONDITION co JOIN F_ARTICLE a ON a.AR_Ref = co.AR_Ref " +
             "WHERE a.AR_Sommeil = 0 AND co.EC_Quantite > 0" + FiltreArticle("co.AR_Ref") + " ORDER BY co.AR_Ref, co.EC_Quantite", p)).AsList();
@@ -153,20 +155,20 @@ public sealed class LecturesTarifsSql(IOptions<SageOptions> options) : ILectures
         using var c = Cnx();
         // DO_Souche commence à 0 ; cbIndice de P_SOUCHEVENTE commence à 1.
         return (await c.QueryAsync<Souche>(
-            "SELECT cbIndice - 1 AS Numero, S_Intitule AS Intitule FROM P_SOUCHEVENTE WHERE S_Intitule <> '' AND S_Valide = 1 ORDER BY cbIndice")).AsList();
+            "SELECT CAST(cbIndice - 1 AS int) AS Numero, S_Intitule AS Intitule FROM P_SOUCHEVENTE WHERE S_Intitule <> '' AND S_Valide = 1 ORDER BY cbIndice")).AsList();
     }
 
     public async Task<IReadOnlyList<StockDepot>> StocksDepots(string? article = null)
     {
         using var c = Cnx();
         var simples = await c.QueryAsync<StockDepot>(
-            "SELECT s.AR_Ref AS Article, s.DE_No AS Depot, CAST(NULL AS varchar(35)) AS Gamme1, CAST(NULL AS varchar(35)) AS Gamme2, " +
+            "SELECT s.AR_Ref AS Article, CAST(s.DE_No AS int) AS Depot, CAST(NULL AS varchar(35)) AS Gamme1, CAST(NULL AS varchar(35)) AS Gamme2, " +
             "CAST(s.AS_QteSto AS decimal(18,6)) AS Stock, CAST(s.AS_QteRes AS decimal(18,6)) AS StockReserve " +
             "FROM F_ARTSTOCK s JOIN F_ARTICLE a ON a.AR_Ref = s.AR_Ref " +
             "WHERE a.AR_Sommeil = 0 AND (s.AS_QteSto <> 0 OR s.AS_QteRes <> 0) AND (@article IS NULL OR s.AR_Ref = @article)",
             new { article });
         var gammes = await c.QueryAsync<StockDepot>(
-            "SELECT gs.AR_Ref AS Article, gs.DE_No AS Depot, g1.EG_Enumere AS Gamme1, g2.EG_Enumere AS Gamme2, " +
+            "SELECT gs.AR_Ref AS Article, CAST(gs.DE_No AS int) AS Depot, g1.EG_Enumere AS Gamme1, g2.EG_Enumere AS Gamme2, " +
             "CAST(gs.GS_QteSto AS decimal(18,6)) AS Stock, CAST(gs.GS_QteRes AS decimal(18,6)) AS StockReserve " +
             "FROM F_GAMSTOCK gs JOIN F_ARTICLE a ON a.AR_Ref = gs.AR_Ref " +
             "JOIN F_ARTGAMME g1 ON g1.AG_No = gs.AG_No1 LEFT JOIN F_ARTGAMME g2 ON g2.AG_No = gs.AG_No2 AND gs.AG_No2 <> 0 " +

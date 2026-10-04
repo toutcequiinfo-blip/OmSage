@@ -37,11 +37,12 @@ public sealed record EnumereGamme(string Article, string Gamme1, string? Gamme2,
 /// Authentification : la borne doit connecter un utilisateur Sage ; ExigerCaissier : seuls les caissiers encaissent.
 /// Tarifs : de quoi calculer hors ligne le prix de chaque client (voir <see cref="Tarification"/>).
 /// Souches, Depots, StocksDepots : choix de la souche et du dépôt dans les paramètres de saisie de la borne.
+/// Avertissements : parties annexes qui n'ont pas pu être lues (null si tout est lu), affichées par la borne.
 /// </summary>
 public sealed record Catalogue(DateTime GenereLe, IReadOnlyList<Client> Clients, IReadOnlyList<Article> Articles, IReadOnlyList<ModeReglement> ModesReglement,
     IReadOnlyList<EnumereGamme> Gammes, bool ControleStock, bool Authentification = false, bool ExigerCaissier = false,
     IReadOnlyList<CommandeOuverte>? CommandesOuvertes = null, DonneesTarifs? Tarifs = null, IReadOnlyList<Souche>? Souches = null,
-    IReadOnlyList<Depot>? Depots = null, IReadOnlyList<StockDepot>? StocksDepots = null);
+    IReadOnlyList<Depot>? Depots = null, IReadOnlyList<StockDepot>? StocksDepots = null, IReadOnlyList<string>? Avertissements = null);
 
 /// <summary>
 /// Bon de commande client pas encore livré ni clôturé, avec ce qui reste à encaisser.
