@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#1d5c46">
+  <title>Livraisons Sage 100</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="../borne/icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body class="sans-nav">
+  <header>
+    <button id="btn-retour" class="icone" type="button" aria-label="Retour" hidden>‹</button>
+    <h1 id="titre">Livraisons</h1>
+    <button id="btn-utilisateur" class="utilisateur" type="button" hidden></button>
+  </header>
+  <div id="bandeau" class="bandeau" hidden></div>
+
+  <!-- Réglages : clé d'API (reprise de la borne ou du CRM si l'un d'eux est réglé sur cet appareil) -->
+  <main id="ecran-reglages" class="ecran" hidden>
+    <form id="form-reglages" class="carte formulaire">
+      <h2>Réglages</h2>
+      <label>Clé d'API <input name="cle" type="password" required autocomplete="off"></label>
+      <button type="submit" class="principal">Enregistrer</button>
+    </form>
+  </main>
+
+  <!-- Connexion avec le login Sage -->
+  <main id="ecran-connexion" class="ecran" hidden>
+    <form id="form-connexion" class="carte formulaire">
+      <h2>Connexion</h2>
+      <p class="discret">Votre nom d'utilisateur et votre mot de passe Sage.</p>
+      <label>Utilisateur <input name="utilisateur" required autocomplete="username" autocapitalize="none" spellcheck="false"></label>
+      <label>Mot de passe <input name="motDePasse" type="password" autocomplete="current-password"></label>
+      <button id="btn-connexion" type="submit" class="principal">Se connecter</button>
+      <button id="btn-ouvrir-reglages" type="button" class="lien">Réglages</button>
+    </form>
+  </main>
+
+  <!-- Liste des tournées -->
+  <main id="ecran-tournees" class="ecran" hidden>
+    <div class="segments" role="tablist">
+      <button id="seg-miennes" type="button" class="actif" role="tab">Mes tournées</button>
+      <button id="seg-toutes" type="button" role="tab">Toutes</button>
+    </div>
+    <div class="barre">
+      <input id="date-tournees" type="date" aria-label="Date">
+      <button id="btn-nouvelle-tournee" type="button" class="principal">＋ Tournée</button>
+    </div>
+    <ul id="liste-tournees" class="liste"></ul>
+  </main>
+
+  <!-- Préparation d'une tournée -->
+  <main id="ecran-preparation" class="ecran" hidden>
+    <form id="form-tournee" class="carte formulaire">
+      <div class="deux">
+        <label>Date <input name="date" type="date" required></label>
+        <label>Nom <input name="nom" maxlength="100" placeholder="Ex. Matin nord"></label>
+      </div>
+      <div class="deux">
+        <label>Livreur <select name="livreur"><option value="">—</option></select></label>
+        <label>Départ <select name="depot"><option value="">Ma position</option></select></label>
+      </div>
+    </form>
+    <section class="carte">
+      <h3>Ordre de passage <span id="nb-choisies" class="discret"></span></h3>
+      <div id="ordre"></div>
+      <p id="distance" class="discret" hidden></p>
+    </section>
+    <section class="carte">
+      <h3>Pièces à livrer</h3>
+      <input id="filtre-pieces" class="recherche" type="search" placeholder="Filtrer (pièce, client, ville)" autocomplete="off">
+      <div id="pieces"></div>
+    </section>
+    <div class="barre-bas">
+      <button id="btn-optimiser" type="button" class="secondaire">↯ Optimiser l'ordre</button>
+      <button id="btn-enregistrer-tournee" type="button" class="principal">Enregistrer</button>
+    </div>
+    <button id="btn-supprimer-tournee" type="button" class="danger" hidden>Supprimer la tournée</button>
+  </main>
+
+  <!-- Tournée du livreur -->
+  <main id="ecran-tournee" class="ecran" hidden>
+    <section id="tournee-entete" class="carte"></section>
+    <div class="actions-client">
+      <a id="lien-itineraire" class="bouton principal" target="_blank" rel="noopener">🗺️ Itinéraire</a>
+      <button id="btn-modifier-tournee" type="button" class="secondaire">✎ Modifier</button>
+    </div>
+    <ul id="arrets" class="liste"></ul>
+  </main>
+
+  <!-- Compte rendu d'un arrêt -->
+  <dialog id="dialogue-arret" class="dialogue">
+    <form id="form-arret" method="dialog" class="formulaire">
+      <h2 id="arret-titre">Livraison</h2>
+      <p id="arret-detail" class="discret"></p>
+      <div class="segments trois" id="arret-statuts">
+        <button type="button" data-statut="livre">Livré</button>
+        <button type="button" data-statut="partiel">Partiel</button>
+        <button type="button" data-statut="echec">Échec</button>
+      </div>
+      <label id="champ-motif">Motif
+        <select name="motif">
+          <option value="">—</option>
+          <option value="absent">Client absent</option>
+          <option value="refus">Refus du client</option>
+          <option value="adresse-introuvable">Adresse introuvable</option>
+          <option value="ferme">Établissement fermé</option>
+          <option value="manque-marchandise">Marchandise manquante</option>
+          <option value="autre">Autre</option>
+        </select>
+      </label>
+      <label id="champ-receptionnaire">Reçu par <input name="receptionnaire" maxlength="100" placeholder="Nom de la personne"></label>
+      <div class="signature-zone" id="zone-signature">
+        <div class="ligne-titre"><span>Signature</span><button type="button" id="btn-effacer-signature" class="lien">Effacer</button></div>
+        <canvas id="signature" class="signature"></canvas>
+      </div>
+      <label>Commentaire <textarea name="commentaire" rows="2" maxlength="2000"></textarea></label>
+      <div class="boutons">
+        <button type="button" id="btn-remettre" class="danger" hidden>Remettre à livrer</button>
+        <button type="button" id="btn-annuler-arret" class="secondaire">Annuler</button>
+        <button type="submit" id="btn-valider-arret" class="principal">Valider</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>

@@ -32,6 +32,7 @@ builder.Services.AddSingleton<ILecturesSage, LecturesSql>();
 builder.Services.AddSingleton<ILecturesErp, LecturesErpSql>();
 builder.Services.AddSingleton<Geolocalisation>();
 builder.Services.AddSingleton<Crm>();
+builder.Services.AddSingleton<Livraison>();
 builder.Services.AddSingleton<IWorkerClient, WorkerClient>();
 builder.Services.AddSingleton<JournalOperations>();
 builder.Services.AddSingleton<ControleStock>();
@@ -166,16 +167,81 @@ documents.MapGet("/{type}/{piece}", async (ILecturesErp l, string type, string p
     : await l.Document(code, piece) is { } d ? Results.Ok(d) : Results.NotFound())
     .WithSummary("Un document de vente et ses lignes");
 
-v1.MapGet("/livraisons/a-livrer", async (ILecturesErp l, Geolocalisation geo, DateTime? jusquau, int? depot) =>
+var livraisons = v1.MapGroup("/livraisons").WithTags("Livraison");
+
+livraisons.MapGet("/a-livrer", async (ILecturesErp l, Geolocalisation geo, DateTime? jusquau, int? depot) =>
+    AvecPositions(await l.ALivrer(jusquau, depot), geo))
+  .WithSummary("Bons de commande et préparations non clôturés à livrer (jusqu'à une date), avec adresse, contact, téléphone et position GPS");
+
+livraisons.MapPost("/optimiser", async (ILecturesErp l, Geolocalisation geo, OptimisationRequest o) =>
+{
+    var aLivrer = AvecPositions(await l.ALivrer(null, null), geo).ToDictionary(a => a.Piece, StringComparer.OrdinalIgnoreCase);
+    var avec = new List<Itineraire.Point>();
+    var sans = new List<string>();
+    foreach (var piece in o.Pieces.Select(p => p.Trim().ToUpperInvariant()))
+        if (aLivrer.GetValueOrDefault(piece)?.Position is { } pos) avec.Add(new(piece, pos.Latitude, pos.Longitude));
+        else sans.Add(piece);
+    var depart = o.Latitude is { } lat && o.Longitude is { } lon ? (lat, lon)
+        : o.Depot is { } d && geo.Lire("depot", d.ToString()) is { } pd ? (pd.Latitude, pd.Longitude) : ((double, double)?)null;
+    return Results.Ok(Itineraire.Ordonner(avec, depart, o.Retour ?? depart != null, sans));
+}).WithSummary("Ordre de passage conseillé (plus proche voisin puis 2-opt, à vol d'oiseau) depuis un dépôt ou la position du livreur. Les pièces sans position GPS vont à la fin");
+
+livraisons.MapGet("/tournees", (Livraison liv, ServiceAuthentification auth, HttpContext http, DateTime? du, DateTime? au, int? livreur, bool? miennes, int taille = 100) =>
+    liv.Lister(du, au, miennes == true ? auth.Lire(http)?.Collaborateur ?? -1 : livreur, Math.Clamp(taille, 1, 1000)))
+  .WithSummary("Tournées (sans le détail), les plus récentes d'abord. miennes=true : celles du livreur connecté");
+livraisons.MapGet("/tournees/{id}", (Livraison liv, string id) => liv.Lire(id) is { } t ? Results.Ok(t) : Results.NotFound())
+  .WithSummary("Une tournée et ses arrêts dans l'ordre de passage");
+livraisons.MapPut("/tournees/{id}", async (ILecturesErp l, Geolocalisation geo, Livraison liv, ServiceAuthentification auth, HttpContext http, string id, TourneeRequest t) =>
+{
+    var u = auth.Lire(http);
+    if (u == null && auth.Options.Active) return Reponses.ConnexionRequise();
+    var erreurs = Livraison.Verifier(id, t).ToList();
+    if (erreurs.Count > 0) return Reponses.Invalide(erreurs);
+    var aLivrer = AvecPositions(await l.ALivrer(null, null), geo).ToDictionary(a => a.Piece, StringComparer.OrdinalIgnoreCase);
+    var (tournee, refus) = liv.Enregistrer(id, t, aLivrer, a => a.Position, u?.Login);
+    return tournee is null ? Reponses.Invalide(refus) : Results.Ok(tournee);
+}).WithSummary("Crée ou met à jour une tournée : date, livreur (collaborateur), dépôt, pièces dans l'ordre de passage. L'adresse et le contact sont recopiés pour le livreur");
+livraisons.MapDelete("/tournees/{id}", (Livraison liv, ServiceAuthentification auth, HttpContext http, string id) =>
+{
+    if (auth.Lire(http) == null && auth.Options.Active) return Reponses.ConnexionRequise();
+    return liv.Supprimer(id) switch
+    {
+        null => Results.NotFound(),
+        false => Results.Conflict(new { code = "TOURNEE_COMMENCEE", message = "Des arrêts sont déjà traités : la tournée ne peut plus être supprimée." }),
+        true => Results.NoContent(),
+    };
+});
+livraisons.MapPut("/tournees/{id}/arrets/{piece}", (Livraison liv, Geolocalisation geo, ServiceAuthentification auth, HttpContext http, string id, string piece,
+    CompteRenduArret r) =>
+{
+    var u = auth.Lire(http);
+    if (u == null && auth.Options.Active) return Reponses.ConnexionRequise();
+    var erreurs = Livraison.Verifier(r).ToList();
+    if (erreurs.Count > 0) return Reponses.Invalide(erreurs);
+    if (liv.CompteRendu(id, piece, r, u?.Login) is not { } a) return Results.NotFound();
+    // Livré sur place et destination sans position : la position du livreur devient celle de l'adresse (ou du client).
+    if (a.Statut is "livre" or "partiel" && a.Latitude is null && r.Latitude is { } lat && r.Longitude is { } lon)
+    {
+        var (cible, cle) = a.AdresseLivraison is { } li ? ("adresse-livraison", li.ToString()) : ("client", a.Client);
+        if (geo.Lire(cible, cle) is null) geo.Enregistrer(cible, cle, new PositionRequest(lat, lon, null, "livraison"), u?.Login);
+    }
+    return Results.Ok(a);
+}).WithSummary("Compte rendu du livreur sur un arrêt : livre, partiel, echec (motif), réceptionnaire, signature PNG, position");
+livraisons.MapGet("/tournees/{id}/arrets/{piece}/signature", (Livraison liv, string id, string piece) =>
+    liv.Signature(id, piece) is { } s ? Results.Bytes(Convert.FromBase64String(s[(s.IndexOf(',') + 1)..]), "image/png") : Results.NotFound())
+  .WithSummary("Signature du réceptionnaire (image PNG)");
+livraisons.MapGet("/suivi/{piece}", (Livraison liv, string piece) => liv.Suivi(piece))
+  .WithSummary("Passages d'une pièce en tournée (livrée, échec, motif, heure, réceptionnaire), le plus récent d'abord");
+
+static IEnumerable<ALivrer> AvecPositions(IEnumerable<ALivrer> liste, Geolocalisation geo)
 {
     var clients = geo.Toutes("client");
     var adresses = geo.Toutes("adresse-livraison");
-    return (await l.ALivrer(jusquau, depot)).Select(x => x with
+    return liste.Select(x => x with
     {
         Position = (x.AdresseLivraison is { } li ? adresses.GetValueOrDefault(li.ToString()) : null) ?? clients.GetValueOrDefault(x.Client),
-    });
-}).WithTags("Livraison")
-  .WithSummary("Bons de commande et préparations non clôturés à livrer (jusqu'à une date), avec adresse, contact, téléphone et position GPS");
+    }).ToList();
+}
 
 var recouvrement = v1.MapGroup("/recouvrement").WithTags("Recouvrement");
 recouvrement.MapGet("/echeances", async (ILecturesErp l, string? client, bool echuesSeulement = false) =>
