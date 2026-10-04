@@ -19,6 +19,7 @@ Borne / applications ──HTTPS + X-Api-Key──► Sage100Api (.NET 8, 64 bit
 | `src/Sage100Api.Contracts` | Objets échangés (commande, encaissement), validation, protocole API ↔ worker |
 | `src/Sage100Api/wwwroot/borne` | Application tablette de la borne (PWA), servie par l'API sur `/borne/` |
 | `src/Sage100Api/wwwroot/crm` | Application téléphone des commerciaux (CRM), servie par l'API sur `/crm/` |
+| `src/Sage100Api/wwwroot/livraison` | Application téléphone des tournées de livraison, servie par l'API sur `/livraison/` |
 | `tests/Sage100Api.Tests` | Tests de l'API avec un faux worker (sans Sage) |
 
 **Règles de base :**
@@ -63,6 +64,12 @@ Lectures SQL seules, sauf les positions GPS gardées par l'API. Chaque route est
 | GET | `/api/v1/documents?type=&client=&du=&au=&cloture=&page=&taille=` | Documents de vente. `type` : devis, commande, preparation, livraison, retour, avoir, facture, facture-comptabilisee |
 | GET | `/api/v1/documents/{type}/{piece}` | Un document et ses lignes |
 | GET | `/api/v1/livraisons/a-livrer?jusquau=&depot=` | Bons de commande et préparations non clôturés, avec adresse de livraison (ou du client), contact, téléphone et position GPS |
+| POST | `/api/v1/livraisons/optimiser` | Ordre de passage conseillé pour `{ "pieces": [...], "depot": 1 }` ou depuis `latitude`/`longitude` : plus proche voisin puis 2-opt, à vol d'oiseau. Les pièces sans position vont à la fin |
+| GET | `/api/v1/livraisons/tournees?du=&au=&livreur=&miennes=` | Tournées avec avancement (arrêts traités, total TTC). `miennes=true` : celles du livreur connecté |
+| GET / PUT / DELETE | `/api/v1/livraisons/tournees/{id}` | Une tournée et ses arrêts. PUT `{ "date", "nom", "livreur", "depot", "pieces": [...] }` dans l'ordre de passage : adresse, contact et montants sont recopiés. Une pièce déjà prévue ailleurs est refusée, un arrêt traité ne peut pas être retiré |
+| PUT | `/api/v1/livraisons/tournees/{id}/arrets/{piece}` | Compte rendu du livreur : `statut` (livre, partiel, echec, a-livrer), `motif`, `receptionnaire`, `commentaire`, `signature` (PNG en data URL), position |
+| GET | `/api/v1/livraisons/tournees/{id}/arrets/{piece}/signature` | Signature du réceptionnaire (image PNG) |
+| GET | `/api/v1/livraisons/suivi/{piece}` | Passages d'une pièce en tournée : livrée ou non, motif, heure, réceptionnaire |
 | GET | `/api/v1/recouvrement/echeances?client=&echuesSeulement=` | Écritures clients non lettrées (factures dues, avoirs), jours de retard, date de relance |
 | GET | `/api/v1/recouvrement/balance-agee` | Par client : non échu, 1-30, 31-60, 61-90, plus de 90 jours, crédits non affectés |
 | GET / PUT / DELETE | `/api/v1/geolocalisation/{cible}/{cle}` | Position GPS d'un `client` (code), d'une `adresse-livraison` (LI_No) ou d'un `depot`. PUT `{ "latitude", "longitude", "precision", "source" }`, avec un utilisateur connecté si la connexion est active |
@@ -72,7 +79,7 @@ Lectures SQL seules, sauf les positions GPS gardées par l'API. Chaque route est
 | GET | `/api/v1/crm/activites?client=&collaborateur=&utilisateur=&statut=&type=&du=&au=` | Activités (visite, appel, rendez-vous, email, note, tache). `statut=a-faire` donne l'agenda, trié par date prévue |
 | GET / PUT / DELETE | `/api/v1/crm/activites/{id}` | Une activité. L'id est choisi par l'application (GUID) : renvoyer le même PUT ne crée pas de doublon. PUT et DELETE demandent un utilisateur connecté si la connexion est active |
 
-Sage n'a pas de champ pour une position GPS, et l'API n'écrit jamais en SQL dans Sage : les positions et les activités CRM sont gardées dans `sage100api-extensions.db`, à côté du journal. Sauvegarde ce fichier avec le journal.
+Sage n'a pas de champ pour une position GPS, et l'API n'écrit jamais en SQL dans Sage : les positions, les activités CRM et les tournées de livraison sont gardées dans `sage100api-extensions.db`, à côté du journal. Sauvegarde ce fichier avec le journal.
 
 **Journal des encaissements :** un acompte n'a pas de journal. Sage le donne au règlement qu'il crée : c'est le journal par défaut du mode, par exemple BEU pour Espèces. Pour imposer un journal de trésorerie par mode, renseigne `journauxParMode` dans `worker.json`, par exemple `{ "Espèces": "CAIS", "Carte bancaire": "BQ1" }`, puis redémarre le worker. Un mode absent garde le journal de Sage. Un code de journal inconnu fait refuser l'encaissement avant qu'il soit créé.
 
@@ -190,6 +197,15 @@ L'API sert l'application sur **https://<serveur>:5443/crm/** (ou http://<serveur
 - **Agenda :** les actions à faire, en retard, aujourd'hui et à venir, avec un bouton « Fait ».
 - **« Je suis chez ce client » :** enregistre la position GPS du client (utile ensuite pour les tournées de livraison).
 - Le GPS du téléphone ne fonctionne qu'en **HTTPS**. Cette première version demande une connexion au serveur.
+
+## Application des livraisons
+
+L'API sert l'application sur **https://<serveur>:5443/livraison/**. Au bureau, on y prépare les tournées ; sur la route, le livreur suit la sienne.
+- **Préparer une tournée :** date, livreur (collaborateur Sage), dépôt de départ, puis cocher les bons de commande et préparations à livrer. « Optimiser l'ordre » propose l'ordre de passage le plus court ; les flèches permettent de le changer.
+- **Le livreur** se connecte avec son login Sage et ouvre « Mes tournées ». Pour chaque arrêt : appeler, « Y aller » (GPS du téléphone), puis « Livrer » avec le nom de la personne qui reçoit et sa signature, ou « Échec » avec le motif. « Itinéraire » ouvre tout le trajet restant dans Google Maps.
+- Une livraison faite sur place enregistre la position du client s'il n'en avait pas : les tournées suivantes sont mieux optimisées.
+- Pour optimiser depuis le dépôt, enregistre une fois sa position : `PUT /api/v1/geolocalisation/depot/1` dans Swagger. Sinon, choisis « Ma position » comme départ.
+- Rien n'est écrit dans Sage : le bon de livraison se fait toujours dans Sage, à partir du bon de commande.
 
 ## Installation sur le serveur (services Windows et HTTPS)
 

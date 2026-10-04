@@ -434,6 +434,58 @@ public sealed class ApiTests : IDisposable
         Assert.Equal(JsonValueKind.Null, portefeuille[1].GetProperty("derniereActivite").ValueKind);
     }
 
+    [Fact]
+    public async Task Une_tournee_recopie_les_pieces_garde_la_preuve_et_refuse_les_doublons()
+    {
+        using var usine = Usine(connexion: true);
+        var http = ClientAvecConnexion(usine);
+        var marie = ClientAvecConnexion(usine, await Jeton(http, "MARIE"));
+        var tournee = new TourneeRequest(new DateTime(2026, 10, 5), "Matin", 4, 1, ["bc00043", "BC00042"]);
+        const string signature = "data:image/png;base64,iVBORw0KGgo=";
+
+        var sans = await http.PutAsJsonAsync("/api/v1/livraisons/tournees/t1", tournee);
+        var inconnue = await marie.PutAsJsonAsync("/api/v1/livraisons/tournees/t1", tournee with { Pieces = ["BC99999"] });
+        var creee = await (await marie.PutAsJsonAsync("/api/v1/livraisons/tournees/t1", tournee)).Content.ReadFromJsonAsync<JsonElement>();
+        var doublon = await marie.PutAsJsonAsync("/api/v1/livraisons/tournees/t2", tournee with { Pieces = ["BC00042"] });
+        var echecSansMotif = await marie.PutAsJsonAsync("/api/v1/livraisons/tournees/t1/arrets/BC00042", new CompteRenduArret("echec", null, null, null, null, null, null));
+        var livre = await (await marie.PutAsJsonAsync("/api/v1/livraisons/tournees/t1/arrets/bc00042",
+            new CompteRenduArret("livre", null, "M. Rabe", null, signature, -18.9, 47.5))).Content.ReadFromJsonAsync<JsonElement>();
+        var retrait = await marie.PutAsJsonAsync("/api/v1/livraisons/tournees/t1", tournee with { Pieces = ["BC00043"] });
+        var suppression = await marie.DeleteAsync("/api/v1/livraisons/tournees/t1");
+        var lue = await marie.GetFromJsonAsync<JsonElement>("/api/v1/livraisons/tournees/t1");
+        var image = await marie.GetAsync("/api/v1/livraisons/tournees/t1/arrets/BC00042/signature");
+        var position = await marie.GetFromJsonAsync<JsonElement>("/api/v1/geolocalisation/adresse-livraison/7");
+        var suivi = await marie.GetFromJsonAsync<JsonElement>("/api/v1/livraisons/suivi/BC00042");
+
+        Assert.Equal(HttpStatusCode.Unauthorized, sans.StatusCode);
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, inconnue.StatusCode);
+        Assert.Equal("BC00043", creee.GetProperty("arrets")[0].GetProperty("piece").GetString());
+        Assert.Equal("CISEL", creee.GetProperty("arrets")[1].GetProperty("client").GetString());
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, doublon.StatusCode);
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, echecSansMotif.StatusCode);
+        Assert.True(livre.GetProperty("signe").GetBoolean());
+        Assert.Equal("MARIE", livre.GetProperty("utilisateur").GetString());
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, retrait.StatusCode); // BC00042 est livrée
+        Assert.Equal(HttpStatusCode.Conflict, suppression.StatusCode);
+        Assert.Equal("en-cours", lue.GetProperty("statut").GetString());
+        Assert.Equal(1, lue.GetProperty("nbTraites").GetInt32());
+        Assert.Equal("image/png", image.Content.Headers.ContentType?.MediaType);
+        Assert.Equal(-18.9, position.GetProperty("latitude").GetDouble()); // apprise à la livraison
+        Assert.Equal("livre", suivi[0].GetProperty("statut").GetString());
+    }
+
+    [Fact]
+    public void L_itineraire_passe_par_le_plus_court_chemin_et_met_les_pieces_sans_gps_a_la_fin()
+    {
+        // Trois points alignés vers l'est, donnés dans le désordre, départ à l'ouest.
+        var points = new List<Itineraire.Point> { new("C", 0, 0.3), new("A", 0, 0.1), new("B", 0, 0.2) };
+        var r = Itineraire.Ordonner(points, (0, 0), retour: false, ["X"]);
+
+        Assert.Equal(["A", "B", "C", "X"], r.Ordre);
+        Assert.Equal(["X"], r.SansPosition);
+        Assert.InRange(r.DistanceKm, 33.0, 34.0);
+    }
+
     public void Dispose()
     {
         _http.Dispose();
