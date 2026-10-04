@@ -47,6 +47,12 @@ public sealed record DonneesTarifs(IReadOnlyList<CategorieTarif> Categories, IRe
 /// <summary>Souche de numérotation des documents de vente (P_SOUCHEVENTE) : Numero = DO_Souche (0 pour la première).</summary>
 public sealed record Souche(int Numero, string Intitule);
 
+/// <summary>
+/// Taux de TVA (taxe 1, en %) d'un article pour une catégorie comptable de vente : celui de l'article (F_ARTCOMPTA),
+/// sinon celui de sa famille (F_FAMCOMPTA), lu dans F_TAXE.
+/// </summary>
+public sealed record TauxTva(string Article, int Categorie, decimal Taux);
+
 /// <summary>Stock d'un article (ou d'une valeur de gamme) dans un dépôt (F_ARTSTOCK, F_GAMSTOCK).</summary>
 public sealed record StockDepot(string Article, int Depot, string? Gamme1, string? Gamme2, decimal Stock, decimal StockReserve)
 {
@@ -60,6 +66,7 @@ public interface ILecturesTarifs
     Task<IReadOnlyList<Souche>> Souches();
     /// <summary>Stock par dépôt, de tous les articles ou d'un seul ; les valeurs de gamme ont leur propre ligne.</summary>
     Task<IReadOnlyList<StockDepot>> StocksDepots(string? article = null);
+    Task<IReadOnlyList<TauxTva>> TauxTva();
 }
 
 public sealed class LecturesTarifsSql(IOptions<SageOptions> options) : ILecturesTarifs
@@ -156,6 +163,23 @@ public sealed class LecturesTarifsSql(IOptions<SageOptions> options) : ILectures
         // DO_Souche commence à 0 ; cbIndice de P_SOUCHEVENTE commence à 1.
         return (await c.QueryAsync<Souche>(
             "SELECT CAST(cbIndice - 1 AS int) AS Numero, S_Intitule AS Intitule FROM P_SOUCHEVENTE WHERE S_Intitule <> '' AND S_Valide = 1 ORDER BY cbIndice")).AsList();
+    }
+
+    public async Task<IReadOnlyList<TauxTva>> TauxTva()
+    {
+        using var c = Cnx();
+        // Ventes (type 0) ; la ligne de l'article remplace celle de sa famille pour la même catégorie comptable.
+        // Plusieurs lignes possibles (facture, retour, avoir) : le plus grand taux.
+        return (await c.QueryAsync<TauxTva>(
+            "SELECT x.Article, CAST(x.Champ AS int) AS Categorie, CAST(MAX(t.TA_Taux) AS decimal(18,4)) AS Taux FROM (" +
+            "SELECT a.AR_Ref AS Article, ac.ACP_Champ AS Champ, ac.ACP_ComptaCpt_Taxe1 AS Taxe FROM F_ARTICLE a " +
+            "JOIN F_ARTCOMPTA ac ON ac.AR_Ref = a.AR_Ref AND ac.ACP_Type = 0 WHERE a.AR_Sommeil = 0 " +
+            "UNION ALL " +
+            "SELECT a.AR_Ref, f.FCP_Champ, f.FCP_ComptaCPT_Taxe1 FROM F_ARTICLE a " +
+            "JOIN F_FAMCOMPTA f ON f.FA_CodeFamille = a.FA_CodeFamille AND f.FCP_Type = 0 WHERE a.AR_Sommeil = 0 " +
+            "AND NOT EXISTS (SELECT 1 FROM F_ARTCOMPTA ac WHERE ac.AR_Ref = a.AR_Ref AND ac.ACP_Type = 0 AND ac.ACP_Champ = f.FCP_Champ)" +
+            ") x JOIN F_TAXE t ON t.TA_Code = x.Taxe AND t.TA_TTaux = 0 " +
+            "GROUP BY x.Article, x.Champ")).AsList();
     }
 
     public async Task<IReadOnlyList<StockDepot>> StocksDepots(string? article = null)

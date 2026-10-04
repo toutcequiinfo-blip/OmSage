@@ -141,9 +141,10 @@ lectures.MapGet("/catalogue", async (ILecturesSage l, ILecturesTarifs t, ILectur
     var souches = await Annexe("souches", () => t.Souches());
     var depots = await Annexe("dépôts", () => erp.Depots());
     var stocksDepots = await Annexe("stocks par dépôt", () => t.StocksDepots());
+    var tauxTva = await Annexe("taux de TVA", () => t.TauxTva());
     return new Catalogue(DateTime.UtcNow, await l.Clients(null, 1, 100_000), await l.Articles(null, null, 1, 100_000), await l.ModesReglement(),
         await l.Gammes(), await stock.Actif(), auth.Options.Active, auth.Options.Active && auth.Options.ExigerCaissier, commandes,
-        tarifs, souches, depots, stocksDepots, avertissements.Count > 0 ? avertissements : null);
+        tarifs, souches, depots, stocksDepots, avertissements.Count > 0 ? avertissements : null, tauxTva);
 });
 
 lectures.MapGet("/souches", (ILecturesTarifs t) => t.Souches()).WithSummary("Souches de numérotation des documents de vente (numero = DO_Souche)");

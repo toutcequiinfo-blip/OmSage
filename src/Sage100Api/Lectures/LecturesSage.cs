@@ -4,8 +4,11 @@ using Microsoft.Extensions.Options;
 
 namespace Sage100Api.Lectures;
 
-/// <summary>CategorieTarif : catégorie tarifaire du client (N_CatTarif, 1 à 32), qui fixe ses prix (voir <see cref="Tarification"/>).</summary>
-public sealed record Client(string Numero, string Intitule, string? Ville, string? Telephone, string? Email, int CategorieTarif = 1);
+/// <summary>
+/// CategorieTarif : catégorie tarifaire du client (N_CatTarif, 1 à 32), qui fixe ses prix (voir <see cref="Tarification"/>).
+/// CategorieCompta : catégorie comptable (N_CatCompta), qui fixe le taux de TVA de chaque article (voir <see cref="TauxTva"/>).
+/// </summary>
+public sealed record Client(string Numero, string Intitule, string? Ville, string? Telephone, string? Email, int CategorieTarif = 1, int CategorieCompta = 1);
 
 /// <summary>
 /// Gamme1 / Gamme2 : intitulés des gammes (par exemple « Taille »), null si l'article n'est pas à gamme.
@@ -38,19 +41,21 @@ public sealed record EnumereGamme(string Article, string Gamme1, string? Gamme2,
 /// Tarifs : de quoi calculer hors ligne le prix de chaque client (voir <see cref="Tarification"/>).
 /// Souches, Depots, StocksDepots : choix de la souche et du dépôt dans les paramètres de saisie de la borne.
 /// Avertissements : parties annexes qui n'ont pas pu être lues (null si tout est lu), affichées par la borne.
+/// TauxTva : taux de TVA de chaque article par catégorie comptable, pour estimer le TTC hors ligne (en ligne, c'est Sage qui chiffre).
 /// </summary>
 public sealed record Catalogue(DateTime GenereLe, IReadOnlyList<Client> Clients, IReadOnlyList<Article> Articles, IReadOnlyList<ModeReglement> ModesReglement,
     IReadOnlyList<EnumereGamme> Gammes, bool ControleStock, bool Authentification = false, bool ExigerCaissier = false,
     IReadOnlyList<CommandeOuverte>? CommandesOuvertes = null, DonneesTarifs? Tarifs = null, IReadOnlyList<Souche>? Souches = null,
-    IReadOnlyList<Depot>? Depots = null, IReadOnlyList<StockDepot>? StocksDepots = null, IReadOnlyList<string>? Avertissements = null);
+    IReadOnlyList<Depot>? Depots = null, IReadOnlyList<StockDepot>? StocksDepots = null, IReadOnlyList<string>? Avertissements = null,
+    IReadOnlyList<TauxTva>? TauxTva = null);
 
 /// <summary>
-/// Bon de commande client pas encore livré ni clôturé, avec ce qui reste à encaisser.
-/// DejaRegle : total des acomptes déjà saisis sur la pièce (F_DOCREGL, DR_TypeRegl = 0).
-/// NetAPayer : « Net à payer » du pied de pièce Sage (DO_NetAPayer).
+/// Pièce de vente avec un reste à encaisser : bon de commande ou de livraison non clôturé, facture ou facture comptabilisée.
+/// DejaRegle : acomptes de la pièce, règlements imputés sur ses échéances et règlements de la borne pas encore imputés.
+/// NetAPayer : « Net à payer » du pied de pièce Sage (DO_NetAPayer). TypePiece : DO_Type (1 BC, 3 BL, 6 facture, 7 comptabilisée).
 /// </summary>
 public sealed record CommandeOuverte(string Piece, DateTime Date, string Client, string? Intitule, string? Reference, string? IdExterne,
-    decimal TotalTTC, decimal DejaRegle, decimal? NetAPayer = null)
+    decimal TotalTTC, decimal DejaRegle, decimal? NetAPayer = null, int TypePiece = 1)
 {
     public decimal Reste => TotalTTC - DejaRegle;
 }
@@ -91,7 +96,8 @@ public sealed class LecturesSql(IOptions<SageOptions> options) : ILecturesSage
     // CT_Type = 0 : client ; CT_Sommeil / AR_Sommeil = 1 : mis en sommeil.
     const string SelectClient =
         "SELECT CT_Num AS Numero, CT_Intitule AS Intitule, CT_Ville AS Ville, CT_Telephone AS Telephone, CT_EMail AS Email, " +
-    "CAST(CASE WHEN N_CatTarif > 0 THEN N_CatTarif ELSE 1 END AS int) AS CategorieTarif FROM F_COMPTET";
+    "CAST(CASE WHEN N_CatTarif > 0 THEN N_CatTarif ELSE 1 END AS int) AS CategorieTarif, " +
+    "CAST(CASE WHEN N_CatCompta > 0 THEN N_CatCompta ELSE 1 END AS int) AS CategorieCompta FROM F_COMPTET";
 
     const string SelectArticle =
         "SELECT a.AR_Ref AS Reference, a.AR_Design AS Designation, a.FA_CodeFamille AS Famille, a.AR_CodeBarre AS CodeBarre, " +
@@ -204,21 +210,31 @@ public sealed class LecturesSql(IOptions<SageOptions> options) : ILecturesSage
             new { utilisateur });
     }
 
+    // Déjà réglé sur une pièce de vente (alias e = F_DOCENTETE) : acomptes de la pièce, règlements imputés sur ses échéances,
+    // et, pour une facture, règlements de la borne pas encore imputés (RG_Reference = numéro de pièce, voir le worker).
+    const string Regle =
+        "ISNULL((SELECT SUM(r.DR_Montant) FROM F_DOCREGL r WHERE r.DO_Domaine = 0 AND r.DO_Type = e.DO_Type AND r.DO_Piece = e.DO_Piece AND r.DR_TypeRegl = 0), 0) " +
+        "+ ISNULL((SELECT SUM(rc.RC_Montant) FROM F_REGLECH rc JOIN F_DOCREGL d ON d.DR_No = rc.DR_No " +
+        "  WHERE d.DO_Domaine = 0 AND d.DO_Type = e.DO_Type AND d.DO_Piece = e.DO_Piece AND d.DR_TypeRegl = 2), 0) " +
+        "+ CASE WHEN e.DO_Type IN (6, 7) THEN ISNULL((SELECT SUM(cr.RG_Montant) FROM F_CREGLEMENT cr WHERE cr.RG_Type = 0 " +
+        "  AND cr.CT_NumPayeur = e.DO_Tiers AND cr.RG_Reference = e.DO_Piece " +
+        "  AND NOT EXISTS (SELECT 1 FROM F_REGLECH x WHERE x.RG_No = cr.RG_No)), 0) ELSE 0 END";
+
     public async Task<IReadOnlyList<CommandeOuverte>> CommandesOuvertes(string? recherche, int taille)
     {
-        // Un bon de commande transformé en livraison change de DO_Type : il sort de cette liste.
+        // Bons de commande et de livraison non clôturés, factures et factures comptabilisées, avec un reste à payer.
+        // Une pièce transformée change de DO_Type : elle apparaît sous son nouveau type.
         using var c = Cnx();
         var r = await c.QueryAsync<CommandeOuverte>(
-            "SELECT TOP (@taille) e.DO_Piece AS Piece, e.DO_Date AS Date, e.DO_Tiers AS Client, t.CT_Intitule AS Intitule, " +
+            "SELECT TOP (@taille) x.Piece, x.Date, x.Client, x.Intitule, x.Reference, x.IdExterne, x.TotalTTC, x.DejaRegle, x.NetAPayer, x.TypePiece FROM (" +
+            "SELECT e.DO_Piece AS Piece, e.DO_Date AS Date, e.DO_Tiers AS Client, t.CT_Intitule AS Intitule, " +
             "NULLIF(e.DO_Ref, '') AS Reference, NULLIF(e.DO_RefExterne, '') AS IdExterne, " +
-            "CAST(e.DO_TotalTTC AS decimal(18,2)) AS TotalTTC, CAST(ISNULL(a.Regle, 0) AS decimal(18,2)) AS DejaRegle, " +
-            "CAST(e.DO_NetAPayer AS decimal(18,2)) AS NetAPayer " +
+            "CAST(e.DO_TotalTTC AS decimal(18,2)) AS TotalTTC, CAST(" + Regle + " AS decimal(18,2)) AS DejaRegle, " +
+            "CAST(e.DO_NetAPayer AS decimal(18,2)) AS NetAPayer, CAST(e.DO_Type AS int) AS TypePiece " +
             "FROM F_DOCENTETE e LEFT JOIN F_COMPTET t ON t.CT_Num = e.DO_Tiers " +
-            "OUTER APPLY (SELECT SUM(r.DR_Montant) AS Regle FROM F_DOCREGL r " +
-            "  WHERE r.DO_Domaine = 0 AND r.DO_Type = 1 AND r.DO_Piece = e.DO_Piece AND r.DR_TypeRegl = 0) a " +
-            "WHERE e.DO_Domaine = 0 AND e.DO_Type = 1 AND e.DO_Cloture = 0 AND e.DO_TotalTTC - ISNULL(a.Regle, 0) > 0.005 " +
-            "AND (@q IS NULL OR e.DO_Piece LIKE @q OR e.DO_Tiers LIKE @q OR t.CT_Intitule LIKE @q OR e.DO_Ref LIKE @q) " +
-            "ORDER BY e.DO_Date DESC, e.DO_Piece DESC",
+            "WHERE e.DO_Domaine = 0 AND (e.DO_Type IN (1, 3) AND e.DO_Cloture = 0 OR e.DO_Type IN (6, 7)) " +
+            "AND (@q IS NULL OR e.DO_Piece LIKE @q OR e.DO_Tiers LIKE @q OR t.CT_Intitule LIKE @q OR e.DO_Ref LIKE @q)" +
+            ") x WHERE x.TotalTTC - x.DejaRegle > 0.005 ORDER BY x.Date DESC, x.Piece DESC",
             new { q = Motif(recherche), taille });
         return r.AsList();
     }
@@ -226,14 +242,14 @@ public sealed class LecturesSql(IOptions<SageOptions> options) : ILecturesSage
     public async Task<DetailPiece?> DetailCommande(string piece)
     {
         using var c = Cnx();
+        // Même numéro possible sur deux types (souches différentes) : la pièce la plus avancée (facture, puis BL, puis BC).
         var entete = await c.QueryFirstOrDefaultAsync<(string Piece, DateTime Date, string Client, string? Intitule, string? Reference, string? IdExterne,
-            decimal TotalTTC, decimal DejaRegle, decimal NetAPayer, decimal TotalHT)>(
-            "SELECT e.DO_Piece, e.DO_Date, e.DO_Tiers, t.CT_Intitule, NULLIF(e.DO_Ref, ''), NULLIF(e.DO_RefExterne, ''), " +
-            "CAST(e.DO_TotalTTC AS decimal(18,2)), " +
-            "CAST(ISNULL((SELECT SUM(r.DR_Montant) FROM F_DOCREGL r WHERE r.DO_Domaine = 0 AND r.DO_Type = 1 AND r.DO_Piece = e.DO_Piece AND r.DR_TypeRegl = 0), 0) AS decimal(18,2)), " +
-            "CAST(e.DO_NetAPayer AS decimal(18,2)), CAST(e.DO_TotalHT AS decimal(18,2)) " +
+            decimal TotalTTC, decimal DejaRegle, decimal NetAPayer, decimal TotalHT, int TypePiece)>(
+            "SELECT TOP 1 e.DO_Piece, e.DO_Date, e.DO_Tiers, t.CT_Intitule, NULLIF(e.DO_Ref, ''), NULLIF(e.DO_RefExterne, ''), " +
+            "CAST(e.DO_TotalTTC AS decimal(18,2)), CAST(" + Regle + " AS decimal(18,2)), " +
+            "CAST(e.DO_NetAPayer AS decimal(18,2)), CAST(e.DO_TotalHT AS decimal(18,2)), CAST(e.DO_Type AS int) " +
             "FROM F_DOCENTETE e LEFT JOIN F_COMPTET t ON t.CT_Num = e.DO_Tiers " +
-            "WHERE e.DO_Domaine = 0 AND e.DO_Type = 1 AND e.DO_Piece = @piece",
+            "WHERE e.DO_Domaine = 0 AND e.DO_Type IN (1, 3, 6, 7) AND e.DO_Piece = @piece ORDER BY e.DO_Type DESC",
             new { piece });
         if (entete.Piece is null) return null;
         // Lignes sans article (commentaires, sous-totaux) incluses : AR_Ref vide, seule la désignation compte.
@@ -244,10 +260,10 @@ public sealed class LecturesSql(IOptions<SageOptions> options) : ILecturesSage
             "FROM F_DOCLIGNE l " +
             "LEFT JOIN F_ARTGAMME g1 ON g1.AG_No = l.AG_No1 AND l.AG_No1 <> 0 " +
             "LEFT JOIN F_ARTGAMME g2 ON g2.AG_No = l.AG_No2 AND l.AG_No2 <> 0 " +
-            "WHERE l.DO_Domaine = 0 AND l.DO_Type = 1 AND l.DO_Piece = @piece ORDER BY l.DL_Ligne",
-            new { piece });
+            "WHERE l.DO_Domaine = 0 AND l.DO_Type = @type AND l.DO_Piece = @piece ORDER BY l.DL_Ligne",
+            new { piece, type = entete.TypePiece });
         var e = entete;
-        return new DetailPiece(new CommandeOuverte(e.Piece, e.Date, e.Client, e.Intitule, e.Reference, e.IdExterne, e.TotalTTC, e.DejaRegle, e.NetAPayer),
+        return new DetailPiece(new CommandeOuverte(e.Piece, e.Date, e.Client, e.Intitule, e.Reference, e.IdExterne, e.TotalTTC, e.DejaRegle, e.NetAPayer, e.TypePiece),
             e.TotalHT, lignes.AsList());
     }
 

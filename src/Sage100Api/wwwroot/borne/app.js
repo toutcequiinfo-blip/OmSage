@@ -132,10 +132,31 @@ function revenirALaVente() {
 
 /** Prix de la ligne pour le client du ticket (tarif client, catégorie tarifaire, gamme, conditionnement, remises). */
 const tarif = (l) => prixLigne(catalogue, vente?.client, l.article, { enumere: l.enumere, conditionnement: l.cond, quantite: l.quantite });
-const tauxTva = () => lireReglages().tauxTva;
-/** Prix HT de l'unité vendue après remise (un tarif TTC est ramené en HT avec le taux des réglages). */
-const prixNetHT = (p) => enHT(p.prixNet, p.ttc, tauxTva());
-const montantLigne = (l) => arrondi(prixNetHT(tarif(l)) * l.quantite);
+const indexTva = new WeakMap();
+/**
+ * Taux de TVA de l'article dans Sage pour la catégorie comptable du client (article, sinon sa famille).
+ * Article sans taux connu : le taux le plus courant du catalogue. Sert seulement à l'estimation hors ligne :
+ * en ligne, le montant à payer est celui que Sage calcule sur la pièce.
+ */
+function tauxTva(article) {
+  let idx = indexTva.get(catalogue);
+  if (!idx) {
+    const parCle = new Map(), parArticle = new Map(), frequence = new Map();
+    for (const t of catalogue.tauxTva || []) {
+      parCle.set(`${t.article.toUpperCase()}|${t.categorie}`, t.taux);
+      if (!parArticle.has(t.article.toUpperCase())) parArticle.set(t.article.toUpperCase(), t.taux);
+      frequence.set(t.taux, (frequence.get(t.taux) || 0) + 1);
+    }
+    const courant = [...frequence.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? 0;
+    idx = { parCle, parArticle, courant };
+    indexTva.set(catalogue, idx);
+  }
+  const ref = (article?.reference || "").toUpperCase();
+  return idx.parCle.get(`${ref}|${vente?.client?.categorieCompta ?? 1}`) ?? idx.parArticle.get(ref) ?? idx.courant;
+}
+/** Prix HT de l'unité vendue après remise (un tarif TTC est ramené en HT avec le taux de TVA de l'article dans Sage). */
+const prixNetHT = (p, article) => enHT(p.prixNet, p.ttc, tauxTva(article));
+const montantLigne = (l) => arrondi(prixNetHT(tarif(l), l.article) * l.quantite);
 /** Quantité en unités de vente : 3 cartons de 12 = 36. */
 const contenu = (cond) => (cond?.quantite > 0 ? cond.quantite : 1);
 const uniteDe = (article) => article.unite || "";
@@ -292,8 +313,8 @@ function dessinerArticles() {
   // Prix de l'unité de vente pour le client du ticket : tarif client ou catégorie tarifaire, remise comprise.
   const prix = (a) => {
     const p = prixLigne(catalogue, vente?.client, a);
-    const ht = prixNetHT(p);
-    const avant = enHT(p.prix, p.ttc, tauxTva());
+    const ht = prixNetHT(p, a);
+    const avant = enHT(p.prix, p.ttc, tauxTva(a));
     // Espaces entre les morceaux : la tuile passe à la ligne entre eux, jamais au milieu d'un prix.
     return element("span", { class: "prix" }, ht < avant - 0.005 ? element("span", { class: "barre" }, euros.format(avant)) : null, " ",
       element("span", {}, `${euros.format(ht)} HT`), " ", a.unite ? element("span", { class: "unite-prix" }, `/ ${a.unite}`) : null);
@@ -455,16 +476,24 @@ function supprimerLigne() {
   dessinerPanier();
 }
 
+/**
+ * Totaux du ticket. Pièce créée dans Sage (vente.sage) : montants de Sage, remises client et famille, TVA et escompte compris ;
+ * le reste à payer part du net à payer de la pièce. Sinon (hors ligne), estimation sur la borne avec la TVA de chaque article.
+ */
 function totaux() {
   if (vente.existante) {
     const paye = arrondi(vente.dejaRegle + vente.paiements.reduce((s, p) => s + p.montant, 0));
-    return { ht: 0, tva: 0, ttc: vente.totalTTC, paye, reste: Math.max(0, arrondi(vente.totalTTC - paye)) };
+    return { ht: 0, tva: 0, ttc: vente.totalTTC, paye, reste: Math.max(0, arrondi(vente.totalTTC - paye)), sage: true };
+  }
+  const paye = arrondi(vente.paiements.reduce((s, p) => s + p.montant, 0));
+  if (vente.sage) {
+    const s = vente.sage;
+    return { ht: s.totalHT, tva: arrondi(s.totalTTC - s.totalHT), ttc: s.netAPayer, paye, reste: Math.max(0, arrondi(s.netAPayer - paye)), sage: true };
   }
   const ht = arrondi([...vente.lignes.values()].reduce((s, l) => s + montantLigne(l), 0));
-  const tva = arrondi(ht * lireReglages().tauxTva / 100);
+  const tva = arrondi([...vente.lignes.values()].reduce((s, l) => s + montantLigne(l) * tauxTva(l.article) / 100, 0));
   const ttc = arrondi(ht + tva);
-  const paye = arrondi(vente.paiements.reduce((s, p) => s + p.montant, 0));
-  return { ht, tva, ttc, paye, reste: Math.max(0, arrondi(ttc - paye)) };
+  return { ht, tva, ttc, paye, reste: Math.max(0, arrondi(ttc - paye)), sage: false };
 }
 
 function dessinerPanier() {
@@ -488,7 +517,7 @@ function dessinerPanier() {
           element("button", { type: "button", "aria-label": "Ajouter un", onclick: (e) => { e.stopPropagation(); ajouterArticle(l.article, 1, l.enumere, l.cond); } }, "+")),
         element("span", { class: "unite" }, libelleUnite(l),
           l.cond && contenu(l.cond) !== 1 ? element("span", { class: "contenu" }, ` (${quantiteTexte(arrondi(l.quantite * contenu(l.cond)))}${uniteDe(l.article) ? " " + uniteDe(l.article) : ""})`) : null),
-        element("span", { class: "pu" }, `× ${euros.format(enHT(p.prix, p.ttc, tauxTva()))} HT`, remises ? " " : null, remises ? element("span", { class: "remise" }, remises) : null),
+        element("span", { class: "pu" }, `× ${euros.format(enHT(p.prix, p.ttc, tauxTva(l.article)))} HT`, remises ? " " : null, remises ? element("span", { class: "remise" }, remises) : null),
         element("span", { class: "montant" }, euros.format(montantLigne(l))))));
   }
   if (vente.lignes.size === 0) ul.append(element("li", { class: "vide" }, "Touchez un article pour l'ajouter."));
@@ -496,7 +525,6 @@ function dessinerPanier() {
   $("#total-ht").textContent = euros.format(t.ht);
   $("#total-tva").textContent = euros.format(t.tva);
   $("#total-ttc").textContent = euros.format(t.ttc);
-  $("#taux-tva").textContent = lireReglages().tauxTva;
   const vide = vente.lignes.size === 0;
   // Un vendeur sans la case Caissier enregistre la commande ; le caissier choisit directement le mode de règlement.
   $("#btn-valider").textContent = peutEncaisser() ? "Régler" : TYPES[parametres().typeDocument].valider;
@@ -582,8 +610,35 @@ async function validerCommande() {
     vente: { numero: vente.numero, client: vente.client.intitule || vente.client.numero, totalTtcEstime: t.ttc, typeDocument: pr.typeDocument },
     ...auteur(),
   });
-  synchroniserPuisAfficher();
+  // En ligne, la pièce est créée dans Sage avant l'encaissement : on encaisse le net à payer calculé par Sage
+  // (remises du client et de la famille, TVA, escompte), pas l'estimation de la borne.
+  bandeau("Envoi à Sage…");
+  await synchroniserPuisAfficher();
+  await reprendreMontantsSage(vente);
   afficher("paiement");
+}
+
+/** Pièce Sage de la vente une fois envoyée : numéro, montants de Sage et lignes ; ou le refus de Sage. */
+async function reprendreMontantsSage(v) {
+  const op = (await lireFile()).find((o) => o.cle === `commande:${v.id}`);
+  if (op?.statut === "erreur") {
+    v.refus = op.message || "Refusé par Sage.";
+    bandeau(`Sage a refusé la pièce : ${v.refus}`, "erreur");
+    return;
+  }
+  if (op?.statut !== "ok" || !op.resultat?.piece) {
+    bandeau(connexion === "hors-ligne" ? "" : "Pièce pas encore créée dans Sage : montant estimé par la borne.", connexion === "hors-ligne" ? "info" : "erreur");
+    return;
+  }
+  v.piece = op.resultat.piece;
+  const s = { netAPayer: op.resultat.netAPayer, totalHT: null, totalTTC: op.resultat.netAPayer, lignes: null };
+  try {
+    const d = await detailCommande(v.piece);
+    if (d) Object.assign(s, { totalHT: d.totalHT, totalTTC: d.entete.totalTTC, lignes: d.lignes });
+  } catch { /* le net à payer suffit pour encaisser */ }
+  if (s.totalHT == null) s.totalHT = arrondi(s.netAPayer - arrondi([...v.lignes.values()].reduce((x, l) => x + montantLigne(l) * tauxTva(l.article) / 100, 0)));
+  v.sage = s;
+  bandeau("");
 }
 
 // ---------- 3. Encaissement ----------
@@ -591,7 +646,7 @@ async function validerCommande() {
 function dessinerPaiement() {
   const t = totaux();
   $("#paiement-numero").textContent = [vente.typeDocument && !vente.existante ? TYPES[vente.typeDocument].libelle : null, vente.numero].filter(Boolean).join(" ");
-  $("#p-total-libelle").textContent = vente.existante && vente.piece ? "Total TTC" : "Total TTC estimé";
+  $("#p-total-libelle").textContent = vente.existante ? "Total TTC" : t.sage ? "Net à payer (Sage)" : "Total TTC estimé";
   $("#p-total").textContent = euros.format(t.ttc);
   $("#p-paye").textContent = euros.format(t.paye);
   $("#p-reste").textContent = euros.format(t.reste);
@@ -599,11 +654,15 @@ function dessinerPaiement() {
   const zone = $("#modes");
   zone.replaceChildren();
   // Même règle que l'API : sans la case Caissier sur sa fiche collaborateur Sage, l'utilisateur n'encaisse pas.
-  const interdit = !!catalogue.exigerCaissier && !!utilisateur && !utilisateur.peutEncaisser;
+  const pasCaissier = !!catalogue.exigerCaissier && !!utilisateur && !utilisateur.peutEncaisser;
+  // Pièce refusée par Sage : rien à encaisser tant qu'elle n'est pas corrigée (file d'envoi, Réessayer ou Abandonner).
+  const interdit = pasCaissier || !!vente.refus;
   $("#encaissement-interdit").hidden = !interdit;
-  $("#encaissement-interdit").textContent = interdit
-    ? `${nomUtilisateur(utilisateur)} n'est pas caissier dans Sage : la commande est enregistrée, l'encaissement sera fait par un caissier dans Sage.`
-    : "";
+  $("#encaissement-interdit").textContent = vente.refus
+    ? `Sage a refusé la pièce : ${vente.refus} Rien n'est encaissé. Corrigez puis renvoyez-la depuis la file d'envoi (Réglages).`
+    : pasCaissier
+      ? `${nomUtilisateur(utilisateur)} n'est pas caissier dans Sage : la commande est enregistrée, l'encaissement sera fait par un caissier dans Sage.`
+      : "";
   for (const m of interdit ? [] : catalogue.modesReglement) {
     zone.append(element("button", {
       type: "button", class: modeChoisi === m.intitule ? "mode actif" : "mode",
@@ -682,7 +741,7 @@ function terminer() {
     vente.existante ? null
       : element("ul", {}, ...[...vente.lignes.values()].map((l) => element("li", {},
         `${[quantiteTexte(l.quantite), libelleUnite(l)].filter(Boolean).join(" ")} × ${l.article.designation || l.article.reference}${l.enumere ? ` (${libelleGamme(l.enumere)})` : ""}`))),
-    element("p", {}, `${vente.existante ? "Total TTC" : "Total TTC estimé"} : ${euros.format(t.ttc)} · Encaissé : ${euros.format(t.paye)} · Reste : ${euros.format(t.reste)}`),
+    element("p", {}, `${vente.existante ? "Total TTC" : t.sage ? "Net à payer (Sage)" : "Total TTC estimé"} : ${euros.format(t.ttc)} · Encaissé : ${euros.format(t.paye)} · Reste : ${euros.format(t.reste)}`),
     element("p", { class: "discret" }, connexion === "sage"
       ? "La vente est envoyée à Sage."
       : "La vente est enregistrée sur la borne et sera envoyée à Sage dès le retour du serveur."));
@@ -812,18 +871,25 @@ function ouvrirListe(titre, contenu, imprimable) {
 function ticketAImprimer() {
   if (!vente) return null;
   const t = totaux();
+  // Pièce dans Sage : ses lignes et ses montants ; sinon les prix de la borne (estimation).
+  const lignesSage = vente.sage?.lignes?.filter((l) => l.article || l.designation);
   return {
-    numero: vente.numero || "Ticket en cours", client: vente.client.intitule || vente.client.numero, vendeur: nomUtilisateur(utilisateur),
-    date: new Date(), existante: !!vente.existante, taux: lireReglages().tauxTva,
+    numero: [vente.piece, vente.numero].filter(Boolean).join(" · ") || "Ticket en cours", client: vente.client.intitule || vente.client.numero,
+    vendeur: nomUtilisateur(utilisateur), date: new Date(), existante: !!vente.existante, sage: t.sage,
     document: vente.existante ? null : TYPES[vente.typeDocument || parametres().typeDocument].libelle,
-    lignes: [...vente.lignes.values()].map((l) => {
-      const p = tarif(l);
-      return {
-        libelle: `${l.article.designation || l.article.reference}${l.enumere ? " " + libelleGamme(l.enumere) : ""}`,
-        quantite: l.quantite, unite: libelleUnite(l), prix: arrondi(enHT(p.prix, p.ttc, tauxTva())), remise: texteRemises(p.remises),
-        montant: montantLigne(l),
-      };
-    }),
+    lignes: lignesSage
+      ? lignesSage.map((l) => ({
+        libelle: [l.designation || l.article, l.gamme1, l.gamme2].filter(Boolean).join(" "), quantite: l.quantite, unite: "",
+        prix: l.quantite ? arrondi(l.montantHT / l.quantite) : l.prixUnitaireHT, remise: "", montant: l.montantHT,
+      }))
+      : [...vente.lignes.values()].map((l) => {
+        const p = tarif(l);
+        return {
+          libelle: `${l.article.designation || l.article.reference}${l.enumere ? " " + libelleGamme(l.enumere) : ""}`,
+          quantite: l.quantite, unite: libelleUnite(l), prix: arrondi(enHT(p.prix, p.ttc, tauxTva(l.article))), remise: texteRemises(p.remises),
+          montant: montantLigne(l),
+        };
+      }),
     ...t, paiements: vente.paiements.slice(),
   };
 }
@@ -843,8 +909,8 @@ function imprimer(ticket) {
       ligne(`  ${String(l.quantite).replace(".", ",")}${l.unite ? " " + l.unite : ""} x ${euros.format(l.prix)}${l.remise ? " " + l.remise : ""}`, euros.format(l.montant)))),
     element("hr"),
     ticket.existante ? null : ligne("Total HT", euros.format(ticket.ht)),
-    ticket.existante ? null : ligne(`TVA estimée ${ticket.taux} %`, euros.format(ticket.tva)),
-    ligne(ticket.existante ? "TOTAL TTC" : "TOTAL TTC estimé", euros.format(ticket.ttc)),
+    ticket.existante ? null : ligne(ticket.sage ? "TVA" : "TVA estimée", euros.format(ticket.tva)),
+    ligne(ticket.existante ? "TOTAL TTC" : ticket.sage ? "NET À PAYER" : "TOTAL TTC estimé", euros.format(ticket.ttc)),
     ...ticket.paiements.map((p) => ligne(p.mode, euros.format(p.montant))),
     ticket.paiements.length ? ligne("Reste à payer", euros.format(ticket.reste)) : null,
     element("hr"),
@@ -870,9 +936,14 @@ function verrouiller() {
   afficher("connexion");
 }
 
-// ---------- Commandes déjà enregistrées, à encaisser ----------
-// Bons de commande Sage (saisis dans Sage, ou pris par un vendeur sur une borne) et commandes de cette borne pas encore
+// ---------- Pièces déjà enregistrées, à encaisser ----------
+// Bons de commande et de livraison, factures et factures comptabilisées de Sage (saisis dans Sage, ou pris sur une borne)
+// avec un reste à payer, et ventes de cette borne pas encore
 // envoyées. Hors ligne : la liste du dernier catalogue. Les encaissements encore en file sont déduits du reste.
+
+/** Type de pièce Sage (DO_Type) en abrégé, pour la liste « À encaisser ». */
+const TYPES_PIECE = { 1: "BC", 3: "BL", 6: "Facture", 7: "Facture compta." };
+const TYPE_LOCAL = { commande: "BC", livraison: "BL", facture: "Facture" };
 
 const peutEncaisser = () => !catalogue?.exigerCaissier || !!utilisateur?.peutEncaisser;
 
@@ -906,10 +977,12 @@ async function dessinerCommandes() {
   const locales = ops.filter((o) => o.type === "commande" && o.statut === "attente").map((o) => ({
     idCommande: o.idExterne, numero: o.vente?.numero || o.idExterne, client: o.corps.client, intitule: o.vente?.client,
     reference: o.vente?.numero, date: o.creeLe, totalTTC: o.vente?.totalTtcEstime || 0, netAPayer: o.vente?.totalTtcEstime || 0,
+    type: TYPE_LOCAL[o.vente?.typeDocument || o.corps.typeDocument] || "BC",
     dejaRegle: enAttente(null, o.idExterne), local: true, operation: o,
   }));
   const deSage = sage.map((c) => ({
     piece: c.piece, numero: c.piece, client: c.client, intitule: c.intitule, reference: c.reference, date: c.date,
+    type: TYPES_PIECE[c.typePiece ?? 1] || "BC",
     totalTTC: c.totalTTC, netAPayer: c.netAPayer ?? c.totalTTC, dejaRegle: arrondi(c.dejaRegle + enAttente(c.piece, c.idExterne)),
   }));
   const m = q.toLowerCase();
@@ -922,7 +995,7 @@ async function dessinerCommandes() {
   const zone = $("#liste-commandes");
   const enListe = lireAffichage("commandes") === "liste";
   zone.className = enListe ? "liste-commandes en-liste" : "liste-commandes en-boutons";
-  if (commandes.length === 0) return zone.replaceChildren(element("p", { class: "vide" }, "Aucune commande à encaisser."));
+  if (commandes.length === 0) return zone.replaceChildren(element("p", { class: "vide" }, "Aucune pièce à encaisser."));
   const date = (c) => (c.date ? new Date(c.date).toLocaleDateString("fr-FR") : "");
   const reste = (c) => euros.format(arrondi(c.totalTTC - c.dejaRegle));
   const loupe = (c) => element("button", {
@@ -932,19 +1005,19 @@ async function dessinerCommandes() {
   const liste = commandes.slice(0, 200);
   if (enListe) {
     zone.replaceChildren(tableau(
-      [{ titre: "Date", classe: "date" }, { titre: "N° pièce", classe: "code" }, { titre: "Référence", classe: "secondaire" },
+      [{ titre: "Date", classe: "date" }, { titre: "Type", classe: "type" }, { titre: "N° pièce", classe: "code" }, { titre: "Référence", classe: "secondaire" },
         { titre: "Code client", classe: "code" }, { titre: "Client", classe: "secondaire" }, { titre: "Net à payer", classe: "nombre" },
         { titre: "Reste", classe: "nombre reste" }, { titre: "", classe: "action" }],
       liste.map((c) => ({
         classe: c.local ? "commande locale" : "commande", attributs: { "data-commande": c.numero },
-        cellules: [date(c), element("span", {}, c.numero, c.local ? element("span", { class: "etiquette" }, "pas encore dans Sage") : null),
+        cellules: [date(c), element("span", { class: "type-piece" }, c.type), element("span", {}, c.numero, c.local ? element("span", { class: "etiquette" }, "pas encore dans Sage") : null),
           c.reference && c.reference !== c.numero ? c.reference : "", c.client, c.intitule || "", euros.format(c.netAPayer), reste(c), loupe(c)],
         onclick: () => encaisserCommande(c),
       }))));
   } else {
     zone.replaceChildren(...liste.map((c) => element("div", { class: c.local ? "carte-commande locale" : "carte-commande", "data-commande": c.numero },
       element("button", { type: "button", class: "corps", onclick: () => encaisserCommande(c) },
-        element("span", { class: "haut" }, element("strong", {}, c.numero), element("span", { class: "discret" }, date(c))),
+        element("span", { class: "haut" }, element("strong", {}, element("span", { class: "type-piece" }, c.type), " ", c.numero), element("span", { class: "discret" }, date(c))),
         element("span", {}, `${c.client} · ${c.intitule || ""}`),
         element("span", { class: "discret" }, [c.local ? "pas encore dans Sage" : null, c.reference && c.reference !== c.numero ? `Réf. ${c.reference}` : null].filter(Boolean).join(" · ")),
         element("span", { class: "montants-commande" },
@@ -1091,7 +1164,7 @@ function deconnecter() {
 function dessinerReglages() {
   const r = lireReglages();
   const f = $("#form-reglages");
-  for (const nom of ["borne", "cle", "tauxTva", "clientDefaut"]) f.elements[nom].value = r[nom] ?? "";
+  for (const nom of ["borne", "cle", "clientDefaut"]) f.elements[nom].value = r[nom] ?? "";
   $("#info-catalogue").textContent = catalogue
     ? `Catalogue du ${new Date(catalogue.genereLe).toLocaleString("fr-FR")} : ${catalogue.clients.length} clients, ${catalogue.articles.length} articles.`
     : "Aucun catalogue sur la borne.";
@@ -1144,7 +1217,6 @@ async function enregistrerReglages(ev) {
     ...lireReglages(),
     borne: f.borne.value.trim().toUpperCase(),
     cle: f.cle.value.trim(),
-    tauxTva: Number(f.tauxTva.value),
     clientDefaut: f.clientDefaut.value.trim().toUpperCase(),
   });
   $("#nom-borne").textContent = lireReglages().borne;

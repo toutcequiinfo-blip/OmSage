@@ -138,6 +138,7 @@ header .icone { background: transparent; color: #fff; border-color: rgba(255,255
 .table-liste td .gamme { margin-left: 8px; }
 .table-liste tr.rupture td { color: var(--discret); }
 .etiquette { display: inline-block; margin-left: 8px; font-size: .7rem; font-weight: 600; color: var(--alerte); background: #fff4e0; border-radius: 4px; padding: 1px 6px; white-space: nowrap; }
+.type-piece { display: inline-block; font-size: .72rem; font-weight: 700; color: var(--principal); background: #e8f0f8; border-radius: 4px; padding: 1px 6px; white-space: nowrap; }
 button.loupe { min-height: 40px; width: 44px; padding: 0; font-size: 1.1rem; border-radius: 8px; }
 
 .pave { grid-area: pave; display: flex; flex-direction: column; gap: 8px; padding: 12px 12px 12px 2px; min-height: 0; min-width: 0; overflow-y: auto; overflow-x: hidden; }
