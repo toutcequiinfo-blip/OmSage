@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#1f4e79">
+  <title>CRM Sage 100</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="../borne/icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <button id="btn-retour" class="icone" type="button" aria-label="Retour" hidden>‹</button>
+    <h1 id="titre">CRM</h1>
+    <button id="btn-utilisateur" class="utilisateur" type="button" hidden></button>
+  </header>
+  <div id="bandeau" class="bandeau" hidden></div>
+
+  <!-- Réglages : clé d'API (reprise de la borne si elle est sur le même serveur) -->
+  <main id="ecran-reglages" class="ecran" hidden>
+    <form id="form-reglages" class="carte formulaire">
+      <h2>Réglages</h2>
+      <label>Clé d'API <input name="cle" type="password" required autocomplete="off"></label>
+      <button type="submit" class="principal">Enregistrer</button>
+    </form>
+  </main>
+
+  <!-- Connexion avec le login Sage -->
+  <main id="ecran-connexion" class="ecran" hidden>
+    <form id="form-connexion" class="carte formulaire">
+      <h2>Connexion</h2>
+      <p class="discret">Votre nom d'utilisateur et votre mot de passe Sage.</p>
+      <label>Utilisateur <input name="utilisateur" required autocomplete="username" autocapitalize="none" spellcheck="false"></label>
+      <label>Mot de passe <input name="motDePasse" type="password" autocomplete="current-password"></label>
+      <button id="btn-connexion" type="submit" class="principal">Se connecter</button>
+      <button id="btn-ouvrir-reglages" type="button" class="lien">Réglages</button>
+    </form>
+  </main>
+
+  <!-- Clients : portefeuille du commercial ou recherche dans tous les clients -->
+  <main id="ecran-clients" class="ecran" hidden>
+    <div class="segments" role="tablist">
+      <button id="seg-portefeuille" type="button" class="actif" role="tab">Mon portefeuille</button>
+      <button id="seg-tous" type="button" role="tab">Tous les clients</button>
+    </div>
+    <input id="recherche" class="recherche" type="search" placeholder="Rechercher un client (code, nom, ville)" autocomplete="off">
+    <ul id="liste-clients" class="liste"></ul>
+  </main>
+
+  <!-- Agenda : activités à faire du commercial -->
+  <main id="ecran-agenda" class="ecran" hidden>
+    <div id="agenda"></div>
+  </main>
+
+  <!-- Vue 360° d'un client -->
+  <main id="ecran-client" class="ecran" hidden>
+    <section id="client-entete" class="carte entete-client"></section>
+    <section id="client-indicateurs" class="indicateurs"></section>
+    <div class="actions-client">
+      <button id="btn-nouvelle-activite" type="button" class="principal">＋ Activité</button>
+      <button id="btn-position-client" type="button" class="secondaire">📍 Je suis chez ce client</button>
+    </div>
+    <section class="carte"><h3>À faire</h3><ul id="client-afaire" class="liste compacte"></ul></section>
+    <section class="carte"><h3>Historique des activités</h3><ul id="client-activites" class="liste compacte"></ul></section>
+    <section class="carte"><h3>Articles les plus achetés (12 mois)</h3><div id="client-articles"></div></section>
+    <section class="carte"><h3>Derniers documents</h3><div id="client-documents"></div></section>
+    <section class="carte"><h3>Contacts</h3><ul id="client-contacts" class="liste compacte"></ul></section>
+    <section class="carte"><h3>Adresses de livraison</h3><ul id="client-adresses" class="liste compacte"></ul></section>
+  </main>
+
+  <nav class="navigation" id="navigation" hidden>
+    <button id="nav-clients" type="button" class="actif"><span aria-hidden="true">👥</span>Clients</button>
+    <button id="nav-agenda" type="button"><span aria-hidden="true">📅</span>Agenda <span id="nb-afaire" class="pastille" hidden></span></button>
+  </nav>
+
+  <!-- Saisie d'une activité -->
+  <dialog id="dialogue-activite" class="dialogue">
+    <form id="form-activite" method="dialog" class="formulaire">
+      <h2 id="activite-titre">Nouvelle activité</h2>
+      <div id="activite-types" class="puces"></div>
+      <label>Sujet <input name="sujet" maxlength="200" required></label>
+      <label>Compte rendu <textarea name="compteRendu" rows="4" maxlength="8000"></textarea></label>
+      <div class="deux">
+        <label>Statut
+          <select name="statut"><option value="fait">Fait</option><option value="a-faire">À faire</option><option value="annule">Annulé</option></select>
+        </label>
+        <label>Date <input name="date" type="datetime-local" required></label>
+      </div>
+      <label>Contact <select name="contact"><option value="">—</option></select></label>
+      <label class="case"><input name="gps" type="checkbox" checked> Noter ma position</label>
+      <fieldset class="suite">
+        <legend>Prochaine action (facultatif)</legend>
+        <label>Sujet <input name="suiteSujet" maxlength="200" placeholder="Ex. rappeler pour le devis"></label>
+        <label>Le <input name="suiteDate" type="datetime-local"></label>
+      </fieldset>
+      <div class="boutons">
+        <button id="btn-supprimer-activite" type="button" class="danger" hidden>Supprimer</button>
+        <button type="button" id="btn-annuler-activite" class="secondaire">Annuler</button>
+        <button type="submit" id="btn-enregistrer-activite" class="principal">Enregistrer</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>

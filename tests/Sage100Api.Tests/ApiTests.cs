@@ -403,6 +403,37 @@ public sealed class ApiTests : IDisposable
         Assert.Equal(HttpStatusCode.BadRequest, table.StatusCode);
     }
 
+    [Fact]
+    public async Task Une_activite_crm_s_enregistre_une_fois_et_revient_dans_la_vue_360()
+    {
+        using var usine = Usine(connexion: true);
+        var http = ClientAvecConnexion(usine);
+        var marie = ClientAvecConnexion(usine, await Jeton(http, "MARIE"));
+        var visite = new ActiviteRequest("cisel", "visite", "Présentation collection", "Intéressé par les bagues or", null, null, null, null, null, null, -18.91, 47.53);
+        var relance = new ActiviteRequest("CISEL", "appel", "Rappeler pour le devis", null, "a-faire", DateTime.UtcNow.AddDays(3), null, null, null, null, null, null);
+
+        var sans = await http.PutAsJsonAsync("/api/v1/crm/activites/a1", visite);
+        var invalide = await marie.PutAsJsonAsync("/api/v1/crm/activites/a2", visite with { Type = "dejeuner" });
+        await marie.PutAsJsonAsync("/api/v1/crm/activites/a1", visite);
+        var rejouee = await (await marie.PutAsJsonAsync("/api/v1/crm/activites/a1", visite)).Content.ReadFromJsonAsync<JsonElement>();
+        await marie.PutAsJsonAsync("/api/v1/crm/activites/a3", relance);
+        var synthese = await marie.GetFromJsonAsync<JsonElement>("/api/v1/crm/clients/CISEL/synthese");
+        var portefeuille = await marie.GetFromJsonAsync<JsonElement>("/api/v1/crm/portefeuille");
+
+        Assert.Equal(HttpStatusCode.Unauthorized, sans.StatusCode);
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, invalide.StatusCode);
+        Assert.Equal("fait", rejouee.GetProperty("statut").GetString());
+        Assert.Equal(3, rejouee.GetProperty("collaborateur").GetInt32()); // collaborateur de MARIE
+        Assert.Equal("MARIE", rejouee.GetProperty("utilisateur").GetString());
+        Assert.Equal(1, synthese.GetProperty("activitesRecentes").GetArrayLength()); // pas de doublon
+        Assert.Equal("CISEL", synthese.GetProperty("activitesRecentes")[0].GetProperty("client").GetString());
+        Assert.Equal("Rappeler pour le devis", synthese.GetProperty("prochainesActions")[0].GetProperty("sujet").GetString());
+        Assert.Equal(12000m, synthese.GetProperty("indicateurs").GetProperty("caDouzeMois").GetDecimal());
+        Assert.Equal(2, portefeuille.GetArrayLength());
+        Assert.NotEqual(JsonValueKind.Null, portefeuille[0].GetProperty("derniereActivite").ValueKind); // CISEL a une visite
+        Assert.Equal(JsonValueKind.Null, portefeuille[1].GetProperty("derniereActivite").ValueKind);
+    }
+
     public void Dispose()
     {
         _http.Dispose();
@@ -477,6 +508,10 @@ public sealed class ApiTests : IDisposable
             [new ALivrer { Type = "commande", Piece = "BC00042", Client = "CISEL", AdresseLivraison = 7 }, new ALivrer { Type = "commande", Piece = "BC00043", Client = "CISEL" }]);
         public Task<IReadOnlyList<Echeance>> Echeances(string? client) => Task.FromResult<IReadOnlyList<Echeance>>([]);
         public Task<IReadOnlyList<Modification>?> Modifications(string table, DateTime depuis, int taille) => Task.FromResult<IReadOnlyList<Modification>?>([]);
+        public Task<IndicateursClient> Indicateurs(string client, DateTime aujourdhui) => Task.FromResult(new IndicateursClient { CaDouzeMois = 12000m });
+        public Task<IReadOnlyList<ClientPortefeuille>> Portefeuille(int collaborateur) => Task.FromResult<IReadOnlyList<ClientPortefeuille>>(collaborateur == 3
+            ? [new ClientPortefeuille { Numero = "CISEL", Intitule = "Ciselure" }, new ClientPortefeuille { Numero = "BAGUES", Intitule = "Bagues & Co" }]
+            : []);
     }
 
     sealed class FaussesLectures : ILecturesSage

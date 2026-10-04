@@ -1,0 +1,11 @@
+{
+  "name": "CRM Sage 100",
+  "short_name": "CRM",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#f3f5f8",
+  "theme_color": "#1f4e79",
+  "icons": [{ "src": "../borne/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
+}
