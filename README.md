@@ -25,7 +25,9 @@ Borne / applications ──HTTPS + X-Api-Key──► Sage100Api (.NET 8, 64 bit
 **Règles de base :**
 - On **n'écrit jamais dans Sage en SQL**. La loi anti-fraude est activée, et une écriture SQL corromprait la base (Structure des bases p.440). Toutes les écritures passent par les Objets Métiers.
 - **Double barrière anti-doublon** : le journal de l'API d'abord, puis une vérification dans Sage. Pour une commande, le worker cherche `DO_RefExterne`. Pour un encaissement, il cherche l'empreinte `BRN…` dans le libellé de l'acompte.
-- **Un encaissement est un acompte sur le bon de commande.** Ce choix a été validé par le POC du 29/09/2026, loi anti-fraude activée : Sage génère une facture d'acompte.
+- **Un encaissement sur un bon de commande ou de livraison est un acompte.** Ce choix a été validé par le POC du 29/09/2026, loi anti-fraude activée : Sage génère une facture d'acompte.
+- **Un encaissement sur une facture est un règlement client**, imputé sur l'échéance de la facture. Loi anti-fraude activée, Sage n'impute qu'une facture validée : sinon le règlement reste à lettrer dans Sage. Le journal est celui de `journauxParMode`, sinon celui du dernier règlement client saisi avec ce mode. L'empreinte `BRN…` est dans le libellé du règlement.
+- **Bon de livraison et facture d'un article suivi par lot ou série** : le worker prend les lots non épuisés du dépôt, du plus ancien (péremption) au plus récent, une ligne par lot.
 
 ## Routes (v1)
 
@@ -44,7 +46,7 @@ Borne / applications ──HTTPS + X-Api-Key──► Sage100Api (.NET 8, 64 bit
 | GET | `/api/v1/tarifs?client=&article=&gamme1=&conditionnement=&quantite=` | Prix qu'aura une ligne pour ce client : tarif client, sinon catégorie tarifaire, gamme, conditionnement, remises. Pour vérifier les tarifs dans Swagger. |
 | POST | `/api/v1/commandes` | Crée un bon de commande, un bon de livraison ou une facture (`typeDocument`), dans la souche et le dépôt demandés. **Idempotent** sur `idExterne` : 201 à la création, 200 si déjà reçu. |
 | GET | `/api/v1/commandes/{idExterne}` | Pièce Sage d'une commande |
-| POST | `/api/v1/commandes/{idExterne}/encaissements` | Encaissement, enregistré comme acompte. Idempotent sur son propre `idExterne`. |
+| POST | `/api/v1/commandes/{idExterne}/encaissements` | Encaissement : acompte sur un bon de commande ou de livraison, règlement client sur une facture. Idempotent sur son propre `idExterne`. |
 | GET | `/api/v1/commandes-ouvertes?recherche=&taille=` | Bons de commande non clôturés avec un reste à payer (total TTC moins acomptes) et leur net à payer Sage, les plus récents d'abord |
 | GET | `/api/v1/commandes-ouvertes/{piece}` | Un bon de commande et ses lignes (article, désignation, gamme, quantité, prix), pour la loupe de la borne |
 | POST | `/api/v1/commandes/piece/{piece}/encaissements` | Encaissement d'un bon de commande désigné par sa pièce Sage (saisi dans Sage ou par un vendeur). Idempotent sur `idExterne`. |
@@ -274,7 +276,7 @@ Ce qui est installé dans `C:\Sage100Api` :
 dotnet test tests/Sage100Api.Tests
 ```
 
-50 tests couvrent les règles de prix (tarif client, catégorie tarifaire, gammes, conditionnements, remises et tranches), les prix envoyés au worker, le type de pièce, la souche et le dépôt, le stock par dépôt et par conditionnement, la balance âgée, les positions GPS, les routes des documents, le détail d'un bon de commande, le stock par valeur de gamme, l'encaissement par numéro de pièce, la clé d'API, la connexion des utilisateurs (jeton, collaborateur, caissier, blocage), l'accès à l'application borne, la validation (dont les gammes), le contrôle du stock, le catalogue (une partie illisible y est signalée sans le bloquer), les doublons de commandes et d'encaissements, et la conversion des erreurs Sage et du worker en codes HTTP. Ils tournent sans Sage.
+52 tests couvrent les règles de prix (tarif client, catégorie tarifaire, gammes, conditionnements, remises et tranches), les prix envoyés au worker, le type de pièce, la souche et le dépôt, le stock par dépôt et par conditionnement, la balance âgée, les positions GPS, les routes des documents, le détail d'un bon de commande, le stock par valeur de gamme, l'encaissement par numéro de pièce, la clé d'API, la connexion des utilisateurs (jeton, collaborateur, caissier, blocage), l'accès à l'application borne, la validation (dont les gammes), le contrôle du stock, le catalogue (une partie illisible y est signalée sans le bloquer), les doublons de commandes et d'encaissements (une opération interrompue peut être renvoyée), et la conversion des erreurs Sage et du worker en codes HTTP. Ils tournent sans Sage.
 
 ## Reste à faire
 

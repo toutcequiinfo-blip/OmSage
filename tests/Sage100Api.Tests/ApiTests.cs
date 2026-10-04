@@ -6,7 +6,9 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Sage100Api.Contracts;
+using Microsoft.Extensions.Options;
 using Sage100Api.Extensions;
+using Sage100Api.Journal;
 using Sage100Api.Lectures;
 using Sage100Api.Worker;
 using Xunit;
@@ -115,6 +117,35 @@ public sealed class ApiTests : IDisposable
         var r = await _http.PostAsJsonAsync("/api/v1/commandes", c);
         Assert.Equal(HttpStatusCode.UnprocessableEntity, r.StatusCode);
         Assert.Equal(0, _worker.Appels(Operations.CreerCommande));
+    }
+
+    [Fact]
+    public async Task Une_erreur_avant_le_worker_ne_bloque_pas_les_renvois()
+    {
+        var c = Commande("BORNE1-000090");
+        _tarifs.Panne = true;
+        try { await _http.PostAsJsonAsync("/api/v1/commandes", c); } catch (Exception) { /* erreur 500 ou exception du serveur de test */ }
+        _tarifs.Panne = false;
+        var r = await _http.PostAsJsonAsync("/api/v1/commandes", c);
+        Assert.Equal(HttpStatusCode.Created, r.StatusCode);
+        Assert.Equal(1, _worker.Appels(Operations.CreerCommande));
+    }
+
+    [Fact]
+    public void Une_operation_en_cours_depuis_longtemps_peut_repartir()
+    {
+        var j = new JournalOperations(Options.Create(new SageOptions { CheminJournal = Path.Combine(_dossier, "abandon.db") }));
+        Assert.Null(j.Reserver("commande:X", "commande", "borne"));
+        Assert.NotNull(j.Reserver("commande:X", "commande", "borne")); // en cours : refusée
+        using (var cnx = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={Path.Combine(_dossier, "abandon.db")}"))
+        {
+            cnx.Open();
+            using var cmd = cnx.CreateCommand();
+            cmd.CommandText = "UPDATE operations SET maj_le = $t";
+            cmd.Parameters.AddWithValue("$t", DateTime.UtcNow.AddMinutes(-10).ToString("O"));
+            cmd.ExecuteNonQuery();
+        }
+        Assert.Null(j.Reserver("commande:X", "commande", "borne"));
     }
 
     [Fact]

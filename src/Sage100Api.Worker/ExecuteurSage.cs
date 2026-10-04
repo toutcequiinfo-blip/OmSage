@@ -2,6 +2,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Data.SqlClient;
+using System.Linq;
 using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
@@ -224,6 +225,62 @@ namespace Sage100Api.Worker
             return pm.AddArticleDoubleGamme(e1, e2, l.Quantite);
         }
 
+        static bool SuiviParLot(IBOArticle3 article) =>
+            article.AR_SuiviStock == SuiviStockType.SuiviStockTypeLot || article.AR_SuiviStock == SuiviStockType.SuiviStockTypeSerie;
+
+        /// <summary>
+        /// Bon de livraison ou facture d'un article suivi par lot ou par numéro de série : Sage exige le lot sur la ligne qui
+        /// sort le stock (sinon « L'état du stock ne permet pas de créer la ligne », code 2881). Les lots non épuisés du dépôt
+        /// de la ligne sont pris du plus ancien (péremption, sinon ordre de Sage) au plus récent, une ligne par lot ;
+        /// un numéro de série vaut une unité. SetDefaultLot reprend l'article : le tarif est appliqué ensuite.
+        /// </summary>
+        static List<IBODocumentVenteLigne3> AffecterLots(IPMDocument pm, IBODocumentVenteLigne3 ligne, IBOArticle3 article, LigneCommande l, string idExterne)
+        {
+            if (!string.IsNullOrEmpty(l.Gamme1) || !string.IsNullOrEmpty(l.Conditionnement))
+                throw new ErreurMetier(CodesErreur.SageMetier,
+                    $"L'article {l.Article} est suivi par lot ou série : sur un bon de livraison ou une facture, la borne ne gère pas encore sa gamme ou son conditionnement. Saisissez-le en bon de commande.");
+            var depot = ligne.Depot;
+            if (depot == null)
+                throw new ErreurMetier(CodesErreur.SageMetier, $"Article {l.Article} suivi par lot : aucun dépôt sur la ligne.");
+
+            var lots = new List<(IBOArticleDepotLot Lot, double Dispo)>();
+            var depots = (IBOArticleDepotFactory)article.FactoryArticleDepot;
+            if (depots.ExistDepot(depot))
+            {
+                var artDepot = depots.ReadDepot(depot);
+                foreach (IBOArticleDepotLot lot in ((IBOArticleDepotLotFactory)artDepot.FactoryArticleDepotLot).QueryNonEpuise())
+                {
+                    var dispo = lot.StockReel() - lot.QteReserved;
+                    if (dispo > 0.000001) lots.Add((lot, dispo));
+                }
+            }
+            // Ordre de Sage conservé à péremption égale (tri stable) ; un lot sans péremption passe après ceux qui en ont une.
+            var ordonnes = lots.Select((x, i) => (x, i))
+                .OrderBy(t => t.x.Lot.DatePeremption.Year < 1900 ? DateTime.MaxValue : t.x.Lot.DatePeremption).ThenBy(t => t.i)
+                .Select(t => t.x).ToList();
+
+            var serie = article.AR_SuiviStock == SuiviStockType.SuiviStockTypeSerie;
+            var reste = ligne.DL_Qte;
+            var total = 0d;
+            foreach (var x in ordonnes) total += serie ? 1 : x.Dispo;
+            if (total + 0.000001 < reste)
+                throw new ErreurMetier(CodesErreur.SageMetier,
+                    $"Stock insuffisant en {(serie ? "numéros de série" : "lots")} pour {l.Article} dans le dépôt {depot.DE_Intitule} : {total} disponible(s), {reste} demandé(s).");
+
+            var resultat = new List<IBODocumentVenteLigne3>();
+            foreach (var x in ordonnes)
+            {
+                if (reste <= 0.000001) break;
+                var qte = serie ? 1 : Math.Min(reste, x.Dispo);
+                var cible = resultat.Count == 0 ? ligne : (IBODocumentVenteLigne3)pm.AddArticle(article, qte);
+                cible.SetDefaultLot(x.Lot, qte);
+                resultat.Add(cible);
+                reste -= qte;
+                Journal(idExterne, $"{l.Article} : {qte} pris dans le {(serie ? "numéro de série" : "lot")} {x.Lot.NoSerie} (dépôt {depot.DE_Intitule}).");
+            }
+            return resultat;
+        }
+
         static string Conditionnements(IBOArticleCondFactory f)
         {
             var valeurs = new List<string>();
@@ -325,15 +382,26 @@ namespace Sage100Api.Worker
             entete.DO_Ref = Tronquer(string.IsNullOrEmpty(c.Reference) ? c.IdExterne : c.Reference!, Validation.LongueurReference);
             AffecterCollaborateur(entete, demande.Auteur, c.IdExterne);
 
+            // Lignes du processus dans l'ordre (un article suivi en lot peut en occuper plusieurs) : pour nommer l'article
+            // dans les erreurs de Sage, qui ne donnent que l'indice de la ligne.
+            var libelles = new List<string>();
+            var sortieStock = type != TypesPiece.Commande;
             for (int i = 0; i < c.Lignes.Count; i++)
             {
-                var ligne = (IBODocumentVenteLigne3)AjouterLigne(pm, cial.FactoryArticle.ReadReference(c.Lignes[i].Article), c.Lignes[i]);
-                ligne.DL_RefExterne = Tronquer($"{c.IdExterne}-{i + 1}", Validation.LongueurIdExterne);
-                AppliquerTarif(ligne, c.Lignes[i], c.IdExterne);
+                var l = c.Lignes[i];
+                var article = cial.FactoryArticle.ReadReference(l.Article);
+                var ligne = (IBODocumentVenteLigne3)AjouterLigne(pm, article, l);
+                var lignes = sortieStock && SuiviParLot(article) ? AffecterLots(pm, ligne, article, l, c.IdExterne) : new List<IBODocumentVenteLigne3> { ligne };
+                foreach (var x in lignes)
+                {
+                    x.DL_RefExterne = Tronquer($"{c.IdExterne}-{i + 1}", Validation.LongueurIdExterne);
+                    AppliquerTarif(x, l, c.IdExterne);
+                    libelles.Add($"{l.Article}{(x.Depot != null ? ", dépôt " + x.Depot.DE_Intitule : "")}{(string.IsNullOrEmpty(x.LS_NoSerie) ? "" : ", lot " + x.LS_NoSerie)}");
+                }
             }
 
             if (!pm.CanProcess)
-                throw new ErreurMetier(CodesErreur.SageMetier, Erreurs(pm.Errors));
+                throw new ErreurMetier(CodesErreur.SageMetier, Erreurs(pm.Errors, libelles));
             pm.Process();
 
             var piece = (IBODocumentVente3)pm.DocumentResult;
@@ -426,7 +494,7 @@ namespace Sage100Api.Worker
         }
 
         // ---------- Encaissement = acompte sur la pièce (validé par le POC sur bon de commande, loi anti-fraude activée) ----------
-        // Pièce créée par la borne en bon de livraison ou en facture : l'acompte est posé sur cette pièce.
+        // Bon de livraison : acompte sur la pièce, comme un bon de commande. Facture : règlement client (ReglerFacture).
 
         EncaissementResult CreerEncaissement(EncaissementCommandeRequest r)
         {
@@ -437,6 +505,7 @@ namespace Sage100Api.Worker
                 throw new ErreurMetier(CodesErreur.Introuvable, $"Pièce introuvable : {r.PieceCommande}");
             var bc = cial.FactoryDocumentVente.ReadPiece(TypeOm(trouvee.Value.Type), r.PieceCommande);
             bc.Refresh(); // le cache OM peut être périmé si Sage a modifié la pièce (manuel OM p.41)
+            if (trouvee.Value.Type >= 6) return ReglerFacture(bc, r);
 
             // Seconde barrière anti-doublon (la première est le journal de l'API) : le libellé de l'acompte porte
             // une empreinte courte et stable de l'identifiant externe.
@@ -461,7 +530,91 @@ namespace Sage100Api.Worker
             if (journal != null) ChangerJournal(ac, journal, e.IdExterne);
 
             Console.WriteLine($"Encaissement {e.IdExterne} ({e.Mode} {e.Montant}) -> acompte sur {r.PieceCommande}{(r.Auteur != null ? " par " + r.Auteur.Utilisateur : "")}");
-            return new EncaissementResult { IdExterne = e.IdExterne, PieceCommande = r.PieceCommande, Montant = e.Montant };
+            return new EncaissementResult { IdExterne = e.IdExterne, PieceCommande = r.PieceCommande, Montant = e.Montant, Impute = true };
+        }
+
+        // ---------- Facture : règlement client (pas d'acompte), imputé sur l'échéance quand Sage l'accepte ----------
+
+        /// <summary>
+        /// Une facture se règle par un règlement client, comme dans Sage (Règlements clients), pas par un acompte.
+        /// Le règlement est créé puis imputé sur les échéances de la facture (IPMReglerEcheances, manuel OM p.102).
+        /// Loi anti-fraude activée : Sage n'impute qu'une facture validée (manuel OM p.445) ; sinon le règlement reste
+        /// à lettrer dans Sage, la vente n'est pas bloquée.
+        /// </summary>
+        EncaissementResult ReglerFacture(IBODocumentVente3 facture, EncaissementCommandeRequest r)
+        {
+            var e = r.Encaissement;
+            var cial = _cial!;
+            var client = facture.TiersPayeur;
+            var marque = Marque(e.IdExterne);
+            // Seconde barrière anti-doublon : un règlement de ce client portant l'empreinte de l'identifiant externe.
+            if (MontantRegle(client.CT_Num, marque) is double deja)
+                return new EncaissementResult { IdExterne = e.IdExterne, PieceCommande = r.PieceCommande, Montant = deja, DejaExistant = true, Nature = "reglement" };
+
+            if (!_cpta!.FactoryReglement.ExistIntitule(e.Mode))
+                throw new ErreurMetier(CodesErreur.Introuvable, $"Mode de règlement inconnu dans Sage : {e.Mode}");
+            var journal = JournalDuMode(e.Mode) ?? JournalHabituel(e.Mode)
+                ?? throw new ErreurMetier(CodesErreur.SageMetier,
+                    $"Aucun journal de trésorerie connu pour le mode {e.Mode} : indiquez-le dans worker.json (journauxParMode).");
+
+            var rg = (IBODocumentReglement)cial.FactoryDocumentReglement.Create();
+            rg.TiersPayeur = client;
+            rg.RG_Date = DateTime.Today;
+            rg.RG_Reference = Tronquer(r.PieceCommande, 8);
+            rg.RG_Libelle = Tronquer($"{marque} {e.ReferencePaiement}".TrimEnd(), 35);
+            rg.RG_Montant = e.Montant;
+            Ecrire(rg, "Reglement", _cpta.FactoryReglement.ReadIntitule(e.Mode)); // IPBReglement : affecté par IDispatch comme sur l'acompte
+            rg.Journal = journal;
+            rg.CompteG = client.CompteGPrinc;
+            rg.WriteDefault();
+
+            var impute = false;
+            try
+            {
+                var regler = cial.CreateProcess_ReglerEcheances();
+                regler.Reglement = rg;
+                foreach (IBODocumentEcheance3 ech in facture.FactoryDocumentEcheance.List) regler.AddDocumentEcheance(ech);
+                if (regler.CanProcess) { regler.Process(); impute = true; }
+                else Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] Encaissement {e.IdExterne} : règlement à lettrer dans Sage ({Erreurs(regler.Errors)}).");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] Encaissement {e.IdExterne} : règlement à lettrer dans Sage (0x{ex.HResult:X8}) : {ex.Message}");
+            }
+
+            Console.WriteLine($"Encaissement {e.IdExterne} ({e.Mode} {e.Montant}) -> règlement client {(impute ? "imputé sur" : "à lettrer avec")} {r.PieceCommande}" +
+                $"{(r.Auteur != null ? " par " + r.Auteur.Utilisateur : "")}");
+            return new EncaissementResult { IdExterne = e.IdExterne, PieceCommande = r.PieceCommande, Montant = e.Montant, Nature = "reglement", Impute = impute };
+        }
+
+        /// <summary>Montant d'un règlement client déjà créé avec cette empreinte, ou null.</summary>
+        double? MontantRegle(string client, string marque)
+        {
+            using (var cnx = new SqlConnection(_config.ConnexionSql()))
+            using (var cmd = new SqlCommand("SELECT TOP 1 RG_Montant FROM F_CREGLEMENT WHERE RG_Type = 0 AND CT_NumPayeur = @c AND RG_Libelle LIKE @m", cnx))
+            {
+                cmd.Parameters.AddWithValue("@c", client);
+                cmd.Parameters.AddWithValue("@m", marque + "%");
+                cnx.Open();
+                var v = cmd.ExecuteScalar();
+                return v == null || v is DBNull ? (double?)null : Convert.ToDouble(v);
+            }
+        }
+
+        /// <summary>Journal du dernier règlement client saisi avec ce mode (celui que Sage propose d'habitude), ou null.</summary>
+        IBOJournal3? JournalHabituel(string mode)
+        {
+            string? code;
+            using (var cnx = new SqlConnection(_config.ConnexionSql()))
+            using (var cmd = new SqlCommand(
+                "SELECT TOP 1 r.JO_Num FROM F_CREGLEMENT r JOIN P_REGLEMENT p ON p.cbIndice = r.N_Reglement " +
+                "WHERE r.RG_Type = 0 AND p.R_Intitule = @m AND r.JO_Num <> '' ORDER BY r.RG_No DESC", cnx))
+            {
+                cmd.Parameters.AddWithValue("@m", mode);
+                cnx.Open();
+                code = (cmd.ExecuteScalar() as string)?.Trim();
+            }
+            return !string.IsNullOrEmpty(code) && _cpta!.FactoryJournal.ExistNumero(code) ? _cpta.FactoryJournal.ReadNumero(code) : null;
         }
 
         // ---------- Journal par mode de règlement (worker.json : journauxParMode) ----------
@@ -481,7 +634,7 @@ namespace Sage100Api.Worker
         /// <summary>
         /// L'acompte n'a pas de journal : Sage le donne au règlement qu'il crée (journal par défaut du mode).
         /// On corrige ce règlement, modifiable tant qu'il n'est pas comptabilisé (manuel OM, IBODocumentReglement).
-        /// Le compte général suit le journal de trésorerie.
+        /// Le compte général du règlement reste celui du client (manuel OM p.102) : seul le journal change.
         /// </summary>
         static void ChangerJournal(IBODocumentAcompte3 ac, IBOJournal3 journal, string idExterne)
         {
@@ -495,7 +648,6 @@ namespace Sage100Api.Worker
                 var rg = ac.DocumentReglement;
                 if (rg.Journal != null && rg.Journal.JO_Num == journal.JO_Num) return;
                 rg.Journal = journal;
-                if (journal.CompteG != null) rg.CompteG = journal.CompteG;
                 rg.Write();
             }
             catch (Exception ex)
@@ -524,13 +676,15 @@ namespace Sage100Api.Worker
                 ? r.Donnees.Value.Deserialize<T>(WorkerProtocol.Json) ?? throw new ErreurMetier(CodesErreur.Technique, "Données vides.")
                 : throw new ErreurMetier(CodesErreur.Technique, "Données manquantes.");
 
-        static string Erreurs(IFailInfoCol erreurs)
+        /// <summary>Erreurs d'un processus ; libelles (lignes du document dans l'ordre) nomme l'article de la ligne en faute.</summary>
+        static string Erreurs(IFailInfoCol erreurs, List<string>? libelles = null)
         {
             var messages = new List<string>();
             for (int i = 1; i <= erreurs.Count; i++)
             {
                 IFailInfo f = erreurs[i];
-                messages.Add($"{f.Text} (code {f.ErrorCode}, indice {f.Indice})");
+                var ligne = libelles != null && f.Indice >= 1 && f.Indice <= libelles.Count ? $"Ligne {f.Indice} ({libelles[f.Indice - 1]}) : " : "";
+                messages.Add($"{ligne}{f.Text} (code {f.ErrorCode}, indice {f.Indice})");
             }
             return messages.Count == 0 ? "Sage a refusé le document sans préciser d'erreur." : string.Join(" ; ", messages);
         }
