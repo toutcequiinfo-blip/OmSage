@@ -1157,9 +1157,14 @@ async function enregistrerReglages(ev) {
 
 async function chargerCatalogue(forcer = false) {
   try {
-    if (forcer || connexion !== "hors-ligne") catalogue = await rechargerCatalogue();
+    if (forcer || connexion !== "hors-ligne") {
+      catalogue = await rechargerCatalogue();
+      // Partie illisible côté serveur (tarifs, souches, dépôts...) : la borne marche, mais sans elle.
+      if (catalogue.avertissements?.length) bandeau(`Catalogue incomplet : ${catalogue.avertissements.join(" ; ")}`, "erreur");
+    }
   } catch (e) {
-    if (forcer) bandeau(e.message, "erreur");
+    // Sans ce message, la borne travaillerait sans le dire avec l'ancien catalogue (anciens prix, sans tarifs).
+    if (forcer || connexion !== "hors-ligne") bandeau(`${e.message} La borne utilise le dernier catalogue reçu.`, "erreur");
   }
   catalogue ??= await lireCatalogue();
 }

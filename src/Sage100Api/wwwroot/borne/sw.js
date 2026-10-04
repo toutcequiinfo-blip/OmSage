@@ -1,6 +1,6 @@
 // Service worker : garde l'application en cache pour qu'elle s'ouvre même serveur coupé.
 // Les appels /api ne sont jamais mis en cache : les données passent par la file d'envoi (IndexedDB).
-const VERSION = "borne-v11";
+const VERSION = "borne-v12";
 const FICHIERS = ["./", "index.html", "style.css", "app.js", "stockage.js", "synchro.js", "connexion.js", "tarifs.js", "manifest.webmanifest", "icon.svg"];
 
 self.addEventListener("install", (e) => {

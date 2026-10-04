@@ -274,7 +274,7 @@ Ce qui est installé dans `C:\Sage100Api` :
 dotnet test tests/Sage100Api.Tests
 ```
 
-49 tests couvrent les règles de prix (tarif client, catégorie tarifaire, gammes, conditionnements, remises et tranches), les prix envoyés au worker, le type de pièce, la souche et le dépôt, le stock par dépôt et par conditionnement, la balance âgée, les positions GPS, les routes des documents, le détail d'un bon de commande, le stock par valeur de gamme, l'encaissement par numéro de pièce, la clé d'API, la connexion des utilisateurs (jeton, collaborateur, caissier, blocage), l'accès à l'application borne, la validation (dont les gammes), le contrôle du stock, le catalogue, les doublons de commandes et d'encaissements, et la conversion des erreurs Sage et du worker en codes HTTP. Ils tournent sans Sage.
+50 tests couvrent les règles de prix (tarif client, catégorie tarifaire, gammes, conditionnements, remises et tranches), les prix envoyés au worker, le type de pièce, la souche et le dépôt, le stock par dépôt et par conditionnement, la balance âgée, les positions GPS, les routes des documents, le détail d'un bon de commande, le stock par valeur de gamme, l'encaissement par numéro de pièce, la clé d'API, la connexion des utilisateurs (jeton, collaborateur, caissier, blocage), l'accès à l'application borne, la validation (dont les gammes), le contrôle du stock, le catalogue (une partie illisible y est signalée sans le bloquer), les doublons de commandes et d'encaissements, et la conversion des erreurs Sage et du worker en codes HTTP. Ils tournent sans Sage.
 
 ## Reste à faire
 
