@@ -20,8 +20,7 @@ public sealed class Geolocalisation
 
     public Geolocalisation(IOptions<SageOptions> options)
     {
-        var dossier = Path.GetDirectoryName(Path.GetFullPath(options.Value.CheminJournal)) ?? ".";
-        _cnx = new SqliteConnectionStringBuilder { DataSource = Path.Combine(dossier, "sage100api-extensions.db") }.ToString();
+        _cnx = ChaineExtensions(options.Value);
         using var c = Ouvrir();
         using var cmd = c.CreateCommand();
         cmd.CommandText = """
@@ -38,6 +37,13 @@ public sealed class Geolocalisation
             );
             """;
         cmd.ExecuteNonQuery();
+    }
+
+    /// <summary>Base SQLite des extensions (positions GPS, activités CRM), à côté du journal.</summary>
+    public static string ChaineExtensions(SageOptions o)
+    {
+        var dossier = Path.GetDirectoryName(Path.GetFullPath(o.CheminJournal)) ?? ".";
+        return new SqliteConnectionStringBuilder { DataSource = Path.Combine(dossier, "sage100api-extensions.db") }.ToString();
     }
 
     SqliteConnection Ouvrir()

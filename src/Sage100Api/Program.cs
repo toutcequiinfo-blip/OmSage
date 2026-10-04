@@ -31,6 +31,7 @@ builder.Services.Configure<AuthentificationOptions>(builder.Configuration.GetSec
 builder.Services.AddSingleton<ILecturesSage, LecturesSql>();
 builder.Services.AddSingleton<ILecturesErp, LecturesErpSql>();
 builder.Services.AddSingleton<Geolocalisation>();
+builder.Services.AddSingleton<Crm>();
 builder.Services.AddSingleton<IWorkerClient, WorkerClient>();
 builder.Services.AddSingleton<JournalOperations>();
 builder.Services.AddSingleton<ControleStock>();
@@ -214,6 +215,62 @@ v1.MapGet("/modifications", async (ILecturesErp l, string table, DateTime depuis
         : Results.Problem("Cette base Sage n'a pas de colonne cbModification : synchronisation incrémentale impossible.", statusCode: 501);
 }).WithTags("Synchronisation")
   .WithSummary("Codes modifiés dans Sage depuis une date (clients, articles, documents, adresses-livraison, contacts, ecritures), pour qu'une extension ne relise que ce qui a changé");
+
+// ---------- CRM : vue 360° des clients et activités des commerciaux (visites, appels, rendez-vous...) ----------
+var crmApp = v1.MapGroup("/crm").WithTags("CRM");
+
+crmApp.MapGet("/clients/{numero}/synthese", async (ILecturesErp l, Geolocalisation geo, Crm crm, string numero) =>
+{
+    if (await l.FicheClient(numero) is not { } f) return Results.NotFound();
+    var echeances = await l.Echeances(f.Numero);
+    Recouvrement.CalculerRetards(echeances, DateTime.Today);
+    return Results.Ok(new
+    {
+        fiche = f with
+        {
+            Position = geo.Lire("client", f.Numero),
+            AdressesLivraison = f.AdressesLivraison.Select(a => a with { Position = geo.Lire("adresse-livraison", a.Numero.ToString()) }).ToList(),
+        },
+        indicateurs = await l.Indicateurs(f.Numero, DateTime.Today),
+        recouvrement = new
+        {
+            solde = echeances.Sum(e => e.Montant),
+            echu = echeances.Where(e => e.JoursRetard > 0).Sum(e => e.Montant),
+            retardMaxJours = echeances.Select(e => e.JoursRetard).DefaultIfEmpty(0).Max(),
+            derniereRelance = echeances.Max(e => e.DateRelance),
+        },
+        prochainesActions = crm.Lister(new FiltreActivites(f.Numero, null, null, "a-faire", null, null, null, 1, 20)),
+        activitesRecentes = crm.Lister(new FiltreActivites(f.Numero, null, null, "fait", null, null, null, 1, 10)),
+    });
+}).WithSummary("Vue 360° d'un client : fiche, CA 12 mois, articles les plus achetés, commandes et devis en cours, impayés, activités");
+
+crmApp.MapGet("/portefeuille", async (ILecturesErp l, Crm crm, ServiceAuthentification auth, HttpContext http, int? collaborateur) =>
+{
+    var co = collaborateur ?? auth.Lire(http)?.Collaborateur;
+    if (co is null) return Results.BadRequest(new { code = "COLLABORATEUR_REQUIS", message = "Indiquez collaborateur, ou connectez un utilisateur rattaché à un collaborateur Sage." });
+    var dernieres = crm.DernieresActivites();
+    var clients = await l.Portefeuille(co.Value);
+    foreach (var c in clients) c.DerniereActivite = dernieres.TryGetValue(c.Numero, out var d) ? d : null;
+    return Results.Ok(clients);
+}).WithSummary("Clients dont le collaborateur est le représentant, avec la date de la dernière activité. Par défaut : l'utilisateur connecté");
+
+crmApp.MapGet("/activites", (Crm crm, string? client, int? collaborateur, string? utilisateur, string? statut, string? type, DateTime? du, DateTime? au,
+    int page = 1, int taille = 100) =>
+    crm.Lister(new FiltreActivites(client, collaborateur, utilisateur, statut, type, du, au, Math.Max(page, 1), Math.Clamp(taille, 1, 1000))))
+    .WithSummary("Activités filtrées. statut=a-faire : agenda (par date prévue) ; sinon les plus récentes d'abord");
+crmApp.MapGet("/activites/{id}", (Crm crm, string id) => crm.Lire(id) is { } a ? Results.Ok(a) : Results.NotFound());
+crmApp.MapPut("/activites/{id}", (Crm crm, ServiceAuthentification auth, HttpContext http, string id, ActiviteRequest a) =>
+{
+    var u = auth.Lire(http);
+    if (u == null && auth.Options.Active) return Reponses.ConnexionRequise();
+    var erreurs = Crm.Verifier(id, a).ToList();
+    return erreurs.Count > 0 ? Reponses.Invalide(erreurs) : Results.Ok(crm.Enregistrer(id, a, u?.Login, u?.Collaborateur));
+}).WithSummary("Crée ou met à jour une activité (id choisi par l'application, par exemple un GUID : renvoyer la même requête ne crée pas de doublon)");
+crmApp.MapDelete("/activites/{id}", (Crm crm, ServiceAuthentification auth, HttpContext http, string id) =>
+{
+    if (auth.Lire(http) == null && auth.Options.Active) return Reponses.ConnexionRequise();
+    return crm.Supprimer(id) ? Results.NoContent() : Results.NotFound();
+});
 
 // ---------- Écritures (worker Objets Métiers, idempotentes) ----------
 var ecritures = v1.MapGroup("/commandes").WithTags("Commandes et encaissements");

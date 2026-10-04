@@ -176,6 +176,45 @@ public static class TablesSuivies
 
 public sealed record Modification(string Cle, DateTime ModifieLe);
 
+/// <summary>
+/// Chiffres d'un client pour la vue 360° du CRM. CA : factures HT (comptabilisées ou non) des 12 derniers mois glissants,
+/// factures de retour et d'avoir déduites (DO_Provenance 1 et 2).
+/// </summary>
+public sealed record IndicateursClient
+{
+    public decimal CaDouzeMois { get; init; }
+    public decimal CaDouzeMoisPrecedents { get; init; }
+    public int FacturesDouzeMois { get; init; }
+    public DateTime? DerniereFacture { get; init; }
+    public DateTime? DerniereCommande { get; init; }
+    public int CommandesEnCours { get; init; }
+    public decimal MontantCommandesEnCours { get; init; }
+    public int DevisEnCours { get; init; }
+    public decimal MontantDevisEnCours { get; init; }
+    public IReadOnlyList<ArticleAchete> ArticlesLesPlusAchetes { get; init; } = [];
+}
+
+public sealed record ArticleAchete
+{
+    public string Article { get; init; } = "";
+    public string? Designation { get; init; }
+    public decimal Quantite { get; init; }
+    public decimal MontantHT { get; init; }
+}
+
+/// <summary>Client du portefeuille d'un commercial (représentant de la fiche client).</summary>
+public sealed record ClientPortefeuille
+{
+    public string Numero { get; init; } = "";
+    public string? Intitule { get; init; }
+    public string? Ville { get; init; }
+    public string? Telephone { get; init; }
+    public string? Email { get; init; }
+    public bool Sommeil { get; init; }
+    /// <summary>Dernière activité CRM faite (renseignée par l'API depuis la base des extensions).</summary>
+    public DateTime? DerniereActivite { get; set; }
+}
+
 public interface ILecturesErp
 {
     Task<FicheClient?> FicheClient(string numero);
@@ -189,6 +228,9 @@ public interface ILecturesErp
     Task<IReadOnlyList<Echeance>> Echeances(string? client);
     /// <summary>Codes modifiés depuis une date (colonne cbModification des tables Sage SQL). Null si la colonne n'existe pas.</summary>
     Task<IReadOnlyList<Modification>?> Modifications(string table, DateTime depuis, int taille);
+    Task<IndicateursClient> Indicateurs(string client, DateTime aujourdhui);
+    /// <summary>Clients dont le représentant (CO_No de la fiche) est ce collaborateur.</summary>
+    Task<IReadOnlyList<ClientPortefeuille>> Portefeuille(int collaborateur);
 }
 
 public static class TypesDocument
@@ -360,6 +402,45 @@ public sealed class LecturesErpSql(IOptions<SageOptions> options) : ILecturesErp
             "FROM F_ECRITUREC e JOIN F_COMPTET t ON t.CT_Num = e.CT_Num AND t.CT_Type = 0 " +
             "WHERE e.EC_Lettre = 0 AND (@client IS NULL OR e.CT_Num = @client) " +
             "ORDER BY e.CT_Num, " + Date("e.EC_Echeance") + ", e.EC_Date", new { client })).AsList();
+    }
+
+    public async Task<IndicateursClient> Indicateurs(string client, DateTime aujourdhui)
+    {
+        var debut = aujourdhui.Date.AddYears(-1).AddDays(1);
+        var debutPrecedent = debut.AddYears(-1);
+        using var c = Cnx();
+        // Signe : une facture de retour ou d'avoir vient en déduction du CA.
+        const string Signe = "CASE WHEN e.DO_Provenance IN (1, 2) THEN -1 ELSE 1 END";
+        var i = await c.QueryFirstAsync<IndicateursClient>(
+            "SELECT " +
+            $"CAST(ISNULL(SUM(CASE WHEN e.DO_Type IN (6, 7) AND e.DO_Date >= @debut THEN {Signe} * e.DO_TotalHT END), 0) AS decimal(18,2)) AS CaDouzeMois, " +
+            $"CAST(ISNULL(SUM(CASE WHEN e.DO_Type IN (6, 7) AND e.DO_Date >= @debutPrecedent AND e.DO_Date < @debut THEN {Signe} * e.DO_TotalHT END), 0) AS decimal(18,2)) AS CaDouzeMoisPrecedents, " +
+            "COUNT(CASE WHEN e.DO_Type IN (6, 7) AND e.DO_Date >= @debut AND e.DO_Provenance = 0 THEN 1 END) AS FacturesDouzeMois, " +
+            "MAX(CASE WHEN e.DO_Type IN (6, 7) AND e.DO_Provenance = 0 THEN e.DO_Date END) AS DerniereFacture, " +
+            "MAX(CASE WHEN e.DO_Type = 1 THEN e.DO_Date END) AS DerniereCommande, " +
+            "COUNT(CASE WHEN e.DO_Type = 1 AND e.DO_Cloture = 0 THEN 1 END) AS CommandesEnCours, " +
+            "CAST(ISNULL(SUM(CASE WHEN e.DO_Type = 1 AND e.DO_Cloture = 0 THEN e.DO_TotalTTC END), 0) AS decimal(18,2)) AS MontantCommandesEnCours, " +
+            "COUNT(CASE WHEN e.DO_Type = 0 AND e.DO_Cloture = 0 THEN 1 END) AS DevisEnCours, " +
+            "CAST(ISNULL(SUM(CASE WHEN e.DO_Type = 0 AND e.DO_Cloture = 0 THEN e.DO_TotalHT END), 0) AS decimal(18,2)) AS MontantDevisEnCours " +
+            "FROM F_DOCENTETE e WHERE e.DO_Domaine = 0 AND e.DO_Tiers = @client AND e.DO_Type IN (0, 1, 6, 7)",
+            new { client, debut, debutPrecedent });
+        var articles = await c.QueryAsync<ArticleAchete>(
+            "SELECT TOP 10 l.AR_Ref AS Article, MAX(l.DL_Design) AS Designation, " +
+            $"CAST(SUM({Signe} * l.DL_Qte) AS decimal(18,3)) AS Quantite, CAST(SUM({Signe} * l.DL_MontantHT) AS decimal(18,2)) AS MontantHT " +
+            "FROM F_DOCLIGNE l JOIN F_DOCENTETE e ON e.DO_Domaine = l.DO_Domaine AND e.DO_Type = l.DO_Type AND e.DO_Piece = l.DO_Piece " +
+            "WHERE l.DO_Domaine = 0 AND l.DO_Type IN (6, 7) AND e.DO_Tiers = @client AND e.DO_Date >= @debut AND l.AR_Ref <> '' " +
+            "GROUP BY l.AR_Ref ORDER BY SUM(" + Signe + " * l.DL_MontantHT) DESC",
+            new { client, debut });
+        return i with { ArticlesLesPlusAchetes = articles.AsList() };
+    }
+
+    public async Task<IReadOnlyList<ClientPortefeuille>> Portefeuille(int collaborateur)
+    {
+        using var c = Cnx();
+        return (await c.QueryAsync<ClientPortefeuille>(
+            "SELECT CT_Num AS Numero, CT_Intitule AS Intitule, NULLIF(CT_Ville, '') AS Ville, NULLIF(CT_Telephone, '') AS Telephone, " +
+            "NULLIF(CT_EMail, '') AS Email, CAST(CT_Sommeil AS bit) AS Sommeil " +
+            "FROM F_COMPTET WHERE CT_Type = 0 AND CO_No = @collaborateur ORDER BY CT_Intitule", new { collaborateur })).AsList();
     }
 
     public async Task<IReadOnlyList<Modification>?> Modifications(string table, DateTime depuis, int taille)

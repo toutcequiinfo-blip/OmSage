@@ -18,6 +18,7 @@ Borne / applications ──HTTPS + X-Api-Key──► Sage100Api (.NET 8, 64 bit
 | `src/Sage100Api.Worker` | Seul processus qui charge les Objets Métiers (DLL 32 bits). Exécute les écritures une par une. |
 | `src/Sage100Api.Contracts` | Objets échangés (commande, encaissement), validation, protocole API ↔ worker |
 | `src/Sage100Api/wwwroot/borne` | Application tablette de la borne (PWA), servie par l'API sur `/borne/` |
+| `src/Sage100Api/wwwroot/crm` | Application téléphone des commerciaux (CRM), servie par l'API sur `/crm/` |
 | `tests/Sage100Api.Tests` | Tests de l'API avec un faux worker (sans Sage) |
 
 **Règles de base :**
@@ -66,8 +67,12 @@ Lectures SQL seules, sauf les positions GPS gardées par l'API. Chaque route est
 | GET | `/api/v1/recouvrement/balance-agee` | Par client : non échu, 1-30, 31-60, 61-90, plus de 90 jours, crédits non affectés |
 | GET / PUT / DELETE | `/api/v1/geolocalisation/{cible}/{cle}` | Position GPS d'un `client` (code), d'une `adresse-livraison` (LI_No) ou d'un `depot`. PUT `{ "latitude", "longitude", "precision", "source" }`, avec un utilisateur connecté si la connexion est active |
 | GET | `/api/v1/modifications?table=&depuis=` | Codes modifiés dans Sage depuis une date (colonne `cbModification`) : clients, articles, documents, adresses-livraison, contacts, ecritures |
+| GET | `/api/v1/crm/clients/{numero}/synthese` | Vue 360° : fiche, CA HT 12 mois (et 12 mois d'avant), articles les plus achetés, commandes et devis en cours, solde dû, échu, retard, prochaines actions, dernières activités |
+| GET | `/api/v1/crm/portefeuille?collaborateur=` | Clients dont le collaborateur est le représentant, avec la date de la dernière activité. Par défaut : l'utilisateur connecté |
+| GET | `/api/v1/crm/activites?client=&collaborateur=&utilisateur=&statut=&type=&du=&au=` | Activités (visite, appel, rendez-vous, email, note, tache). `statut=a-faire` donne l'agenda, trié par date prévue |
+| GET / PUT / DELETE | `/api/v1/crm/activites/{id}` | Une activité. L'id est choisi par l'application (GUID) : renvoyer le même PUT ne crée pas de doublon. PUT et DELETE demandent un utilisateur connecté si la connexion est active |
 
-Sage n'a pas de champ pour une position GPS, et l'API n'écrit jamais en SQL dans Sage : les positions sont gardées dans `sage100api-extensions.db`, à côté du journal. Sauvegarde ce fichier avec le journal.
+Sage n'a pas de champ pour une position GPS, et l'API n'écrit jamais en SQL dans Sage : les positions et les activités CRM sont gardées dans `sage100api-extensions.db`, à côté du journal. Sauvegarde ce fichier avec le journal.
 
 **Journal des encaissements :** un acompte n'a pas de journal. Sage le donne au règlement qu'il crée : c'est le journal par défaut du mode, par exemple BEU pour Espèces. Pour imposer un journal de trésorerie par mode, renseigne `journauxParMode` dans `worker.json`, par exemple `{ "Espèces": "CAIS", "Carte bancaire": "BQ1" }`, puis redémarre le worker. Un mode absent garde le journal de Sage. Un code de journal inconnu fait refuser l'encaissement avant qu'il soit créé.
 
@@ -174,6 +179,17 @@ L'API sert l'application sur **http://<serveur>:5080/borne/**. Il n'y a rien à 
 - En `http://` depuis la tablette, la file d'envoi fonctionne quand même. En revanche, la page ne peut pas être rouverte si le serveur est coupé.
 - Pour les tests, dans Chrome Android : `chrome://flags`, option « Insecure origins treated as secure », ajouter `http://SQ-SOFT:5080`.
 - La solution définitive est HTTPS : voir « Reste à faire ».
+
+## Application des commerciaux (CRM)
+
+L'API sert l'application sur **https://<serveur>:5443/crm/** (ou http://<serveur>:5080/crm/). Elle est faite pour le téléphone et s'ouvre aussi sur tablette.
+- **Connexion :** la clé d'API, reprise de la borne si elle est réglée sur le même appareil, puis le login et le mot de passe Sage. Le portefeuille est celui du collaborateur rattaché à l'utilisateur Sage (champ « Utilisateur » de la fiche collaborateur, et champ « Représentant » de la fiche client).
+- **Clients :** « Mon portefeuille » avec la date de la dernière activité, ou « Tous les clients » avec recherche.
+- **Fiche client :** appel, e-mail et itinéraire en un geste, CA 12 mois, impayés, commandes et devis en cours, articles les plus achetés, derniers documents, contacts et adresses de livraison.
+- **Activité :** visite, appel, rendez-vous, e-mail, note ou tâche, avec compte rendu, contact et position GPS. Une « prochaine action » crée une tâche dans l'agenda.
+- **Agenda :** les actions à faire, en retard, aujourd'hui et à venir, avec un bouton « Fait ».
+- **« Je suis chez ce client » :** enregistre la position GPS du client (utile ensuite pour les tournées de livraison).
+- Le GPS du téléphone ne fonctionne qu'en **HTTPS**. Cette première version demande une connexion au serveur.
 
 ## Installation sur le serveur (services Windows et HTTPS)
 
