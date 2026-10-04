@@ -475,6 +475,63 @@ public sealed class ApiTests : IDisposable
     }
 
     [Fact]
+    public async Task Le_chargement_et_la_livraison_se_controlent_ligne_par_ligne_avec_les_autres_courses()
+    {
+        using var usine = Usine(connexion: true);
+        var http = ClientAvecConnexion(usine);
+        var paul = ClientAvecConnexion(usine, await Jeton(http, "PAUL"));
+        const string signature = "data:image/png;base64,iVBORw0KGgo=";
+        var creee = await (await paul.PutAsJsonAsync("/api/v1/livraisons/tournees/t1",
+            new TourneeRequest(new DateTime(2026, 10, 5), null, 4, 1, ["BC00042", "BC00043"]))).Content.ReadFromJsonAsync<JsonElement>();
+        var articles = creee.GetProperty("arrets")[0].GetProperty("articles");
+
+        // Dépôt : une bague de moins que commandé
+        var inconnue = await paul.PutAsJsonAsync("/api/v1/livraisons/tournees/t1/chargement",
+            new ChargementRequest([new("BC00042", 9, 1)], "Jean", null));
+        var chargement = await (await paul.PutAsJsonAsync("/api/v1/livraisons/tournees/t1/chargement",
+            new ChargementRequest([new("BC00042", 1, 2), new("bc00042", 3, 2)], "Jean (dépôt)", signature))).Content.ReadFromJsonAsync<JsonElement>();
+        // Client : une chaîne refusée, sans motif puis avec
+        var sansMotif = await paul.PutAsJsonAsync("/api/v1/livraisons/tournees/t1/arrets/BC00042",
+            new CompteRenduArret("livre", null, "M. Rabe", null, null, null, null, [new(1, 1, null), new(3, 2, null)]));
+        var tropLivre = await paul.PutAsJsonAsync("/api/v1/livraisons/tournees/t1/arrets/BC00042",
+            new CompteRenduArret("livre", null, "M. Rabe", null, null, null, null, [new(3, 3, null)]));
+        var partiel = await (await paul.PutAsJsonAsync("/api/v1/livraisons/tournees/t1/arrets/BC00042",
+            new CompteRenduArret("livre", null, "M. Rabe", null, signature, null, null, [new(1, 1, "endommage"), new(3, 2, null)]))).Content.ReadFromJsonAsync<JsonElement>();
+        // Autre course
+        var course = new CourseRequest("recuperer", "Récupérer le chèque de la facture FA00118", "CISEL", null, null, null, null, null, null, null, null);
+        var creeeCourse = await (await paul.PutAsJsonAsync("/api/v1/livraisons/tournees/t1/courses/k1", course)).Content.ReadFromJsonAsync<JsonElement>();
+        var faite = await (await paul.PutAsJsonAsync("/api/v1/livraisons/tournees/t1/courses/k1", course with { Statut = "fait" })).Content.ReadFromJsonAsync<JsonElement>();
+        var lue = await paul.GetFromJsonAsync<JsonElement>("/api/v1/livraisons/tournees/t1");
+        var tableau = await paul.GetFromJsonAsync<JsonElement>("/api/v1/livraisons/tableau-de-bord?du=2026-10-01&au=2026-10-31&livreur=4");
+        var filtre = await paul.GetFromJsonAsync<JsonElement>("/api/v1/livraisons/tableau-de-bord?statut=partiel");
+
+        Assert.Equal(2, articles.GetArrayLength()); // la ligne de commentaire n'est pas à contrôler
+        Assert.Equal(3, articles[1].GetProperty("ligne").GetInt32());
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, inconnue.StatusCode);
+        Assert.Equal(1, chargement.GetProperty("ecarts").GetInt32());
+        Assert.True(chargement.GetProperty("signe").GetBoolean());
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, sansMotif.StatusCode);
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, tropLivre.StatusCode); // 2 bagues chargées seulement
+        Assert.Equal("partiel", partiel.GetProperty("statut").GetString());
+        Assert.Equal("endommage", partiel.GetProperty("articles")[0].GetProperty("motif").GetString());
+        Assert.Equal(2m, partiel.GetProperty("articles")[1].GetProperty("quantiteLivree").GetDecimal());
+        Assert.Equal("a-faire", creeeCourse.GetProperty("statut").GetString());
+        Assert.Equal("fait", faite.GetProperty("statut").GetString());
+        Assert.Equal("PAUL", faite.GetProperty("utilisateur").GetString());
+        Assert.Equal(1, lue.GetProperty("nbCoursesTraitees").GetInt32());
+        Assert.Equal("Jean (dépôt)", lue.GetProperty("chargement").GetProperty("responsable").GetString());
+        Assert.Equal("en-cours", lue.GetProperty("statut").GetString()); // BC00043 reste à livrer
+        var ind = tableau.GetProperty("indicateurs");
+        Assert.Equal(2, ind.GetProperty("arrets").GetInt32());
+        Assert.Equal(1, ind.GetProperty("partiels").GetInt32());
+        Assert.Equal(1, ind.GetProperty("coursesFaites").GetInt32());
+        Assert.Equal(1, ind.GetProperty("ecartsChargement").GetInt32());
+        Assert.Equal(1, ind.GetProperty("lignesNonLivrees").GetInt32());
+        Assert.Equal("endommage", tableau.GetProperty("motifs")[0].GetProperty("cle").GetString());
+        Assert.Equal(1, filtre.GetProperty("arrets").GetArrayLength());
+    }
+
+    [Fact]
     public void L_itineraire_passe_par_le_plus_court_chemin_et_met_les_pieces_sans_gps_a_la_fin()
     {
         // Trois points alignés vers l'est, donnés dans le désordre, départ à l'ouest.
@@ -554,7 +611,11 @@ public sealed class ApiTests : IDisposable
         public Task<DetailDocument?> Document(int type, string piece)
         {
             DernierType = type;
-            return Task.FromResult<DetailDocument?>(new DetailDocument(new EnteteDocument { Type = TypesDocument.Nom(type), Piece = piece }, []));
+            IReadOnlyList<LignePiece> lignes = piece == "BC00042"
+                ? [new("CHORFA", "Chaîne forçat Or", null, null, 2, 1071, 2142, 2570.4m), new(null, "Livrer avant midi", null, null, 0, 0, 0, 0),
+                   new("BAOR01", "Bague Or", "54", null, 3, 2292, 6876, 8251.2m)]
+                : [];
+            return Task.FromResult<DetailDocument?>(new DetailDocument(new EnteteDocument { Type = TypesDocument.Nom(type), Piece = piece }, lignes));
         }
         public Task<IReadOnlyList<ALivrer>> ALivrer(DateTime? jusquAu, int? depot) => Task.FromResult<IReadOnlyList<ALivrer>>(
             [new ALivrer { Type = "commande", Piece = "BC00042", Client = "CISEL", AdresseLivraison = 7 }, new ALivrer { Type = "commande", Piece = "BC00043", Client = "CISEL" }]);

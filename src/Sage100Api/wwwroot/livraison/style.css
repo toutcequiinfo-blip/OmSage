@@ -151,3 +151,29 @@ a.bouton.principal { background: var(--principal); color: #fff; }
 a.bouton[aria-disabled=true] { opacity: .5; pointer-events: none; }
 #form-tournee .deux { grid-template-columns: 1fr 1fr; }
 .formulaire input, .formulaire select { min-width: 0; }
+
+/* ---------- Contrôle des articles, courses ---------- */
+.lien-tableau { margin-top: 14px; background: var(--clair); color: var(--principal); }
+a.bouton.secondaire { background: var(--clair); color: var(--principal); }
+.chargement-etat { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.chargement-etat > div { flex: 1; min-width: 180px; font-size: .9rem; }
+.article-ligne { display: grid; grid-template-columns: 30px 1fr 84px; gap: 4px 10px; align-items: center; padding: 8px 0; border-top: 1px solid #edf0f4; }
+.article-ligne:first-of-type { border-top: 0; }
+.article-ligne input[type=checkbox] { width: 26px; height: 26px; }
+.article-ligne .qte { display: grid; gap: 2px; justify-items: end; font-size: .75rem; color: var(--discret); }
+.article-ligne .qte input { width: 76px; min-height: 40px; text-align: right; font-size: 1rem; padding: 0 8px; border: 1px solid var(--bord); border-radius: 8px; }
+.article-ligne.ecart .qte input { border-color: var(--alerte); background: #fff8ec; }
+.article-ligne select { grid-column: 2 / -1; min-height: 40px; border: 1px solid var(--alerte); border-radius: 8px; padding: 0 8px; background: #fff8ec; }
+.article-ligne .nom { font-size: .92rem; }
+.article-ligne .nom small { display: block; color: var(--discret); font-size: .78rem; }
+.groupe-piece { margin-bottom: 12px; }
+.groupe-piece h3 { display: flex; justify-content: space-between; gap: 8px; }
+.arret .articles { grid-column: 1 / -1; font-size: .82rem; color: var(--discret); border-top: 1px dashed var(--bord); padding-top: 6px; margin-top: 4px; }
+.arret .articles li { display: flex; justify-content: space-between; gap: 8px; }
+.arret .articles ul { list-style: none; margin: 0; padding: 0; }
+.arret .articles .manque { color: var(--erreur); }
+.course { display: grid; grid-template-columns: auto 1fr auto; gap: 2px 10px; align-items: center; cursor: pointer; }
+.course .icone-type { font-size: 1.2rem; }
+.course .texte { color: var(--discret); font-size: .84rem; }
+.courses .secondaire { width: 100%; margin-top: 8px; }
+.etiquette.discret-etiquette { background: #eef0f3; color: var(--discret); }
