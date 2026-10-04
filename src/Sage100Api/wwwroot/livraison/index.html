@@ -49,6 +49,7 @@
       <button id="btn-nouvelle-tournee" type="button" class="principal">＋ Tournée</button>
     </div>
     <ul id="liste-tournees" class="liste"></ul>
+    <a href="tableau.html" class="bouton secondaire lien-tableau">📊 Tableau de bord des livraisons</a>
   </main>
 
   <!-- Préparation d'une tournée -->
@@ -83,11 +84,34 @@
   <!-- Tournée du livreur -->
   <main id="ecran-tournee" class="ecran" hidden>
     <section id="tournee-entete" class="carte"></section>
+    <section id="tournee-chargement" class="carte chargement-etat"></section>
     <div class="actions-client">
       <a id="lien-itineraire" class="bouton principal" target="_blank" rel="noopener">🗺️ Itinéraire</a>
       <button id="btn-modifier-tournee" type="button" class="secondaire">✎ Modifier</button>
     </div>
     <ul id="arrets" class="liste"></ul>
+    <section class="carte courses">
+      <h3>Autres courses <span id="nb-courses" class="discret"></span></h3>
+      <ul id="courses" class="liste compacte"></ul>
+      <button id="btn-nouvelle-course" type="button" class="secondaire">＋ Autre course (livrer ou récupérer)</button>
+    </section>
+  </main>
+
+  <!-- Contrôle du chargement au dépôt -->
+  <main id="ecran-chargement" class="ecran" hidden>
+    <p class="discret">Cochez chaque article reçu du dépôt. Si la quantité n'est pas la bonne, corrigez-la.</p>
+    <div id="chargement-lignes"></div>
+    <section class="carte formulaire">
+      <label>Responsable du dépôt <input id="chargement-responsable" maxlength="100" placeholder="Nom de la personne qui remet la marchandise"></label>
+      <div class="signature-zone">
+        <div class="ligne-titre"><span>Signature du responsable</span><button type="button" id="btn-effacer-signature-chargement" class="lien">Effacer</button></div>
+        <canvas id="signature-chargement" class="signature"></canvas>
+      </div>
+    </section>
+    <div class="barre-bas">
+      <button id="btn-tout-cocher" type="button" class="secondaire">✓ Tout cocher</button>
+      <button id="btn-valider-chargement" type="button" class="principal">Valider le chargement</button>
+    </div>
   </main>
 
   <!-- Compte rendu d'un arrêt -->
@@ -98,8 +122,9 @@
       <div class="segments trois" id="arret-statuts">
         <button type="button" data-statut="livre">Livré</button>
         <button type="button" data-statut="partiel">Partiel</button>
-        <button type="button" data-statut="echec">Échec</button>
+        <button type="button" data-statut="echec">Échec total</button>
       </div>
+      <div id="arret-articles" class="articles-livraison"></div>
       <label id="champ-motif">Motif
         <select name="motif">
           <option value="">—</option>
@@ -108,6 +133,9 @@
           <option value="adresse-introuvable">Adresse introuvable</option>
           <option value="ferme">Établissement fermé</option>
           <option value="manque-marchandise">Marchandise manquante</option>
+          <option value="endommage">Marchandise endommagée</option>
+          <option value="erreur-commande">Erreur de commande</option>
+          <option value="retour">Retour</option>
           <option value="autre">Autre</option>
         </select>
       </label>
@@ -121,6 +149,38 @@
         <button type="button" id="btn-remettre" class="danger" hidden>Remettre à livrer</button>
         <button type="button" id="btn-annuler-arret" class="secondaire">Annuler</button>
         <button type="submit" id="btn-valider-arret" class="principal">Valider</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Autre course : livrer ou récupérer quelque chose hors pièce Sage -->
+  <dialog id="dialogue-course" class="dialogue">
+    <form id="form-course" method="dialog" class="formulaire">
+      <h2 id="course-titre">Autre course</h2>
+      <div id="course-types" class="puces">
+        <button type="button" data-type="livrer">📦 À livrer</button>
+        <button type="button" data-type="recuperer">↩️ À récupérer</button>
+        <button type="button" data-type="autre">📝 Autre</button>
+      </div>
+      <label>Description <textarea name="description" rows="2" maxlength="500" required placeholder="Ex. Récupérer le chèque de la facture FA00118"></textarea></label>
+      <div class="deux">
+        <label>Client (code) <input name="client" maxlength="17" autocapitalize="characters"></label>
+        <label>Téléphone <input name="telephone" type="tel" maxlength="30"></label>
+      </div>
+      <label>Adresse <input name="adresse" maxlength="300"></label>
+      <label>Contact <input name="contact" maxlength="100"></label>
+      <div id="course-statuts" class="puces">
+        <button type="button" data-statut="a-faire">À faire</button>
+        <button type="button" data-statut="en-cours">En cours</button>
+        <button type="button" data-statut="fait">Fait</button>
+        <button type="button" data-statut="reporte">Reporté</button>
+        <button type="button" data-statut="annule">Annulé</button>
+      </div>
+      <label>Commentaire <textarea name="commentaire" rows="2" maxlength="2000"></textarea></label>
+      <div class="boutons">
+        <button type="button" id="btn-supprimer-course" class="danger" hidden>Supprimer</button>
+        <button type="button" id="btn-annuler-course" class="secondaire">Annuler</button>
+        <button type="submit" id="btn-enregistrer-course" class="principal">Enregistrer</button>
       </div>
     </form>
   </dialog>

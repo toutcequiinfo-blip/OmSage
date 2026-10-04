@@ -43,6 +43,8 @@ public sealed record Arret
     public double? LatitudeLivreur { get; init; }
     public double? LongitudeLivreur { get; init; }
     public string? Utilisateur { get; init; }
+    /// <summary>Lignes d'articles de la pièce, avec les quantités chargées au dépôt et livrées chez le client.</summary>
+    public IReadOnlyList<ArticleArret> Articles { get; init; } = [];
 }
 
 public sealed record Tournee
@@ -61,7 +63,12 @@ public sealed record Tournee
     public string? Utilisateur { get; init; }
     public DateTime CreeLe { get; init; }
     public DateTime MajLe { get; init; }
+    public int NbCourses { get; init; }
+    public int NbCoursesTraitees { get; init; }
+    /// <summary>Contrôle du chargement au dépôt, null tant qu'il n'est pas validé.</summary>
+    public Chargement? Chargement { get; init; }
     public IReadOnlyList<Arret> Arrets { get; init; } = [];
+    public IReadOnlyList<Course> Courses { get; init; } = [];
 }
 
 public sealed record TourneeRequest(DateTime Date, string? Nom, int? Livreur, int? Depot, IReadOnlyList<string> Pieces);
@@ -69,17 +76,23 @@ public sealed record TourneeRequest(DateTime Date, string? Nom, int? Livreur, in
 /// <summary>Départ : position du livreur (latitude, longitude) ou dépôt dont la position est enregistrée. retour : revenir au départ.</summary>
 public sealed record OptimisationRequest(IReadOnlyList<string> Pieces, double? Latitude, double? Longitude, int? Depot, bool? Retour);
 
+/// <summary>
+/// Lignes : quantité livrée par ligne d'article (numéro de ligne de la pièce) et motif si elle est inférieure à la quantité chargée.
+/// Avec des lignes, le statut est calculé : tout livré = livre, rien = echec, sinon partiel.
+/// </summary>
 public sealed record CompteRenduArret(string Statut, string? Motif, string? Receptionnaire, string? Commentaire, string? Signature,
-    double? Latitude, double? Longitude);
+    double? Latitude, double? Longitude, IReadOnlyList<LigneLivree>? Lignes = null);
+
+public sealed record LigneLivree(int Ligne, decimal Quantite, string? Motif);
 
 /// <summary>
 /// Tournées de livraison et preuves de livraison (statut, réceptionnaire, signature, heure et position), gardées dans la base des
 /// extensions. Rien n'est écrit dans Sage : le bon de livraison reste fait dans Sage, à partir du bon de commande.
 /// </summary>
-public sealed class Livraison
+public sealed partial class Livraison
 {
     public static readonly string[] Statuts = ["a-livrer", "livre", "partiel", "echec"];
-    public static readonly string[] Motifs = ["absent", "refus", "adresse-introuvable", "ferme", "manque-marchandise", "autre"];
+    public static readonly string[] Motifs = ["absent", "refus", "adresse-introuvable", "ferme", "manque-marchandise", "endommage", "erreur-commande", "retour", "autre"];
     /// <summary>Signature en image PNG (data URL) : 300 Ko au plus.</summary>
     public const int TailleMaxSignature = 300_000;
     readonly string _cnx;
@@ -132,6 +145,7 @@ public sealed class Livraison
             );
             CREATE INDEX IF NOT EXISTS arrets_piece ON arrets (piece);
             """);
+        CreerTablesControle(c);
     }
 
     SqliteConnection Ouvrir()
@@ -161,6 +175,11 @@ public sealed class Livraison
             yield return "signature : image PNG en data URL (data:image/png;base64,...), 300 Ko au plus.";
         if (r.Latitude is < -90 or > 90 || r.Longitude is < -180 or > 180) yield return "Position GPS invalide.";
         if ((r.Latitude is null) != (r.Longitude is null)) yield return "latitude et longitude vont ensemble.";
+        foreach (var l in r.Lignes ?? [])
+        {
+            if (l.Quantite < 0) yield return $"Ligne {l.Ligne} : la quantité livrée ne peut pas être négative.";
+            if (l.Motif != null && !Motifs.Contains(l.Motif)) yield return $"Ligne {l.Ligne} : motif {string.Join(", ", Motifs)}.";
+        }
     }
 
     /// <summary>
@@ -169,7 +188,7 @@ public sealed class Livraison
     /// </summary>
     /// <returns>La tournée, ou les erreurs.</returns>
     public (Tournee? Tournee, IReadOnlyList<string> Erreurs) Enregistrer(string id, TourneeRequest t, IReadOnlyDictionary<string, ALivrer> aLivrer,
-        Func<ALivrer, Position?> position, string? utilisateur)
+        Func<ALivrer, Position?> position, Func<string, IReadOnlyList<LignePiece>> lignes, string? utilisateur)
     {
         var pieces = t.Pieces.Select(p => p.Trim().ToUpperInvariant()).ToList();
         using var c = Ouvrir();
@@ -196,7 +215,8 @@ public sealed class Livraison
             ON CONFLICT (id) DO UPDATE SET date = @date, nom = @nom, livreur = @livreur, depot = @depot, maj_le = @maintenant;
             """, new { id, date = t.Date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), nom = t.Nom, livreur = t.Livreur, depot = t.Depot, utilisateur, maintenant }, tx);
         foreach (var piece in existants.Keys.Except(pieces))
-            c.Execute("DELETE FROM arrets WHERE tournee = @id AND piece = @piece", new { id, piece }, tx);
+            c.Execute("DELETE FROM arrets WHERE tournee = @id AND piece = @piece; DELETE FROM arret_articles WHERE tournee = @id AND piece = @piece;",
+                new { id, piece }, tx);
         for (var i = 0; i < pieces.Count; i++)
         {
             var piece = pieces[i];
@@ -218,6 +238,7 @@ public sealed class Livraison
                 adresse = a.Adresse, complement = a.Complement, cp = a.CodePostal, ville = a.Ville, contact = a.Contact, telephone = a.Telephone,
                 ttc = a.TotalTTC, net = a.NetAPayer, lat = pos?.Latitude, lon = pos?.Longitude,
             }, tx);
+            InsererArticles(c, tx, id, piece, lignes(piece));
         }
         tx.Commit();
         return (Lire(id), []);
@@ -229,7 +250,8 @@ public sealed class Livraison
         using var c = Ouvrir();
         if (c.ExecuteScalar<long>("SELECT COUNT(*) FROM tournees WHERE id = @id", new { id }) == 0) return null;
         if (c.ExecuteScalar<long>("SELECT COUNT(*) FROM arrets WHERE tournee = @id AND statut <> 'a-livrer'", new { id }) > 0) return false;
-        c.Execute("DELETE FROM arrets WHERE tournee = @id; DELETE FROM tournees WHERE id = @id;", new { id });
+        c.Execute("DELETE FROM arret_articles WHERE tournee = @id; DELETE FROM courses WHERE tournee = @id; DELETE FROM chargements WHERE tournee = @id; " +
+            "DELETE FROM arrets WHERE tournee = @id; DELETE FROM tournees WHERE id = @id;", new { id });
         return true;
     }
 
@@ -238,8 +260,10 @@ public sealed class Livraison
         using var c = Ouvrir();
         var t = c.QueryFirstOrDefault<LigneTournee>(SelectTournee + "WHERE t.id = @id GROUP BY t.id", new { id });
         if (t == null) return null;
-        var arrets = c.Query<LigneArret>(SelectArret + "WHERE tournee = @id ORDER BY ordre", new { id }).Select(a => a.Arret()).ToList();
-        return t.Tournee() with { Arrets = arrets };
+        var articles = Articles(c, id);
+        var arrets = c.Query<LigneArret>(SelectArret + "WHERE tournee = @id ORDER BY ordre", new { id })
+            .Select(a => a.Arret() with { Articles = articles.GetValueOrDefault(a.Piece) ?? [] }).ToList();
+        return t.Tournee() with { Arrets = arrets, Courses = Courses(c, id), Chargement = LireChargement(c, id) };
     }
 
     /// <summary>Tournées (sans le détail des arrêts), les plus récentes d'abord.</summary>
@@ -258,6 +282,10 @@ public sealed class Livraison
     {
         piece = piece.Trim().ToUpperInvariant();
         using var c = Ouvrir();
+        if (r.Statut == "a-livrer")
+            c.Execute("UPDATE arret_articles SET qte_livree = NULL, motif = NULL WHERE tournee = @tournee AND piece = @piece", new { tournee, piece });
+        else if (r.Lignes is { Count: > 0 })
+            r = r with { Statut = EnregistrerLignesLivrees(c, tournee, piece, r.Lignes), Motif = r.Motif ?? r.Lignes.FirstOrDefault(l => l.Motif != null)?.Motif };
         var n = c.Execute("""
             UPDATE arrets SET statut = @statut, motif = @motif, receptionnaire = @receptionnaire, commentaire = @commentaire,
               signature = CASE WHEN @statut IN ('a-livrer', 'echec') THEN NULL ELSE COALESCE(@signature, signature) END,
@@ -270,7 +298,8 @@ public sealed class Livraison
         });
         if (n == 0) return null;
         c.Execute("UPDATE tournees SET maj_le = @m WHERE id = @tournee", new { m = Texte(DateTime.UtcNow), tournee });
-        return c.Query<LigneArret>(SelectArret + "WHERE tournee = @tournee AND piece = @piece", new { tournee, piece }).Single().Arret();
+        return c.Query<LigneArret>(SelectArret + "WHERE tournee = @tournee AND piece = @piece", new { tournee, piece }).Single().Arret()
+            with { Articles = Articles(c, tournee).GetValueOrDefault(piece) ?? [] };
     }
 
     public string? Signature(string tournee, string piece)
@@ -291,7 +320,10 @@ public sealed class Livraison
     const string SelectTournee =
         "SELECT t.id AS Id, t.date AS Date, t.nom AS Nom, t.livreur AS Livreur, t.depot AS Depot, t.utilisateur AS Utilisateur, t.cree_le AS CreeLe, " +
         "t.maj_le AS MajLe, COUNT(a.piece) AS NbArrets, COALESCE(SUM(CASE WHEN a.statut <> 'a-livrer' THEN 1 ELSE 0 END), 0) AS NbTraites, " +
-        "COALESCE(SUM(a.total_ttc), 0) AS TotalTTC FROM tournees t LEFT JOIN arrets a ON a.tournee = t.id ";
+        "COALESCE(SUM(a.total_ttc), 0) AS TotalTTC, " +
+        "(SELECT COUNT(*) FROM courses k WHERE k.tournee = t.id) AS NbCourses, " +
+        "(SELECT COUNT(*) FROM courses k WHERE k.tournee = t.id AND k.statut IN ('fait', 'reporte', 'annule')) AS NbCoursesTraitees " +
+        "FROM tournees t LEFT JOIN arrets a ON a.tournee = t.id ";
 
     const string SelectArret =
         "SELECT arrets.tournee AS Tournee, piece AS Piece, ordre AS Ordre, type_piece AS TypePiece, client AS Client, intitule AS Intitule, " +
@@ -317,13 +349,15 @@ public sealed class Livraison
         public long NbArrets { get; set; }
         public long NbTraites { get; set; }
         public double TotalTTC { get; set; }
+        public long NbCourses { get; set; }
+        public long NbCoursesTraitees { get; set; }
 
         public Tournee Tournee() => new()
         {
             Id = Id, Date = DateTime.ParseExact(Date, "yyyy-MM-dd", CultureInfo.InvariantCulture), Nom = Nom, Livreur = (int?)Livreur, Depot = (int?)Depot,
             Utilisateur = Utilisateur, CreeLe = Livraison.Date(CreeLe)!.Value, MajLe = Livraison.Date(MajLe)!.Value, NbArrets = (int)NbArrets, NbTraites = (int)NbTraites,
-            TotalTTC = Math.Round((decimal)TotalTTC, 2),
-            Statut = NbTraites == 0 ? "preparee" : NbTraites < NbArrets ? "en-cours" : "terminee",
+            TotalTTC = Math.Round((decimal)TotalTTC, 2), NbCourses = (int)NbCourses, NbCoursesTraitees = (int)NbCoursesTraitees,
+            Statut = NbTraites + NbCoursesTraitees == 0 ? "preparee" : NbTraites < NbArrets || NbCoursesTraitees < NbCourses ? "en-cours" : "terminee",
         };
     }
 

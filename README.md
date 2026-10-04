@@ -67,8 +67,12 @@ Lectures SQL seules, sauf les positions GPS gardées par l'API. Chaque route est
 | POST | `/api/v1/livraisons/optimiser` | Ordre de passage conseillé pour `{ "pieces": [...], "depot": 1 }` ou depuis `latitude`/`longitude` : plus proche voisin puis 2-opt, à vol d'oiseau. Les pièces sans position vont à la fin |
 | GET | `/api/v1/livraisons/tournees?du=&au=&livreur=&miennes=` | Tournées avec avancement (arrêts traités, total TTC). `miennes=true` : celles du livreur connecté |
 | GET / PUT / DELETE | `/api/v1/livraisons/tournees/{id}` | Une tournée et ses arrêts. PUT `{ "date", "nom", "livreur", "depot", "pieces": [...] }` dans l'ordre de passage : adresse, contact et montants sont recopiés. Une pièce déjà prévue ailleurs est refusée, un arrêt traité ne peut pas être retiré |
-| PUT | `/api/v1/livraisons/tournees/{id}/arrets/{piece}` | Compte rendu du livreur : `statut` (livre, partiel, echec, a-livrer), `motif`, `receptionnaire`, `commentaire`, `signature` (PNG en data URL), position |
+| PUT | `/api/v1/livraisons/tournees/{id}/arrets/{piece}` | Compte rendu du livreur : `statut` (livre, partiel, echec, a-livrer), `motif`, `receptionnaire`, `commentaire`, `signature` (PNG en data URL), position, et `lignes` (`ligne`, `quantite` livrée, `motif` si moins que chargé) : le statut se calcule alors tout seul |
 | GET | `/api/v1/livraisons/tournees/{id}/arrets/{piece}/signature` | Signature du réceptionnaire (image PNG) |
+| PUT | `/api/v1/livraisons/tournees/{id}/chargement` | Contrôle au dépôt : `{ "lignes": [{ "piece", "ligne", "quantite" }], "responsable", "signature" }`. Chaque arrêt porte ses `articles` (lignes de la pièce Sage) avec quantité commandée, chargée et livrée |
+| GET | `/api/v1/livraisons/tournees/{id}/chargement/signature` | Signature du responsable du dépôt (image PNG) |
+| PUT / DELETE | `/api/v1/livraisons/tournees/{id}/courses/{course}` | Autre course hors pièce Sage : `type` (livrer, recuperer, autre), `description`, client, adresse, contact, `statut` (a-faire, en-cours, fait, reporte, annule) |
+| GET | `/api/v1/livraisons/tableau-de-bord?du=&au=&livreur=&depot=&client=&statut=` | Indicateurs, arrêts par jour, par livreur, raisons d'échec et de retour, courses, villes, et liste des arrêts, sur les mêmes filtres |
 | GET | `/api/v1/livraisons/suivi/{piece}` | Passages d'une pièce en tournée : livrée ou non, motif, heure, réceptionnaire |
 | GET | `/api/v1/recouvrement/echeances?client=&echuesSeulement=` | Écritures clients non lettrées (factures dues, avoirs), jours de retard, date de relance |
 | GET | `/api/v1/recouvrement/balance-agee` | Par client : non échu, 1-30, 31-60, 61-90, plus de 90 jours, crédits non affectés |
@@ -203,6 +207,10 @@ L'API sert l'application sur **https://<serveur>:5443/crm/** (ou http://<serveur
 L'API sert l'application sur **https://<serveur>:5443/livraison/**. Au bureau, on y prépare les tournées ; sur la route, le livreur suit la sienne.
 - **Préparer une tournée :** date, livreur (collaborateur Sage), dépôt de départ, puis cocher les bons de commande et préparations à livrer. « Optimiser l'ordre » propose l'ordre de passage le plus court ; les flèches permettent de le changer.
 - **Le livreur** se connecte avec son login Sage et ouvre « Mes tournées ». Pour chaque arrêt : appeler, « Y aller » (GPS du téléphone), puis « Livrer » avec le nom de la personne qui reçoit et sa signature, ou « Échec » avec le motif. « Itinéraire » ouvre tout le trajet restant dans Google Maps.
+- **Contrôle du chargement :** avant de partir, le livreur coche chaque article reçu du dépôt (en corrigeant la quantité si besoin), puis le responsable du dépôt signe. Les écarts sont signalés.
+- **Chez le client :** chaque article est coché comme livré ; sinon, la quantité est corrigée et la raison choisie (refus, endommagé, manquant, erreur de commande, retour...). Livraison complète, partielle ou échec se déduit des quantités.
+- **Autres courses :** ce qu'il faut livrer ou récupérer en route hors commandes Sage (chèque, colis, matériel...), avec le suivi À faire, En cours, Fait, Reporté, Annulé.
+- **Tableau de bord** (`/livraison/tableau.html`, bouton en bas de la liste des tournées) : indicateurs, arrêts par jour, par livreur, raisons des échecs et retours, courses, villes, et détail exportable en CSV. Filtres : période, livreur, dépôt, statut, client ; cliquer un jour, un livreur ou un statut filtre tout le tableau.
 - Une livraison faite sur place enregistre la position du client s'il n'en avait pas : les tournées suivantes sont mieux optimisées.
 - Pour optimiser depuis le dépôt, enregistre une fois sa position : `PUT /api/v1/geolocalisation/depot/1` dans Swagger. Sinon, choisis « Ma position » comme départ.
 - Rien n'est écrit dans Sage : le bon de livraison se fait toujours dans Sage, à partir du bon de commande.

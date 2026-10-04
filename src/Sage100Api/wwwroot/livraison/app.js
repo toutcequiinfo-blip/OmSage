@@ -7,7 +7,7 @@ const CLE_SEGMENT = "livraison.segment";
 
 const STATUTS = { "a-livrer": ["À livrer", "neutre"], livre: ["Livré", "ok"], partiel: ["Partiel", "alerte"], echec: ["Échec", "erreur"] };
 const MOTIFS = { absent: "Client absent", refus: "Refus du client", "adresse-introuvable": "Adresse introuvable", ferme: "Établissement fermé",
-  "manque-marchandise": "Marchandise manquante", autre: "Autre" };
+  "manque-marchandise": "Marchandise manquante", endommage: "Marchandise endommagée", "erreur-commande": "Erreur de commande", retour: "Retour", autre: "Autre" };
 const ETATS_TOURNEE = { preparee: ["Préparée", "neutre"], "en-cours": ["En cours", "alerte"], terminee: ["Terminée", "ok"] };
 
 const $ = (s) => document.querySelector(s);
@@ -123,11 +123,11 @@ function maPosition(delaiMs = 8000) {
 }
 
 // ---------- Navigation entre écrans ----------
-const ECRANS = ["reglages", "connexion", "tournees", "preparation", "tournee"];
+const ECRANS = ["reglages", "connexion", "tournees", "preparation", "tournee", "chargement"];
 function afficher(ecran, titre) {
   for (const e of ECRANS) $(`#ecran-${e}`).hidden = e !== ecran;
   const s = session();
-  $("#btn-retour").hidden = !["preparation", "tournee"].includes(ecran);
+  $("#btn-retour").hidden = !["preparation", "tournee", "chargement"].includes(ecran);
   $("#btn-utilisateur").hidden = !s;
   if (s) $("#btn-utilisateur").textContent = s.collaborateur ? `${s.collaborateur.prenom ?? ""} ${s.collaborateur.nom ?? ""}`.trim() || s.utilisateur : s.utilisateur;
   $("#titre").textContent = titre ?? { reglages: "Réglages", connexion: "Livraisons", tournees: "Tournées", preparation: "Préparer une tournée", tournee: "Tournée" }[ecran];
@@ -145,6 +145,12 @@ function demarrer() {
   if (!cleApi()) return afficher("reglages");
   if (!session()) return afficher("connexion");
   if (!session().collaborateur && etat.segment === "miennes") etat.segment = "toutes";
+  // Lien depuis le tableau de bord : ?tournee=<id>
+  const demandee = new URLSearchParams(location.search).get("tournee");
+  if (demandee) {
+    history.replaceState(null, "", location.pathname);
+    return ouvrirTournee(demandee);
+  }
   ouvrirTournees();
 }
 
@@ -182,7 +188,7 @@ $("#btn-utilisateur").addEventListener("click", () => {
   afficher("connexion");
 });
 $("#btn-retour").addEventListener("click", () => {
-  if (!$("#ecran-preparation").hidden && etat.edition) return ouvrirTournee(etat.edition);
+  if ((!$("#ecran-preparation").hidden || !$("#ecran-chargement").hidden) && etat.edition) return ouvrirTournee(etat.edition);
   ouvrirTournees();
 });
 
@@ -388,7 +394,9 @@ function afficherTournee(t) {
     <strong>${echapper(dateLongue(t.date))}</strong> ${etiquette(ETATS_TOURNEE[t.statut])}
     <div class="discret">${echapper(nomCollaborateur(t.livreur))}${t.depot ? ` · départ ${echapper(etat.depots?.find((d) => d.numero === t.depot)?.intitule ?? `dépôt ${t.depot}`)}` : ""}</div>
     <div class="progression"><span style="width:${t.nbArrets ? Math.round((t.nbTraites / t.nbArrets) * 100) : 0}%"></span></div>
-    <div class="discret">${t.nbTraites} arrêt(s) traité(s) sur ${t.nbArrets}${encaisser > 0 ? ` · ${montant(encaisser)} à encaisser sur les arrêts restants` : ""}</div>`;
+    <div class="discret">${t.nbTraites} arrêt(s) traité(s) sur ${t.nbArrets}${t.nbCourses ? ` · ${t.nbCoursesTraitees}/${t.nbCourses} course(s)` : ""}${encaisser > 0 ? ` · ${montant(encaisser)} à encaisser sur les arrêts restants` : ""}</div>`;
+  etatChargement(t);
+  dessinerCourses(t);
 
   // Itinéraire de ce qui reste à livrer (Google Maps accepte 9 étapes en plus de la destination).
   const lien = $("#lien-itineraire");
@@ -416,6 +424,12 @@ function afficherTournee(t) {
         ${a.contact ? `<div class="infos">Contact : ${echapper(a.contact)}</div>` : ""}
         ${traite ? `<div class="infos">${heure(a.heure)}${a.receptionnaire ? ` · reçu par ${echapper(a.receptionnaire)}` : ""}${a.motif ? ` · ${echapper(MOTIFS[a.motif] ?? a.motif)}` : ""}${a.signe ? " · signé" : ""}</div>` : ""}
       </div>
+      ${a.articles.length ? `<div class="articles"><ul>${a.articles.map((l) => {
+        const reference = l.quantiteChargee ?? l.quantite;
+        const manque = l.quantiteLivree != null && l.quantiteLivree < reference;
+        return `<li class="${manque ? "manque" : ""}"><span>${echapper(l.designation || l.article)}${l.gamme1 ? ` (${echapper(l.gamme1)})` : ""}</span>
+          <span>${l.quantiteLivree != null ? `${qte(l.quantiteLivree)} / ` : ""}${qte(reference)}${manque && l.motif ? ` · ${echapper(MOTIFS[l.motif] ?? l.motif)}` : ""}</span></li>`;
+      }).join("")}</ul></div>` : ""}
       <div class="actions">
         ${tel ? `<a href="tel:${echapper(tel)}">📞 Appeler</a>` : `<a aria-disabled="true" style="opacity:.4">📞 Appeler</a>`}
         <a href="${echapper(lienItineraire(a))}" target="_blank" rel="noopener">🧭 Y aller</a>
@@ -431,57 +445,183 @@ $("#arrets").addEventListener("click", (e) => {
   if (b) ouvrirArret(etat.tournee.arrets.find((a) => a.piece === b.dataset.compteRendu));
 });
 
-// ---------- Compte rendu d'un arrêt : statut, réceptionnaire, signature ----------
+// ---------- Signature sur l'écran (réceptionnaire, responsable du dépôt) ----------
+function zoneSignature(toile) {
+  const ctx = toile.getContext("2d");
+  let trace = null;
+  const zone = {
+    signee: false,
+    preparer() {
+      const ratio = window.devicePixelRatio || 1;
+      const { width, height } = toile.getBoundingClientRect();
+      toile.width = Math.round(width * ratio);
+      toile.height = Math.round(height * ratio);
+      ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+      ctx.lineWidth = 2.2;
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+      ctx.strokeStyle = "#1b2430";
+      zone.signee = false;
+    },
+    effacer() { ctx.clearRect(0, 0, toile.width, toile.height); zone.signee = false; },
+    image() { return zone.signee ? toile.toDataURL("image/png") : null; },
+  };
+  const point = (e) => { const r = toile.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; };
+  toile.addEventListener("pointerdown", (e) => {
+    e.preventDefault();
+    toile.setPointerCapture(e.pointerId);
+    trace = point(e);
+    ctx.beginPath();
+    ctx.moveTo(trace.x, trace.y);
+  });
+  toile.addEventListener("pointermove", (e) => {
+    if (!trace) return;
+    const p = point(e);
+    ctx.lineTo(p.x, p.y);
+    ctx.stroke();
+    trace = p;
+    zone.signee = true;
+  });
+  const fin = () => { trace = null; };
+  toile.addEventListener("pointerup", fin);
+  toile.addEventListener("pointercancel", fin);
+  return zone;
+}
+
+const nomArticle = (l) => `${echapper(l.designation || l.article)}<small>${echapper(l.article ?? "")}${l.gamme1 ? ` · ${echapper(l.gamme1)}` : ""}${l.gamme2 ? ` ${echapper(l.gamme2)}` : ""}</small>`;
+const qte = (n) => (Number(n) || 0).toLocaleString("fr-FR", { maximumFractionDigits: 3 });
+
+// ---------- Contrôle du chargement au dépôt ----------
+const signatureChargement = zoneSignature($("#signature-chargement"));
+$("#btn-effacer-signature-chargement").addEventListener("click", () => signatureChargement.effacer());
+
+function etatChargement(t) {
+  const zone = $("#tournee-chargement");
+  const avecArticles = t.arrets.some((a) => a.articles.length);
+  if (!avecArticles) { zone.hidden = true; return; }
+  zone.hidden = false;
+  const c = t.chargement;
+  zone.innerHTML = c
+    ? `<div>✅ <strong>Chargement contrôlé</strong> à ${heure(c.heure)}${c.responsable ? ` avec ${echapper(c.responsable)}` : ""}${c.signe ? " · signé" : ""}
+        ${c.ecarts ? `<br><span class="etiquette alerte">${c.ecarts} écart(s) de quantité</span>` : ""}</div>
+       <button type="button" class="secondaire" data-chargement>Revoir</button>`
+    : `<div>📦 <strong>Chargement à contrôler</strong><br><span class="discret">Vérifiez les articles reçus du dépôt avant de partir.</span></div>
+       <button type="button" class="principal" data-chargement>Contrôler</button>`;
+}
+$("#tournee-chargement").addEventListener("click", (e) => { if (e.target.closest("[data-chargement]")) ouvrirChargement(); });
+
+function ouvrirChargement() {
+  const t = etat.tournee;
+  afficher("chargement", "Contrôle du chargement");
+  etat.retourChargement = true;
+  $("#chargement-lignes").innerHTML = t.arrets.filter((a) => a.articles.length).map((a) => `
+    <section class="carte groupe-piece">
+      <h3><span>${a.ordre}. ${echapper(a.intitule || a.client)}</span><span class="discret">${echapper(a.piece)}</span></h3>
+      ${a.articles.map((l) => {
+        const charge = l.quantiteChargee ?? l.quantite;
+        const coche = l.quantiteChargee != null && l.quantiteChargee === l.quantite;
+        return `<div class="article-ligne${l.quantiteChargee != null && charge !== l.quantite ? " ecart" : ""}" data-piece="${echapper(a.piece)}" data-ligne="${l.ligne}" data-commande="${l.quantite}">
+          <input type="checkbox" aria-label="Reçu" ${coche ? "checked" : ""}>
+          <span class="nom">${nomArticle(l)}</span>
+          <span class="qte">Cdé ${qte(l.quantite)}<input type="number" inputmode="decimal" min="0" step="any" value="${charge}" aria-label="Quantité reçue"></span>
+        </div>`;
+      }).join("")}
+    </section>`).join("");
+  $("#chargement-responsable").value = t.chargement?.responsable ?? "";
+  signatureChargement.preparer();
+}
+
+$("#chargement-lignes").addEventListener("change", (e) => {
+  const ligne = e.target.closest(".article-ligne");
+  if (!ligne) return;
+  const saisie = ligne.querySelector("input[type=number]");
+  const commande = Number(ligne.dataset.commande);
+  if (e.target.type === "checkbox" && e.target.checked) saisie.value = commande;
+  if (e.target.type === "number") ligne.querySelector("input[type=checkbox]").checked = true;
+  ligne.classList.toggle("ecart", Number(saisie.value) !== commande);
+});
+$("#btn-tout-cocher").addEventListener("click", () => {
+  for (const l of document.querySelectorAll("#chargement-lignes .article-ligne")) {
+    const c = l.querySelector("input[type=checkbox]");
+    if (!c.checked) { c.checked = true; l.querySelector("input[type=number]").value = l.dataset.commande; l.classList.remove("ecart"); }
+  }
+});
+
+$("#btn-valider-chargement").addEventListener("click", async () => {
+  const lignes = [...document.querySelectorAll("#chargement-lignes .article-ligne")];
+  const nonCochees = lignes.filter((l) => !l.querySelector("input[type=checkbox]").checked);
+  if (nonCochees.length) {
+    nonCochees[0].scrollIntoView({ block: "center" });
+    return bandeau(`${nonCochees.length} article(s) pas encore coché(s). Cochez-les, en corrigeant la quantité si besoin (0 si non reçu).`, "erreur");
+  }
+  const bouton = $("#btn-valider-chargement");
+  bouton.disabled = true;
+  try {
+    const t = etat.tournee;
+    await api("PUT", `/livraisons/tournees/${encodeURIComponent(t.id)}/chargement`, {
+      lignes: lignes.map((l) => ({ piece: l.dataset.piece, ligne: Number(l.dataset.ligne), quantite: Number(l.querySelector("input[type=number]").value) || 0 })),
+      responsable: $("#chargement-responsable").value.trim() || null,
+      signature: signatureChargement.image(),
+    });
+    const ecarts = lignes.filter((l) => Number(l.querySelector("input[type=number]").value) !== Number(l.dataset.commande)).length;
+    bandeau(ecarts ? `Chargement validé avec ${ecarts} écart(s).` : "Chargement validé : tout est conforme.", ecarts ? "" : "ok");
+    afficherTournee(await api("GET", `/livraisons/tournees/${encodeURIComponent(t.id)}`));
+  } catch (e) { erreur(e); } finally { bouton.disabled = false; }
+});
+
+// ---------- Compte rendu d'un arrêt : articles livrés, réceptionnaire, signature ----------
 const dialogue = $("#dialogue-arret");
 const formArret = $("#form-arret");
-const toile = $("#signature");
-const ctx = toile.getContext("2d");
-let signee = false;
-
-function preparerToile() {
-  const ratio = window.devicePixelRatio || 1;
-  const { width, height } = toile.getBoundingClientRect();
-  toile.width = Math.round(width * ratio);
-  toile.height = Math.round(height * ratio);
-  ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
-  ctx.lineWidth = 2.2;
-  ctx.lineCap = "round";
-  ctx.lineJoin = "round";
-  ctx.strokeStyle = "#1b2430";
-  signee = false;
-}
-let trace = null;
-const point = (e) => { const r = toile.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; };
-toile.addEventListener("pointerdown", (e) => {
-  e.preventDefault();
-  toile.setPointerCapture(e.pointerId);
-  trace = point(e);
-  ctx.beginPath();
-  ctx.moveTo(trace.x, trace.y);
-});
-toile.addEventListener("pointermove", (e) => {
-  if (!trace) return;
-  const p = point(e);
-  ctx.lineTo(p.x, p.y);
-  ctx.stroke();
-  trace = p;
-  signee = true;
-});
-const finTrace = () => { trace = null; };
-toile.addEventListener("pointerup", finTrace);
-toile.addEventListener("pointercancel", finTrace);
-$("#btn-effacer-signature").addEventListener("click", () => { ctx.clearRect(0, 0, toile.width, toile.height); signee = false; });
+const signatureClient = zoneSignature($("#signature"));
+$("#btn-effacer-signature").addEventListener("click", () => signatureClient.effacer());
+const OPTIONS_MOTIF = `<option value="">Raison ?</option>` + Object.entries(MOTIFS).filter(([m]) => !["absent", "adresse-introuvable", "ferme"].includes(m))
+  .map(([m, nom]) => `<option value="${m}">${nom}</option>`).join("");
 
 function choisirStatut(statut) {
+  const articles = etat.arret?.articles ?? [];
   etat.statut = statut;
   for (const b of $("#arret-statuts").children) b.classList.toggle("actif", b.dataset.statut === statut);
+  // Avec des articles, « Livré » donne la liste à cocher et le partiel se déduit des quantités.
+  $("#arret-statuts [data-statut=partiel]").hidden = articles.length > 0;
+  $("#arret-statuts").classList.toggle("trois", !articles.length);
+  $("#arret-articles").hidden = statut === "echec" || !articles.length;
   $("#champ-motif").hidden = statut === "livre";
   $("#champ-receptionnaire").hidden = statut === "echec";
   $("#zone-signature").hidden = statut === "echec";
   formArret.motif.required = statut === "echec";
-  if (statut !== "echec") preparerToile();
+  if (statut !== "echec") signatureClient.preparer();
 }
 $("#arret-statuts").addEventListener("click", (e) => { const b = e.target.closest("[data-statut]"); if (b) choisirStatut(b.dataset.statut); });
+
+function dessinerArticlesLivraison(a) {
+  $("#arret-articles").innerHTML = a.articles.length ? `<p class="discret">Cochez les articles remis au client. Sinon, corrigez la quantité et donnez la raison.</p>` +
+    a.articles.map((l) => {
+      const reference = l.quantiteChargee ?? l.quantite;
+      const livree = l.quantiteLivree ?? reference;
+      const manque = livree < reference;
+      return `<div class="article-ligne${manque ? " ecart" : ""}" data-ligne="${l.ligne}" data-reference="${reference}">
+        <input type="checkbox" aria-label="Livré" ${!manque ? "checked" : ""}>
+        <span class="nom">${nomArticle(l)}</span>
+        <span class="qte">${l.quantiteChargee != null ? "Chargé" : "Cdé"} ${qte(reference)}<input type="number" inputmode="decimal" min="0" max="${reference}" step="any" value="${livree}" aria-label="Quantité livrée"></span>
+        <select aria-label="Raison" ${manque ? "" : "hidden"}>${OPTIONS_MOTIF}</select>
+      </div>`;
+    }).join("") : "";
+  for (const l of a.articles) {
+    const select = $(`#arret-articles .article-ligne[data-ligne="${l.ligne}"] select`);
+    if (select && l.motif) select.value = l.motif;
+  }
+}
+$("#arret-articles").addEventListener("change", (e) => {
+  const ligne = e.target.closest(".article-ligne");
+  if (!ligne) return;
+  const saisie = ligne.querySelector("input[type=number]");
+  const reference = Number(ligne.dataset.reference);
+  if (e.target.type === "checkbox") saisie.value = e.target.checked ? reference : 0;
+  if (e.target.type === "number") ligne.querySelector("input[type=checkbox]").checked = Number(saisie.value) >= reference;
+  const manque = Number(saisie.value) < reference;
+  ligne.classList.toggle("ecart", manque);
+  ligne.querySelector("select").hidden = !manque;
+});
 
 function ouvrirArret(a) {
   if (!a) return;
@@ -493,34 +633,48 @@ function ouvrirArret(a) {
   formArret.receptionnaire.value = a.receptionnaire ?? a.contact ?? "";
   formArret.commentaire.value = a.commentaire ?? "";
   $("#btn-remettre").hidden = a.statut === "a-livrer";
+  dessinerArticlesLivraison(a);
   dialogue.showModal();
-  choisirStatut(a.statut === "a-livrer" ? "livre" : a.statut);
+  choisirStatut(a.statut === "echec" ? "echec" : a.statut === "partiel" && !a.articles.length ? "partiel" : "livre");
 }
 $("#btn-annuler-arret").addEventListener("click", () => dialogue.close());
 
 async function envoyerCompteRendu(corps) {
   const a = etat.arret;
-  await api("PUT", `/livraisons/tournees/${encodeURIComponent(a.tournee)}/arrets/${encodeURIComponent(a.piece)}`, corps);
+  const r = await api("PUT", `/livraisons/tournees/${encodeURIComponent(a.tournee)}/arrets/${encodeURIComponent(a.piece)}`, corps);
   dialogue.close();
   afficherTournee(await api("GET", `/livraisons/tournees/${encodeURIComponent(a.tournee)}`));
+  return r;
 }
 
 formArret.addEventListener("submit", async (e) => {
   e.preventDefault();
   if (!formArret.reportValidity()) return;
   const statut = etat.statut;
+  const avecArticles = statut !== "echec" && etat.arret.articles.length > 0;
+  const lignes = avecArticles ? [...document.querySelectorAll("#arret-articles .article-ligne")].map((l) => ({
+    ligne: Number(l.dataset.ligne), quantite: Number(l.querySelector("input[type=number]").value) || 0,
+    motif: l.querySelector("select").hidden ? null : l.querySelector("select").value || null,
+  })) : null;
+  const sansRaison = (lignes ?? []).find((l) => l.motif === null && l.quantite < Number($(`#arret-articles [data-ligne="${l.ligne}"]`).dataset.reference));
+  if (sansRaison) {
+    $(`#arret-articles [data-ligne="${sansRaison.ligne}"] select`).focus();
+    return bandeau("Indiquez la raison pour chaque article non livré ou retourné.", "erreur");
+  }
   const bouton = $("#btn-valider-arret");
   bouton.disabled = true;
   try {
     const position = await maPosition();
-    await envoyerCompteRendu({
+    const r = await envoyerCompteRendu({
       statut, motif: statut === "livre" ? null : formArret.motif.value || null,
       receptionnaire: statut === "echec" ? null : formArret.receptionnaire.value.trim() || null,
       commentaire: formArret.commentaire.value.trim() || null,
-      signature: statut !== "echec" && signee ? toile.toDataURL("image/png") : null,
+      signature: statut !== "echec" ? signatureClient.image() : null,
+      lignes,
       ...(position ?? {}),
     });
-    bandeau(statut === "echec" ? "Échec noté : la pièce pourra être remise dans une autre tournée." : "Livraison enregistrée.", statut === "echec" ? "" : "ok");
+    const messages = { echec: "Échec noté : la pièce pourra être remise dans une autre tournée.", partiel: "Livraison partielle enregistrée.", livre: "Livraison enregistrée." };
+    bandeau(messages[r?.statut ?? statut], r?.statut === "livre" ? "ok" : "");
   } catch (err) { erreur(err); } finally { bouton.disabled = false; }
 });
 
@@ -530,6 +684,86 @@ $("#btn-remettre").addEventListener("click", async () => {
     await envoyerCompteRendu({ statut: "a-livrer" });
     bandeau("Arrêt remis à livrer.", "ok");
   } catch (e) { erreur(e); }
+});
+
+// ---------- Autres courses de la tournée ----------
+const TYPES_COURSE = { livrer: ["📦", "À livrer"], recuperer: ["↩️", "À récupérer"], autre: ["📝", "Autre"] };
+const STATUTS_COURSE = { "a-faire": ["À faire", "neutre"], "en-cours": ["En cours", "alerte"], fait: ["Fait", "ok"], reporte: ["Reporté", "discret-etiquette"],
+  annule: ["Annulé", "erreur"] };
+const dialogueCourse = $("#dialogue-course");
+const formCourse = $("#form-course");
+
+function dessinerCourses(t) {
+  $("#nb-courses").textContent = t.courses.length ? `(${t.courses.filter((k) => ["fait", "reporte", "annule"].includes(k.statut)).length}/${t.courses.length})` : "";
+  $("#courses").innerHTML = t.courses.length
+    ? t.courses.map((k) => `
+      <li class="course" data-course="${echapper(k.id)}">
+        <span class="icone-type" aria-hidden="true">${TYPES_COURSE[k.type]?.[0] ?? "📝"}</span>
+        <div><strong>${echapper(k.description)}</strong>
+          <div class="texte">${echapper([TYPES_COURSE[k.type]?.[1], k.client, k.adresse, k.contact].filter(Boolean).join(" · "))}${k.heure ? ` · ${heure(k.heure)}` : ""}</div>
+          ${k.commentaire ? `<div class="texte">${echapper(k.commentaire)}</div>` : ""}</div>
+        ${etiquette(STATUTS_COURSE[k.statut])}
+      </li>`).join("")
+    : `<li class="vide">Aucune autre course. Ajoutez ce qu'il faut livrer ou récupérer en route, hors commandes Sage.</li>`;
+}
+
+function choisirTypeCourse(type) {
+  etat.typeCourse = type;
+  for (const b of $("#course-types").children) b.classList.toggle("actif", b.dataset.type === type);
+}
+function choisirStatutCourse(statut) {
+  etat.statutCourse = statut;
+  for (const b of $("#course-statuts").children) b.classList.toggle("actif", b.dataset.statut === statut);
+}
+$("#course-types").addEventListener("click", (e) => { const b = e.target.closest("[data-type]"); if (b) choisirTypeCourse(b.dataset.type); });
+$("#course-statuts").addEventListener("click", (e) => { const b = e.target.closest("[data-statut]"); if (b) choisirStatutCourse(b.dataset.statut); });
+
+function ouvrirCourse(k = null) {
+  etat.course = k;
+  formCourse.reset();
+  $("#course-titre").textContent = k ? "Course" : "Nouvelle course";
+  choisirTypeCourse(k?.type ?? "livrer");
+  choisirStatutCourse(k?.statut ?? "a-faire");
+  for (const champ of ["description", "client", "telephone", "adresse", "contact", "commentaire"]) formCourse[champ].value = k?.[champ] ?? "";
+  $("#btn-supprimer-course").hidden = !k;
+  dialogueCourse.showModal();
+}
+$("#btn-nouvelle-course").addEventListener("click", () => ouvrirCourse());
+$("#courses").addEventListener("click", (e) => {
+  const li = e.target.closest("[data-course]");
+  if (li) ouvrirCourse(etat.tournee.courses.find((k) => k.id === li.dataset.course));
+});
+$("#btn-annuler-course").addEventListener("click", () => dialogueCourse.close());
+
+formCourse.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  if (!formCourse.reportValidity()) return;
+  const t = etat.tournee;
+  const k = etat.course;
+  const bouton = $("#btn-enregistrer-course");
+  bouton.disabled = true;
+  try {
+    const termine = etat.statutCourse !== "a-faire" && etat.statutCourse !== k?.statut;
+    const position = termine ? await maPosition() : null;
+    const valeur = (champ) => formCourse[champ].value.trim() || null;
+    await api("PUT", `/livraisons/tournees/${encodeURIComponent(t.id)}/courses/${encodeURIComponent(k?.id ?? uuid())}`, {
+      type: etat.typeCourse, description: formCourse.description.value.trim(), client: valeur("client"), adresse: valeur("adresse"),
+      contact: valeur("contact"), telephone: valeur("telephone"), statut: etat.statutCourse, commentaire: valeur("commentaire"), ...(position ?? {}),
+    });
+    dialogueCourse.close();
+    bandeau("Course enregistrée.", "ok");
+    afficherTournee(await api("GET", `/livraisons/tournees/${encodeURIComponent(t.id)}`));
+  } catch (err) { erreur(err); } finally { bouton.disabled = false; }
+});
+
+$("#btn-supprimer-course").addEventListener("click", async () => {
+  const k = etat.course;
+  if (!k || !confirm("Supprimer cette course ?")) return;
+  try {
+    await api("DELETE", `/livraisons/tournees/${encodeURIComponent(etat.tournee.id)}/courses/${encodeURIComponent(k.id)}`);
+    dialogueCourse.close();
+    afficherTournee(await api("GET", `/livraisons/tournees/${encodeURIComponent(etat.tournee.id)}`));
+  } catch (err) { erreur(err); }
 });
 
 demarrer();

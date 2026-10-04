@@ -198,7 +198,12 @@ livraisons.MapPut("/tournees/{id}", async (ILecturesErp l, Geolocalisation geo, 
     var erreurs = Livraison.Verifier(id, t).ToList();
     if (erreurs.Count > 0) return Reponses.Invalide(erreurs);
     var aLivrer = AvecPositions(await l.ALivrer(null, null), geo).ToDictionary(a => a.Piece, StringComparer.OrdinalIgnoreCase);
-    var (tournee, refus) = liv.Enregistrer(id, t, aLivrer, a => a.Position, u?.Login);
+    // Lignes d'articles des pièces, pour le contrôle au chargement et chez le client.
+    var lignes = new Dictionary<string, IReadOnlyList<LignePiece>>(StringComparer.OrdinalIgnoreCase);
+    foreach (var piece in t.Pieces.Select(p => p.Trim().ToUpperInvariant()).Distinct())
+        if (aLivrer.TryGetValue(piece, out var a) && TypesDocument.Code(a.Type) is { } code)
+            lignes[piece] = (await l.Document(code, piece))?.Lignes ?? [];
+    var (tournee, refus) = liv.Enregistrer(id, t, aLivrer, a => a.Position, p => lignes.GetValueOrDefault(p) ?? [], u?.Login);
     return tournee is null ? Reponses.Invalide(refus) : Results.Ok(tournee);
 }).WithSummary("Crée ou met à jour une tournée : date, livreur (collaborateur), dépôt, pièces dans l'ordre de passage. L'adresse et le contact sont recopiés pour le livreur");
 livraisons.MapDelete("/tournees/{id}", (Livraison liv, ServiceAuthentification auth, HttpContext http, string id) =>
@@ -218,7 +223,10 @@ livraisons.MapPut("/tournees/{id}/arrets/{piece}", (Livraison liv, Geolocalisati
     if (u == null && auth.Options.Active) return Reponses.ConnexionRequise();
     var erreurs = Livraison.Verifier(r).ToList();
     if (erreurs.Count > 0) return Reponses.Invalide(erreurs);
-    if (liv.CompteRendu(id, piece, r, u?.Login) is not { } a) return Results.NotFound();
+    Arret? a;
+    try { a = liv.CompteRendu(id, piece, r, u?.Login); }
+    catch (ArgumentException e) { return Reponses.Invalide([e.Message]); }
+    if (a is null) return Results.NotFound();
     // Livré sur place et destination sans position : la position du livreur devient celle de l'adresse (ou du client).
     if (a.Statut is "livre" or "partiel" && a.Latitude is null && r.Latitude is { } lat && r.Longitude is { } lon)
     {
@@ -230,6 +238,34 @@ livraisons.MapPut("/tournees/{id}/arrets/{piece}", (Livraison liv, Geolocalisati
 livraisons.MapGet("/tournees/{id}/arrets/{piece}/signature", (Livraison liv, string id, string piece) =>
     liv.Signature(id, piece) is { } s ? Results.Bytes(Convert.FromBase64String(s[(s.IndexOf(',') + 1)..]), "image/png") : Results.NotFound())
   .WithSummary("Signature du réceptionnaire (image PNG)");
+livraisons.MapPut("/tournees/{id}/chargement", (Livraison liv, ServiceAuthentification auth, HttpContext http, string id, ChargementRequest r) =>
+{
+    var u = auth.Lire(http);
+    if (u == null && auth.Options.Active) return Reponses.ConnexionRequise();
+    var erreurs = Livraison.Verifier(r).ToList();
+    if (erreurs.Count > 0) return Reponses.Invalide(erreurs);
+    try { return liv.ValiderChargement(id, r, u?.Login) is { } c ? Results.Ok(c) : Results.NotFound(); }
+    catch (ArgumentException e) { return Reponses.Invalide([e.Message]); }
+}).WithSummary("Contrôle du chargement au dépôt : quantité reçue par ligne d'article (pièce + ligne), nom et signature du responsable du dépôt");
+livraisons.MapGet("/tournees/{id}/chargement/signature", (Livraison liv, string id) =>
+    liv.SignatureChargement(id) is { } s ? Results.Bytes(Convert.FromBase64String(s[(s.IndexOf(',') + 1)..]), "image/png") : Results.NotFound())
+  .WithSummary("Signature du responsable du dépôt au chargement (image PNG)");
+livraisons.MapPut("/tournees/{id}/courses/{course}", (Livraison liv, ServiceAuthentification auth, HttpContext http, string id, string course, CourseRequest r) =>
+{
+    var u = auth.Lire(http);
+    if (u == null && auth.Options.Active) return Reponses.ConnexionRequise();
+    var erreurs = Livraison.Verifier(course, r).ToList();
+    if (erreurs.Count > 0) return Reponses.Invalide(erreurs);
+    return liv.EnregistrerCourse(id, course, r, u?.Login) is { } k ? Results.Ok(k) : Results.NotFound();
+}).WithSummary("Autre course de la tournée (livrer ou récupérer quelque chose hors pièce Sage) : description, adresse, statut a-faire, en-cours, fait, reporte, annule");
+livraisons.MapDelete("/tournees/{id}/courses/{course}", (Livraison liv, ServiceAuthentification auth, HttpContext http, string id, string course) =>
+{
+    if (auth.Lire(http) == null && auth.Options.Active) return Reponses.ConnexionRequise();
+    return liv.SupprimerCourse(id, course) ? Results.NoContent() : Results.NotFound();
+});
+livraisons.MapGet("/tableau-de-bord", (Livraison liv, DateTime? du, DateTime? au, int? livreur, int? depot, string? client, string? statut) =>
+    liv.Tableau(new FiltreTableau(du, au, livreur, depot, client, statut)))
+  .WithSummary("Tableau de bord des livraisons : indicateurs, par jour, par livreur, motifs d'échec, courses, et liste des arrêts, sur les mêmes filtres");
 livraisons.MapGet("/suivi/{piece}", (Livraison liv, string piece) => liv.Suivi(piece))
   .WithSummary("Passages d'une pièce en tournée (livrée, échec, motif, heure, réceptionnaire), le plus récent d'abord");
 

@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#1d5c46">
+  <title>Tableau de bord livraisons</title>
+  <link rel="icon" href="../borne/icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="tableau.css">
+</head>
+<body class="sans-nav tableau-de-bord">
+  <header>
+    <a href="./" class="icone retour-lien" aria-label="Retour aux tournées">‹</a>
+    <h1>Tableau de bord des livraisons</h1>
+    <button id="btn-actualiser" type="button" class="utilisateur">↻ Actualiser</button>
+  </header>
+  <div id="bandeau" class="bandeau" hidden></div>
+
+  <main class="tdb">
+    <!-- Filtres : une seule rangée au-dessus des graphiques -->
+    <section class="filtres" aria-label="Filtres">
+      <div class="periodes" role="group" aria-label="Période">
+        <button type="button" data-periode="jour">Aujourd'hui</button>
+        <button type="button" data-periode="7">7 jours</button>
+        <button type="button" data-periode="30">30 jours</button>
+        <button type="button" data-periode="mois">Ce mois</button>
+        <button type="button" data-periode="tout">Tout</button>
+      </div>
+      <label>Du <input id="f-du" type="date"></label>
+      <label>Au <input id="f-au" type="date"></label>
+      <label>Livreur <select id="f-livreur"><option value="">Tous</option></select></label>
+      <label>Dépôt <select id="f-depot"><option value="">Tous</option></select></label>
+      <label>Statut
+        <select id="f-statut">
+          <option value="">Tous</option>
+          <option value="livre">Livré</option>
+          <option value="partiel">Partiel</option>
+          <option value="echec">Échec</option>
+          <option value="a-livrer">À livrer</option>
+        </select>
+      </label>
+      <label class="large">Client <input id="f-client" type="search" placeholder="Code ou nom"></label>
+      <button id="btn-reinitialiser" type="button" class="lien">Réinitialiser</button>
+    </section>
+    <p id="resume-filtres" class="discret"></p>
+
+    <section id="indicateurs" class="tuiles" aria-label="Indicateurs"></section>
+
+    <section class="graphiques">
+      <article class="carte graphique large">
+        <h3>Arrêts par jour</h3>
+        <div id="legende-jours" class="legende"></div>
+        <div id="g-jours" class="g-jours"></div>
+      </article>
+      <article class="carte graphique">
+        <h3>Par livreur</h3>
+        <div id="g-livreurs"></div>
+      </article>
+      <article class="carte graphique">
+        <h3>Raisons des échecs et retours</h3>
+        <div id="g-motifs"></div>
+      </article>
+      <article class="carte graphique">
+        <h3>Autres courses</h3>
+        <div id="g-courses"></div>
+      </article>
+      <article class="carte graphique">
+        <h3>Villes les plus livrées</h3>
+        <div id="g-villes"></div>
+      </article>
+    </section>
+
+    <section class="carte">
+      <div class="entete-tableau">
+        <h3>Détail des arrêts <span id="nb-lignes" class="discret"></span></h3>
+        <button id="btn-export" type="button" class="secondaire">⬇ Exporter (CSV)</button>
+      </div>
+      <div class="defilement">
+        <table class="tableau" id="t-arrets">
+          <thead><tr>
+            <th data-tri="date">Date</th><th data-tri="nomTournee">Tournée</th><th data-tri="livreur">Livreur</th><th data-tri="piece">Pièce</th>
+            <th data-tri="intitule">Client</th><th data-tri="ville">Ville</th><th data-tri="statut">Statut</th><th data-tri="motif">Raison</th>
+            <th data-tri="heure">Heure</th><th data-tri="totalTTC" class="nombre">TTC</th>
+          </tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+  <div id="infobulle" class="infobulle" role="tooltip" hidden></div>
+
+  <script type="module" src="tableau.js"></script>
+</body>
+</html>
