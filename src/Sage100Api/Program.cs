@@ -4,6 +4,7 @@ using Microsoft.Extensions.Options;
 using Sage100Api;
 using Sage100Api.Contracts;
 using Sage100Api.Ecritures;
+using Sage100Api.Extensions;
 using Sage100Api.Journal;
 using Sage100Api.Lectures;
 using Sage100Api.Worker;
@@ -28,6 +29,8 @@ builder.Services.PostConfigure<SageOptions>(o =>
 builder.Services.Configure<SageOptions>(builder.Configuration.GetSection("Sage"));
 builder.Services.Configure<AuthentificationOptions>(builder.Configuration.GetSection("Authentification"));
 builder.Services.AddSingleton<ILecturesSage, LecturesSql>();
+builder.Services.AddSingleton<ILecturesErp, LecturesErpSql>();
+builder.Services.AddSingleton<Geolocalisation>();
 builder.Services.AddSingleton<IWorkerClient, WorkerClient>();
 builder.Services.AddSingleton<JournalOperations>();
 builder.Services.AddSingleton<ControleStock>();
@@ -117,6 +120,100 @@ lectures.MapGet("/commandes-ouvertes/{piece}", async (ILecturesSage l, string pi
 lectures.MapGet("/catalogue", async (ILecturesSage l, ControleStock stock, ServiceAuthentification auth) =>
     new Catalogue(DateTime.UtcNow, await l.Clients(null, 1, 100_000), await l.Articles(null, null, 1, 100_000), await l.ModesReglement(),
         await l.Gammes(), await stock.Actif(), auth.Options.Active, auth.Options.Active && auth.Options.ExigerCaissier, await l.CommandesOuvertes(null, 500)));
+
+// ---------- Lectures pour les extensions : CRM, livraison, géolocalisation, recouvrement ----------
+static int Taille(int taille) => Math.Clamp(taille, 1, 1000);
+static IResult TypeInconnu(string? type) =>
+    Results.BadRequest(new { code = "TYPE_INCONNU", message = $"Type de document inconnu « {type} » : {TypesDocument.Liste}." });
+
+var crm = v1.MapGroup("").WithTags("CRM");
+
+crm.MapGet("/clients/{numero}/fiche", async (ILecturesErp l, Geolocalisation geo, string numero) =>
+    await l.FicheClient(numero) is { } f
+        ? Results.Ok(f with
+        {
+            Position = geo.Lire("client", f.Numero),
+            AdressesLivraison = f.AdressesLivraison.Select(a => a with { Position = geo.Lire("adresse-livraison", a.Numero.ToString()) }).ToList(),
+        })
+        : Results.NotFound())
+    .WithSummary("Fiche client complète : coordonnées, commercial, encours autorisé, contacts, adresses de livraison");
+
+crm.MapGet("/clients/{numero}/contacts", (ILecturesErp l, string numero) => l.Contacts(numero));
+crm.MapGet("/clients/{numero}/adresses-livraison", (ILecturesErp l, string numero) => l.AdressesLivraison(numero));
+crm.MapGet("/clients/{numero}/documents", async (ILecturesErp l, string numero, string? type, DateTime? du, DateTime? au, int page = 1, int taille = 50) =>
+    type != null && TypesDocument.Code(type) is null
+        ? TypeInconnu(type)
+        : Results.Ok(await l.Documents(TypesDocument.Code(type), numero, du, au, null, Math.Max(page, 1), Taille(taille))))
+    .WithSummary("Historique des documents de vente d'un client (tous types, ou un type)");
+crm.MapGet("/clients/{numero}/echeances", async (ILecturesErp l, string numero) =>
+{
+    var e = await l.Echeances(numero);
+    Recouvrement.CalculerRetards(e, DateTime.Today);
+    return e;
+}).WithSummary("Écritures non lettrées du client (factures dues, avoirs) avec leurs jours de retard");
+crm.MapGet("/collaborateurs", (ILecturesErp l) => l.Collaborateurs()).WithSummary("Collaborateurs actifs (commerciaux, caissiers, livreurs...)");
+crm.MapGet("/depots", (ILecturesErp l) => l.Depots());
+
+var documents = v1.MapGroup("/documents").WithTags("Documents de vente");
+documents.MapGet("", async (ILecturesErp l, string? type, string? client, DateTime? du, DateTime? au, bool? cloture, int page = 1, int taille = 50) =>
+    type != null && TypesDocument.Code(type) is null
+        ? TypeInconnu(type)
+        : Results.Ok(await l.Documents(TypesDocument.Code(type), client, du, au, cloture, Math.Max(page, 1), Taille(taille))))
+    .WithSummary("Documents de vente, les plus récents d'abord. type : devis, commande, preparation, livraison, retour, avoir, facture, facture-comptabilisee");
+documents.MapGet("/{type}/{piece}", async (ILecturesErp l, string type, string piece) =>
+    TypesDocument.Code(type) is not { } code ? TypeInconnu(type)
+    : await l.Document(code, piece) is { } d ? Results.Ok(d) : Results.NotFound())
+    .WithSummary("Un document de vente et ses lignes");
+
+v1.MapGet("/livraisons/a-livrer", async (ILecturesErp l, Geolocalisation geo, DateTime? jusquau, int? depot) =>
+{
+    var clients = geo.Toutes("client");
+    var adresses = geo.Toutes("adresse-livraison");
+    return (await l.ALivrer(jusquau, depot)).Select(x => x with
+    {
+        Position = (x.AdresseLivraison is { } li ? adresses.GetValueOrDefault(li.ToString()) : null) ?? clients.GetValueOrDefault(x.Client),
+    });
+}).WithTags("Livraison")
+  .WithSummary("Bons de commande et préparations non clôturés à livrer (jusqu'à une date), avec adresse, contact, téléphone et position GPS");
+
+var recouvrement = v1.MapGroup("/recouvrement").WithTags("Recouvrement");
+recouvrement.MapGet("/echeances", async (ILecturesErp l, string? client, bool echuesSeulement = false) =>
+{
+    var e = await l.Echeances(client);
+    Recouvrement.CalculerRetards(e, DateTime.Today);
+    return echuesSeulement ? e.Where(x => x.JoursRetard > 0).ToList() : e;
+}).WithSummary("Écritures clients non lettrées, avec jours de retard. echuesSeulement=true : seulement les échéances dépassées");
+recouvrement.MapGet("/balance-agee", async (ILecturesErp l) => Recouvrement.BalanceAgee(await l.Echeances(null), DateTime.Today))
+    .WithSummary("Balance âgée par client : non échu, 1-30, 31-60, 61-90, plus de 90 jours, crédits non affectés");
+
+var positions = v1.MapGroup("/geolocalisation").WithTags("Géolocalisation");
+positions.MapGet("/{cible}", (Geolocalisation geo, string cible) =>
+    Geolocalisation.Cibles.Contains(cible) ? Results.Ok(geo.Toutes(cible)) : Results.NotFound())
+    .WithSummary("Toutes les positions d'une cible : client, adresse-livraison ou depot");
+positions.MapGet("/{cible}/{cle}", (Geolocalisation geo, string cible, string cle) =>
+    Geolocalisation.Cibles.Contains(cible) && geo.Lire(cible, cle) is { } p ? Results.Ok(p) : Results.NotFound());
+positions.MapPut("/{cible}/{cle}", (Geolocalisation geo, ServiceAuthentification auth, HttpContext http, string cible, string cle, PositionRequest p) =>
+{
+    var u = auth.Lire(http);
+    if (u == null && auth.Options.Active) return Reponses.ConnexionRequise();
+    var erreurs = Geolocalisation.Verifier(cible, p).ToList();
+    return erreurs.Count > 0 ? Reponses.Invalide(erreurs) : Results.Ok(geo.Enregistrer(cible, cle.Trim(), p, u?.Login));
+}).WithSummary("Enregistre la position GPS d'un client, d'une adresse de livraison (numéro LI_No) ou d'un dépôt. Gardée par l'API, pas dans Sage");
+positions.MapDelete("/{cible}/{cle}", (Geolocalisation geo, ServiceAuthentification auth, HttpContext http, string cible, string cle) =>
+{
+    if (auth.Lire(http) == null && auth.Options.Active) return Reponses.ConnexionRequise();
+    return geo.Supprimer(cible, cle) ? Results.NoContent() : Results.NotFound();
+});
+
+v1.MapGet("/modifications", async (ILecturesErp l, string table, DateTime depuis, int taille = 1000) =>
+{
+    if (!TablesSuivies.Liste.ContainsKey(table))
+        return Results.BadRequest(new { code = "TABLE_INCONNUE", message = $"Tables suivies : {string.Join(", ", TablesSuivies.Liste.Keys)}." });
+    return await l.Modifications(table, depuis, Math.Clamp(taille, 1, 10_000)) is { } m
+        ? Results.Ok(m)
+        : Results.Problem("Cette base Sage n'a pas de colonne cbModification : synchronisation incrémentale impossible.", statusCode: 501);
+}).WithTags("Synchronisation")
+  .WithSummary("Codes modifiés dans Sage depuis une date (clients, articles, documents, adresses-livraison, contacts, ecritures), pour qu'une extension ne relise que ce qui a changé");
 
 // ---------- Écritures (worker Objets Métiers, idempotentes) ----------
 var ecritures = v1.MapGroup("/commandes").WithTags("Commandes et encaissements");

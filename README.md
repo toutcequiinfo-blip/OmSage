@@ -45,6 +45,30 @@ Borne / applications ──HTTPS + X-Api-Key──► Sage100Api (.NET 8, 64 bit
 | GET | `/api/v1/commandes-ouvertes/{piece}` | Un bon de commande et ses lignes (article, désignation, gamme, quantité, prix), pour la loupe de la borne |
 | POST | `/api/v1/commandes/piece/{piece}/encaissements` | Encaissement d'un bon de commande désigné par sa pièce Sage (saisi dans Sage ou par un vendeur). Idempotent sur `idExterne`. |
 
+
+### Routes pour les extensions (CRM, livraison, géolocalisation, recouvrement)
+
+Lectures SQL seules, sauf les positions GPS gardées par l'API. Chaque route est décrite dans Swagger.
+
+| Méthode | Route | Usage |
+|---|---|---|
+| GET | `/api/v1/clients/{numero}/fiche` | Fiche client complète : adresse, téléphone, e-mail, SIRET, commercial, encours autorisé, catégorie tarifaire, contacts, adresses de livraison, positions GPS |
+| GET | `/api/v1/clients/{numero}/contacts` | Contacts du client (F_CONTACTT) |
+| GET | `/api/v1/clients/{numero}/adresses-livraison` | Adresses de livraison (F_LIVRAISON), avec leur numéro `LI_No` |
+| GET | `/api/v1/clients/{numero}/documents?type=&du=&au=` | Historique des documents de vente du client |
+| GET | `/api/v1/clients/{numero}/echeances` | Écritures non lettrées du client avec jours de retard |
+| GET | `/api/v1/collaborateurs` | Collaborateurs actifs : commerciaux, caissiers, livreurs |
+| GET | `/api/v1/depots` | Dépôts |
+| GET | `/api/v1/documents?type=&client=&du=&au=&cloture=&page=&taille=` | Documents de vente. `type` : devis, commande, preparation, livraison, retour, avoir, facture, facture-comptabilisee |
+| GET | `/api/v1/documents/{type}/{piece}` | Un document et ses lignes |
+| GET | `/api/v1/livraisons/a-livrer?jusquau=&depot=` | Bons de commande et préparations non clôturés, avec adresse de livraison (ou du client), contact, téléphone et position GPS |
+| GET | `/api/v1/recouvrement/echeances?client=&echuesSeulement=` | Écritures clients non lettrées (factures dues, avoirs), jours de retard, date de relance |
+| GET | `/api/v1/recouvrement/balance-agee` | Par client : non échu, 1-30, 31-60, 61-90, plus de 90 jours, crédits non affectés |
+| GET / PUT / DELETE | `/api/v1/geolocalisation/{cible}/{cle}` | Position GPS d'un `client` (code), d'une `adresse-livraison` (LI_No) ou d'un `depot`. PUT `{ "latitude", "longitude", "precision", "source" }`, avec un utilisateur connecté si la connexion est active |
+| GET | `/api/v1/modifications?table=&depuis=` | Codes modifiés dans Sage depuis une date (colonne `cbModification`) : clients, articles, documents, adresses-livraison, contacts, ecritures |
+
+Sage n'a pas de champ pour une position GPS, et l'API n'écrit jamais en SQL dans Sage : les positions sont gardées dans `sage100api-extensions.db`, à côté du journal. Sauvegarde ce fichier avec le journal.
+
 **Journal des encaissements :** un acompte n'a pas de journal. Sage le donne au règlement qu'il crée : c'est le journal par défaut du mode, par exemple BEU pour Espèces. Pour imposer un journal de trésorerie par mode, renseigne `journauxParMode` dans `worker.json`, par exemple `{ "Espèces": "CAIS", "Carte bancaire": "BQ1" }`, puis redémarre le worker. Un mode absent garde le journal de Sage. Un code de journal inconnu fait refuser l'encaissement avant qu'il soit créé.
 
 **Connexion des utilisateurs :** avec `Authentification:Active` à `true` (par défaut), commandes et encaissements exigent un utilisateur Sage connecté, en plus de la clé d'API.
@@ -188,7 +212,7 @@ Ce qui est installé dans `C:\Sage100Api` :
 dotnet test tests/Sage100Api.Tests
 ```
 
-20 tests couvrent le détail d'un bon de commande, le stock par valeur de gamme, l'encaissement par numéro de pièce, la clé d'API, la connexion des utilisateurs (jeton, collaborateur, caissier, blocage), l'accès à l'application borne, la validation (dont les gammes), le contrôle du stock, le catalogue, les doublons de commandes et d'encaissements, et la conversion des erreurs Sage et du worker en codes HTTP. Ils tournent sans Sage.
+24 tests couvrent la balance âgée, les positions GPS, les routes des documents, le détail d'un bon de commande, le stock par valeur de gamme, l'encaissement par numéro de pièce, la clé d'API, la connexion des utilisateurs (jeton, collaborateur, caissier, blocage), l'accès à l'application borne, la validation (dont les gammes), le contrôle du stock, le catalogue, les doublons de commandes et d'encaissements, et la conversion des erreurs Sage et du worker en codes HTTP. Ils tournent sans Sage.
 
 ## Reste à faire
 

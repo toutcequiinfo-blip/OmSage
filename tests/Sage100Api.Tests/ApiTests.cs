@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Sage100Api.Contracts;
+using Sage100Api.Extensions;
 using Sage100Api.Lectures;
 using Sage100Api.Worker;
 using Xunit;
@@ -16,9 +17,12 @@ namespace Sage100Api.Tests;
 public sealed class ApiTests : IDisposable
 {
     const string Cle = "cle-de-test";
-    readonly string _journal = Path.Combine(Path.GetTempPath(), $"journal-{Guid.NewGuid():N}.db");
+    // Dossier propre à chaque test : le journal et la base des extensions (positions GPS) y sont créés.
+    readonly string _dossier = Directory.CreateDirectory(Path.Combine(Path.GetTempPath(), $"api-{Guid.NewGuid():N}")).FullName;
+    string _journal => Path.Combine(_dossier, "journal.db");
     readonly FauxWorker _worker = new();
     readonly FaussesLectures _lectures = new();
+    readonly FaussesLecturesErp _erp = new();
     readonly WebApplicationFactory<Program> _usine;
     readonly HttpClient _http;
 
@@ -42,6 +46,8 @@ public sealed class ApiTests : IDisposable
                 s.AddSingleton<IWorkerClient>(_worker);
                 s.RemoveAll<ILecturesSage>();
                 s.AddSingleton<ILecturesSage>(_lectures);
+                s.RemoveAll<ILecturesErp>();
+                s.AddSingleton<ILecturesErp>(_erp);
             });
         });
 
@@ -339,12 +345,70 @@ public sealed class ApiTests : IDisposable
         Assert.Equal(HttpStatusCode.NotFound, absent.StatusCode);
     }
 
+    [Fact]
+    public void La_balance_agee_ventile_les_echeances_par_retard()
+    {
+        var jour = new DateTime(2026, 10, 4);
+        Echeance E(string client, decimal montant, int retard) =>
+            new() { Client = client, Intitule = client, Date = jour.AddDays(-retard - 30), DateEcheance = jour.AddDays(-retard), Montant = montant };
+
+        var b = Recouvrement.BalanceAgee(new[] { E("A", 100, -5), E("A", 200, 10), E("A", 300, 45), E("A", 400, 120), E("A", -50, 3), E("B", 80, 0), E("C", 60, 70), E("C", -60, 1) }, jour);
+
+        var a = Assert.Single(b, x => x.Client == "A");
+        Assert.Equal((950m, 100m, 200m, 300m, 0m, 400m, -50m, 120), (a.Total, a.NonEchu, a.Retard1a30, a.Retard31a60, a.Retard61a90, a.RetardPlus90, a.Credits, a.RetardMaxJours));
+        Assert.Equal(80m, Assert.Single(b, x => x.Client == "B").NonEchu);
+        Assert.DoesNotContain(b, x => x.Client == "C"); // soldé par un avoir
+        Assert.Equal("A", b[0].Client); // les plus en retard d'abord
+    }
+
+    [Fact]
+    public async Task Une_position_gps_s_enregistre_et_revient_sur_la_fiche_client()
+    {
+        var invalide = await _http.PutAsJsonAsync("/api/v1/geolocalisation/client/CISEL", new PositionRequest(95, 47.5, null, null));
+        var ok = await _http.PutAsJsonAsync("/api/v1/geolocalisation/client/CISEL", new PositionRequest(-18.9137, 47.5361, 12, "livreur"));
+        await _http.PutAsJsonAsync("/api/v1/geolocalisation/adresse-livraison/7", new PositionRequest(-18.95, 47.52, null, null));
+        var fiche = await _http.GetFromJsonAsync<JsonElement>("/api/v1/clients/CISEL/fiche");
+        var livraisons = await _http.GetFromJsonAsync<JsonElement>("/api/v1/livraisons/a-livrer");
+
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, invalide.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, ok.StatusCode);
+        Assert.Equal(-18.9137, fiche.GetProperty("position").GetProperty("latitude").GetDouble());
+        Assert.Equal(-18.95, fiche.GetProperty("adressesLivraison")[0].GetProperty("position").GetProperty("latitude").GetDouble());
+        Assert.Equal(-18.95, livraisons[0].GetProperty("position").GetProperty("latitude").GetDouble()); // adresse du document
+        Assert.Equal(-18.9137, livraisons[1].GetProperty("position").GetProperty("latitude").GetDouble()); // sinon celle du client
+    }
+
+    [Fact]
+    public async Task Enregistrer_une_position_exige_un_utilisateur_quand_la_connexion_est_active()
+    {
+        using var usine = Usine(connexion: true);
+        var http = ClientAvecConnexion(usine);
+        var sans = await http.PutAsJsonAsync("/api/v1/geolocalisation/client/CISEL", new PositionRequest(1, 2, null, null));
+        var avec = await ClientAvecConnexion(usine, await Jeton(http, "PAUL")).PutAsJsonAsync("/api/v1/geolocalisation/client/CISEL", new PositionRequest(1, 2, null, null));
+
+        Assert.Equal(HttpStatusCode.Unauthorized, sans.StatusCode);
+        Assert.Equal("PAUL", (await avec.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("utilisateur").GetString());
+    }
+
+    [Fact]
+    public async Task Les_types_de_document_et_tables_inconnus_sont_refuses()
+    {
+        var type = await _http.GetAsync("/api/v1/documents?type=bon");
+        var detail = await _http.GetAsync("/api/v1/documents/facture/FA00001");
+        var table = await _http.GetAsync("/api/v1/modifications?table=F_COMPTET&depuis=2026-10-01");
+
+        Assert.Equal(HttpStatusCode.BadRequest, type.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, detail.StatusCode);
+        Assert.Equal(6, _erp.DernierType);
+        Assert.Equal(HttpStatusCode.BadRequest, table.StatusCode);
+    }
+
     public void Dispose()
     {
         _http.Dispose();
         _usine.Dispose();
         Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
-        if (File.Exists(_journal)) File.Delete(_journal);
+        Directory.Delete(_dossier, recursive: true);
     }
 
     sealed class FauxWorker : IWorkerClient
@@ -387,6 +451,32 @@ public sealed class ApiTests : IDisposable
             DernierePiece = p.PieceCommande;
             return new EncaissementResult { IdExterne = p.Encaissement.IdExterne, PieceCommande = p.PieceCommande, Montant = p.Encaissement.Montant };
         }
+    }
+
+    sealed class FaussesLecturesErp : ILecturesErp
+    {
+        public int? DernierType;
+        public Task<FicheClient?> FicheClient(string numero) => Task.FromResult<FicheClient?>(numero == "CISEL"
+            ? new FicheClient { Numero = "CISEL", Intitule = "Ciselure", AdressesLivraison = [new AdresseLivraison { Numero = 7, Client = "CISEL", Ville = "Antananarivo" }] }
+            : null);
+        public Task<IReadOnlyList<ContactClient>> Contacts(string client) => Task.FromResult<IReadOnlyList<ContactClient>>([]);
+        public Task<IReadOnlyList<AdresseLivraison>> AdressesLivraison(string client) => Task.FromResult<IReadOnlyList<AdresseLivraison>>([]);
+        public Task<IReadOnlyList<CollaborateurFiche>> Collaborateurs() => Task.FromResult<IReadOnlyList<CollaborateurFiche>>([]);
+        public Task<IReadOnlyList<Depot>> Depots() => Task.FromResult<IReadOnlyList<Depot>>([]);
+        public Task<IReadOnlyList<EnteteDocument>> Documents(int? type, string? client, DateTime? du, DateTime? au, bool? cloture, int page, int taille)
+        {
+            DernierType = type;
+            return Task.FromResult<IReadOnlyList<EnteteDocument>>([]);
+        }
+        public Task<DetailDocument?> Document(int type, string piece)
+        {
+            DernierType = type;
+            return Task.FromResult<DetailDocument?>(new DetailDocument(new EnteteDocument { Type = TypesDocument.Nom(type), Piece = piece }, []));
+        }
+        public Task<IReadOnlyList<ALivrer>> ALivrer(DateTime? jusquAu, int? depot) => Task.FromResult<IReadOnlyList<ALivrer>>(
+            [new ALivrer { Type = "commande", Piece = "BC00042", Client = "CISEL", AdresseLivraison = 7 }, new ALivrer { Type = "commande", Piece = "BC00043", Client = "CISEL" }]);
+        public Task<IReadOnlyList<Echeance>> Echeances(string? client) => Task.FromResult<IReadOnlyList<Echeance>>([]);
+        public Task<IReadOnlyList<Modification>?> Modifications(string table, DateTime depuis, int taille) => Task.FromResult<IReadOnlyList<Modification>?>([]);
     }
 
     sealed class FaussesLectures : ILecturesSage
