@@ -1248,7 +1248,11 @@ async function majEtat() {
   const erreurs = ops.filter((o) => o.statut === "erreur").length;
   const libelle = { sage: "Connecté à Sage", serveur: "Sage indisponible", "hors-ligne": "Hors ligne" }[connexion];
   const b = $("#etat");
-  b.textContent = libelle + (attente ? ` · ${attente} en attente` : "") + (erreurs ? ` · ${erreurs} refusée(s)` : "");
+  // Sur téléphone, seul le voyant et les compteurs restent visibles (le libellé complet est dans l'infobulle).
+  const complet = libelle + (attente ? ` · ${attente} en attente` : "") + (erreurs ? ` · ${erreurs} refusée(s)` : "");
+  b.title = complet;
+  b.replaceChildren(element("span", { class: "libelle" }, complet),
+    element("span", { class: "court" }, [attente ? `${attente} ⏳` : "", erreurs ? `${erreurs} ✕` : ""].filter(Boolean).join(" ")));
   b.className = `etat ${erreurs ? "erreur" : connexion}`;
 }
 
