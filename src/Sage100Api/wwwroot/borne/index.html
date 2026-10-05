@@ -117,6 +117,9 @@
         <button id="btn-r-passage" type="button">Client de passage</button>
         <button id="btn-r-rappel" type="button">Tickets en attente <span id="nb-attente" class="pastille"></span></button>
         <button id="btn-r-x" type="button">X de caisse</button>
+        <button id="btn-imprimer" type="button" class="icone-r" title="Imprimer le ticket (ou le dernier ticket terminé)" aria-label="Imprimer">🖨</button>
+        <button id="btn-verrouiller" type="button" class="icone-r" title="Verrouiller la caisse" aria-label="Verrouiller">🔒</button>
+        <button id="btn-r-pave" type="button" class="icone-r" title="Afficher ou masquer le pavé numérique" aria-label="Pavé numérique" aria-pressed="false">⌨</button>
       </div>
       <div class="barre-recherche">
         <input id="recherche-article" class="recherche" type="search" placeholder="Rechercher un article ou scanner un code-barres" autocomplete="off">
@@ -140,11 +143,6 @@
         <button type="button" data-touche="1">1</button><button type="button" data-touche="2">2</button><button type="button" data-touche="3">3</button>
         <button type="button" class="fonction haute" data-touche="entree">Entrée</button>
         <button type="button" class="fonction" data-touche="suppr">Suppr</button><button type="button" data-touche="0">0</button><button type="button" data-touche=",">,</button>
-      </div>
-      <div class="fonctions">
-        <button id="btn-verrouiller" type="button" class="sombre">🔒 Verrouiller</button>
-        <button id="btn-changer-utilisateur" type="button" class="sombre">👤 Changer d'utilisateur</button>
-        <button id="btn-imprimer" type="button" class="sombre">🖨 Imprimer</button>
       </div>
     </aside>
 
@@ -170,6 +168,7 @@
       <div><span>Déjà encaissé</span><strong id="p-paye">0</strong></div>
       <div class="reste"><span>Reste à payer</span><strong id="p-reste">0</strong></div>
     </div>
+    <p id="paiement-envoi" class="envoi" hidden>Création de la pièce dans Sage… le montant à encaisser arrive.</p>
     <div id="modes" class="modes"></div>
     <p id="encaissement-interdit" class="interdit" hidden></p>
     <div id="saisie-paiement" class="saisie-paiement" hidden>
@@ -184,16 +183,6 @@
     </div>
   </main>
 
-  <!-- 4. Fin de vente -->
-  <main id="ecran-fin" class="ecran fin" hidden>
-    <h1>Merci !</h1>
-    <div id="recap" class="recap"></div>
-    <div class="actions centre">
-      <button id="btn-imprimer-fin" class="secondaire grand" type="button">🖨 Imprimer le ticket</button>
-      <button id="btn-nouvelle" class="principal grand" type="button">Nouvelle vente</button>
-    </div>
-  </main>
-
   <!-- 5. Réglages et file d'envoi -->
   <main id="ecran-reglages" class="ecran reglages" hidden>
     <h1>Réglages</h1>
@@ -201,6 +190,7 @@
       <label>Nom de la borne (10 caractères max.) <input name="borne" maxlength="10" required pattern="[A-Za-z0-9_]+"></label>
       <label>Clé d'API <input name="cle" type="password" required autocomplete="off"></label>
       <label>Client par défaut (facultatif) <input name="clientDefaut" maxlength="17"></label>
+      <label class="case"><input name="demanderQuantite" type="checkbox"> Demander la quantité et le conditionnement en touchant un article</label>
       <div class="actions">
         <button type="submit" class="principal">Enregistrer</button>
         <button id="btn-catalogue" type="button" class="secondaire">Recharger le catalogue</button>
@@ -219,6 +209,31 @@
     <h2 id="gamme-titre"></h2>
     <div id="gamme-valeurs" class="valeurs"></div>
     <button id="btn-fermer-gamme" type="button" class="secondaire">Annuler</button>
+  </dialog>
+
+  <!-- Quantité (et conditionnement ou valeur de gamme) demandée en touchant un article -->
+  <dialog id="choix-quantite" class="dialogue fenetre-qte">
+    <form id="form-quantite" method="dialog">
+      <h2 id="qte-titre"></h2>
+      <p id="qte-info" class="discret"></p>
+      <div class="ligne-qte">
+        <button type="button" class="pas" data-pas="-1" aria-label="Moins un">−</button>
+        <input id="qte-valeur" type="text" inputmode="decimal" autocomplete="off" aria-label="Quantité">
+        <button type="button" class="pas" data-pas="1" aria-label="Plus un">+</button>
+      </div>
+      <div id="qte-pave" class="mini-pave">
+        <button type="button" data-chiffre="7">7</button><button type="button" data-chiffre="8">8</button><button type="button" data-chiffre="9">9</button>
+        <button type="button" data-chiffre="4">4</button><button type="button" data-chiffre="5">5</button><button type="button" data-chiffre="6">6</button>
+        <button type="button" data-chiffre="1">1</button><button type="button" data-chiffre="2">2</button><button type="button" data-chiffre="3">3</button>
+        <button type="button" data-chiffre=",">,</button><button type="button" data-chiffre="0">0</button><button type="button" data-chiffre="suppr" aria-label="Effacer">⌫</button>
+      </div>
+      <p id="qte-choix-titre" class="choix-titre"></p>
+      <div id="qte-choix" class="valeurs"></div>
+      <div class="actions">
+        <button id="btn-qte-annuler" type="button" class="secondaire">Annuler</button>
+        <button id="btn-qte-ok" type="submit" class="principal">OK</button>
+      </div>
+    </form>
   </dialog>
 
   <!-- Liste générique : tickets en attente, X de caisse -->
