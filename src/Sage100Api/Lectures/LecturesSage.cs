@@ -61,8 +61,13 @@ public sealed record CommandeOuverte(string Piece, DateTime Date, string Client,
 }
 
 /// <summary>Ligne d'un bon de commande (F_DOCLIGNE), avec les valeurs de gamme de l'article s'il en a.</summary>
+/// <summary>
+/// Ligne d'une pièce de vente. Quantite : en unité de vente de l'article (Unite). Conditionnement et QuantiteConditionnement :
+/// tels que saisis dans Sage (EU_Enumere, EU_Qte), par exemple 2 « Carton de 12 » pour 24 pièces ; sans conditionnement,
+/// Sage y met l'unité de vente et la même quantité.
+/// </summary>
 public sealed record LignePiece(string? Article, string? Designation, string? Gamme1, string? Gamme2, decimal Quantite, decimal PrixUnitaireHT,
-    decimal MontantHT, decimal MontantTTC);
+    decimal MontantHT, decimal MontantTTC, string? Unite = null, string? Conditionnement = null, decimal? QuantiteConditionnement = null);
 
 /// <summary>Bon de commande et ses lignes, pour le consulter depuis la borne (loupe).</summary>
 public sealed record DetailPiece(CommandeOuverte Entete, decimal TotalHT, IReadOnlyList<LignePiece> Lignes);
@@ -241,6 +246,17 @@ public sealed class LecturesSql(IOptions<SageOptions> options) : ILecturesSage
         return r.AsList();
     }
 
+    /// <summary>Lignes d'une pièce de vente (alias l = F_DOCLIGNE), à compléter par le WHERE.</summary>
+    internal const string SelectLignes =
+        "SELECT NULLIF(l.AR_Ref, '') AS Article, NULLIF(l.DL_Design, '') AS Designation, g1.EG_Enumere AS Gamme1, g2.EG_Enumere AS Gamme2, " +
+        "CAST(l.DL_Qte AS decimal(18,6)) AS Quantite, CAST(l.DL_PrixUnitaire AS decimal(18,6)) AS PrixUnitaireHT, " +
+        "CAST(l.DL_MontantHT AS decimal(18,2)) AS MontantHT, CAST(l.DL_MontantTTC AS decimal(18,2)) AS MontantTTC, " +
+        "(SELECT TOP 1 NULLIF(u.U_Intitule, '') FROM F_ARTICLE a JOIN P_UNITE u ON u.cbIndice = a.AR_UniteVen WHERE a.AR_Ref = l.AR_Ref) AS Unite, " +
+        "NULLIF(l.EU_Enumere, '') AS Conditionnement, CAST(l.EU_Qte AS decimal(18,6)) AS QuantiteConditionnement " +
+        "FROM F_DOCLIGNE l " +
+        "LEFT JOIN F_ARTGAMME g1 ON g1.AG_No = l.AG_No1 AND l.AG_No1 <> 0 " +
+        "LEFT JOIN F_ARTGAMME g2 ON g2.AG_No = l.AG_No2 AND l.AG_No2 <> 0 ";
+
     public async Task<DetailPiece?> DetailCommande(string piece)
     {
         using var c = Cnx();
@@ -256,13 +272,7 @@ public sealed class LecturesSql(IOptions<SageOptions> options) : ILecturesSage
         if (entete.Piece is null) return null;
         // Lignes sans article (commentaires, sous-totaux) incluses : AR_Ref vide, seule la désignation compte.
         var lignes = await c.QueryAsync<LignePiece>(
-            "SELECT NULLIF(l.AR_Ref, '') AS Article, NULLIF(l.DL_Design, '') AS Designation, g1.EG_Enumere AS Gamme1, g2.EG_Enumere AS Gamme2, " +
-            "CAST(l.DL_Qte AS decimal(18,6)) AS Quantite, CAST(l.DL_PrixUnitaire AS decimal(18,6)) AS PrixUnitaireHT, " +
-            "CAST(l.DL_MontantHT AS decimal(18,2)) AS MontantHT, CAST(l.DL_MontantTTC AS decimal(18,2)) AS MontantTTC " +
-            "FROM F_DOCLIGNE l " +
-            "LEFT JOIN F_ARTGAMME g1 ON g1.AG_No = l.AG_No1 AND l.AG_No1 <> 0 " +
-            "LEFT JOIN F_ARTGAMME g2 ON g2.AG_No = l.AG_No2 AND l.AG_No2 <> 0 " +
-            "WHERE l.DO_Domaine = 0 AND l.DO_Type = @type AND l.DO_Piece = @piece ORDER BY l.DL_Ligne",
+            SelectLignes + "WHERE l.DO_Domaine = 0 AND l.DO_Type = @type AND l.DO_Piece = @piece ORDER BY l.DL_Ligne",
             new { piece, type = entete.TypePiece });
         var e = entete;
         return new DetailPiece(new CommandeOuverte(e.Piece, e.Date, e.Client, e.Intitule, e.Reference, e.IdExterne, e.TotalTTC, e.DejaRegle, e.NetAPayer, e.TypePiece),
