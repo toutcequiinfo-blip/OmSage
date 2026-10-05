@@ -8,7 +8,9 @@ namespace Sage100Api.Lectures;
 /// CategorieTarif : catégorie tarifaire du client (N_CatTarif, 1 à 32), qui fixe ses prix (voir <see cref="Tarification"/>).
 /// CategorieCompta : catégorie comptable (N_CatCompta), qui fixe le taux de TVA de chaque article (voir <see cref="TauxTva"/>).
 /// </summary>
-public sealed record Client(string Numero, string Intitule, string? Ville, string? Telephone, string? Email, int CategorieTarif = 1, int CategorieCompta = 1);
+/// Escompte : taux d'escompte du client (CT_Taux02), que Sage reprend sur ses pièces (DO_TxEscompte) et déduit du net à payer.
+public sealed record Client(string Numero, string Intitule, string? Ville, string? Telephone, string? Email, int CategorieTarif = 1, int CategorieCompta = 1,
+    decimal Escompte = 0);
 
 /// <summary>
 /// Gamme1 / Gamme2 : intitulés des gammes (par exemple « Taille »), null si l'article n'est pas à gamme.
@@ -102,7 +104,8 @@ public sealed class LecturesSql(IOptions<SageOptions> options) : ILecturesSage
     const string SelectClient =
         "SELECT CT_Num AS Numero, CT_Intitule AS Intitule, CT_Ville AS Ville, CT_Telephone AS Telephone, CT_EMail AS Email, " +
     "CAST(CASE WHEN N_CatTarif > 0 THEN N_CatTarif ELSE 1 END AS int) AS CategorieTarif, " +
-    "CAST(CASE WHEN N_CatCompta > 0 THEN N_CatCompta ELSE 1 END AS int) AS CategorieCompta FROM F_COMPTET";
+    "CAST(CASE WHEN N_CatCompta > 0 THEN N_CatCompta ELSE 1 END AS int) AS CategorieCompta, " +
+    "CAST(ISNULL(CT_Taux02, 0) AS decimal(18,6)) AS Escompte FROM F_COMPTET";
 
     const string SelectArticle =
         "SELECT a.AR_Ref AS Reference, a.AR_Design AS Designation, a.FA_CodeFamille AS Famille, a.AR_CodeBarre AS CodeBarre, " +

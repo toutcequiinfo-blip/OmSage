@@ -106,6 +106,7 @@
       <ul id="lignes" class="lignes"></ul>
       <div class="totaux">
         <div><span>Total HT</span><span id="total-ht">0</span></div>
+        <div id="ligne-escompte" hidden><span id="lbl-escompte">Escompte</span><span id="total-escompte">0</span></div>
         <div><span>TVA estimée (taux des articles dans Sage)</span><span id="total-tva">0</span></div>
         <div class="ttc"><span>Total TTC</span><span id="total-ttc">0</span></div>
       </div>
@@ -162,12 +163,16 @@
 
   <!-- 3. Paiement -->
   <main id="ecran-paiement" class="ecran paiement" hidden>
-    <h1>Encaissement <span id="paiement-numero" class="discret"></span></h1>
+    <div class="titre-paiement">
+      <h1>Encaissement <span id="paiement-numero" class="discret"></span></h1>
+      <button id="btn-modifier-ticket" class="secondaire" type="button" title="Revenir au ticket pour le corriger (la pièce Sage est supprimée puis recréée)">← Modifier le ticket</button>
+    </div>
     <div class="montants">
       <div><span id="p-total-libelle">Total TTC estimé</span><strong id="p-total">0</strong></div>
       <div><span>Déjà encaissé</span><strong id="p-paye">0</strong></div>
       <div class="reste"><span>Reste à payer</span><strong id="p-reste">0</strong></div>
     </div>
+    <p id="paiement-ecart" class="info" hidden></p>
     <p id="paiement-envoi" class="envoi" hidden>Création de la pièce dans Sage… le montant à encaisser arrive.</p>
     <div id="modes" class="modes"></div>
     <p id="encaissement-interdit" class="interdit" hidden></p>

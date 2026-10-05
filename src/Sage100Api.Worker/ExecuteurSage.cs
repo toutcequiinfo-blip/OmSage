@@ -84,6 +84,9 @@ namespace Sage100Api.Worker
                     case Operations.CreerEncaissement:
                         resultat = CreerEncaissement(Lire<EncaissementCommandeRequest>(requete));
                         break;
+                    case Operations.SupprimerCommande:
+                        resultat = SupprimerCommande(Lire<SuppressionWorkerRequest>(requete));
+                        break;
                     default:
                         return Erreur(CodesErreur.Technique, $"Opération inconnue : {requete.Operation}");
                 }
@@ -407,6 +410,28 @@ namespace Sage100Api.Worker
             var piece = (IBODocumentVente3)pm.DocumentResult;
             Console.WriteLine($"{TypesPiece.Libelle(type)} {c.IdExterne} -> {piece.DO_Piece}{(demande.Auteur != null ? " par " + demande.Auteur.Utilisateur : "")}");
             return new CommandeResult { IdExterne = c.IdExterne, Piece = piece.DO_Piece, NetAPayer = piece.DO_NetAPayer, TypeDocument = type };
+        }
+
+        /// <summary>
+        /// Le client change d'avis sur l'écran d'encaissement : la pièce créée par la borne est supprimée de Sage
+        /// (stock et lots rendus par Sage), pour être recréée corrigée. Refusé dès qu'un acompte ou un règlement y est lié.
+        /// Une facture validée (loi anti-fraude) ne se supprime pas : Sage refuse, la borne affiche son message.
+        /// </summary>
+        SuppressionResult SupprimerCommande(SuppressionWorkerRequest demande)
+        {
+            var existante = PieceParRefExterne(demande.IdExterne);
+            if (existante == null) return new SuppressionResult { IdExterne = demande.IdExterne, DejaAbsente = true };
+            var cial = Session();
+            var doc = cial.FactoryDocumentVente.ReadPiece(TypeOm(existante.Value.Type), existante.Value.Piece);
+            doc.Refresh();
+            var acomptes = 0;
+            foreach (IBODocumentAcompte3 _ in doc.FactoryDocumentAcompte.List) acomptes++;
+            if (acomptes > 0 || doc.DO_MontantRegle > 0.0001)
+                throw new ErreurMetier(CodesErreur.SageMetier,
+                    $"{existante.Value.Piece} a déjà un encaissement : elle ne peut plus être supprimée. Corrigez-la dans Sage.");
+            doc.Remove();
+            Console.WriteLine($"{existante.Value.Piece} ({demande.IdExterne}) supprimée depuis la borne{(demande.Auteur != null ? " par " + demande.Auteur.Utilisateur : "")}");
+            return new SuppressionResult { IdExterne = demande.IdExterne, Piece = existante.Value.Piece };
         }
 
         /// <summary>Souche choisie sur la borne (DO_Souche, 0 = première) : numérotation de cette souche.</summary>

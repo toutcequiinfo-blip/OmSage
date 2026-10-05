@@ -85,6 +85,11 @@ export async function envoyerMaintenant(cle) {
   return enCours;
 }
 
+/** Attend la fin d'un envoi en cours : une opération lue ensuite dans la file ne partira plus pendant qu'on la modifie. */
+export async function attendreFinEnvoi() {
+  while (enCours) await enCours.catch(() => {});
+}
+
 async function envoyerFile(seulement = null) {
   const bilan = { envoyees: 0, restantes: 0, cleRefusee: false, reconnexions: [] };
   const ops = await lireFile();

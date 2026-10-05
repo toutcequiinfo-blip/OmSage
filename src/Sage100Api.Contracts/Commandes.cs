@@ -90,6 +90,14 @@ namespace Sage100Api.Contracts
         public bool DejaExistante { get; set; }
     }
 
+    /// <summary>Pièce supprimée de Sage (le client a changé d'avis avant de payer) ; DejaAbsente : aucune pièce pour cet identifiant.</summary>
+    public sealed class SuppressionResult
+    {
+        public string IdExterne { get; set; } = "";
+        public string? Piece { get; set; }
+        public bool DejaAbsente { get; set; }
+    }
+
     /// <summary>Encaissement enregistré comme acompte sur le bon de commande (fonctionne loi anti-fraude activée).</summary>
     public sealed class EncaissementRequest
     {
