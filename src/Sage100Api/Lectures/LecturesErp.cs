@@ -119,7 +119,10 @@ public sealed record EnteteDocument
 
 public sealed record DetailDocument(EnteteDocument Entete, IReadOnlyList<LignePiece> Lignes);
 
-/// <summary>Commande ou préparation à livrer, avec l'adresse et le téléphone utiles à une tournée.</summary>
+/// <summary>
+/// Pièce à livrer (bon de commande, préparation, bon de livraison, facture), avec l'adresse et le téléphone utiles à une tournée.
+/// Type : nom du type de document (commande, preparation, livraison, facture, facture-comptabilisee).
+/// </summary>
 public sealed record ALivrer
 {
     public string Type { get; init; } = "";
@@ -142,6 +145,11 @@ public sealed record ALivrer
     public string? Telephone { get; init; }
     /// <summary>Position de l'adresse de livraison, sinon du client, si une extension l'a enregistrée.</summary>
     public Position? Position { get; init; }
+    /// <summary>Dernière tournée où la pièce figure (null si elle n'a jamais été prévue).</summary>
+    public string? Tournee { get; init; }
+    public DateTime? DateTournee { get; init; }
+    /// <summary>Statut de la pièce dans cette tournée : a-livrer (déjà prévue), partiel ou echec (à reprogrammer).</summary>
+    public string? StatutLivraison { get; init; }
 }
 
 /// <summary>Écriture client non lettrée (F_ECRITUREC) : facture ou avoir pas encore soldé. Montant positif = dû par le client.</summary>
@@ -224,7 +232,9 @@ public interface ILecturesErp
     Task<IReadOnlyList<Depot>> Depots();
     Task<IReadOnlyList<EnteteDocument>> Documents(int? type, string? client, DateTime? du, DateTime? au, bool? cloture, int page, int taille);
     Task<DetailDocument?> Document(int type, string piece);
-    Task<IReadOnlyList<ALivrer>> ALivrer(DateTime? jusquAu, int? depot);
+    /// <param name="types">Codes DO_Type livrables (1, 2, 3, 6, 7) ; null = tous.</param>
+    /// <param name="depuis">Factures datées de ce jour ou après (les autres types ne sont pas filtrés) ; null = toutes.</param>
+    Task<IReadOnlyList<ALivrer>> ALivrer(DateTime? jusquAu, int? depot, IReadOnlyCollection<int>? types = null, DateTime? depuis = null);
     Task<IReadOnlyList<Echeance>> Echeances(string? client);
     /// <summary>Codes modifiés depuis une date (colonne cbModification des tables Sage SQL). Null si la colonne n'existe pas.</summary>
     Task<IReadOnlyList<Modification>?> Modifications(string table, DateTime depuis, int taille);
@@ -359,23 +369,24 @@ public sealed class LecturesErpSql(IOptions<SageOptions> options) : ILecturesErp
         var e = await c.QueryFirstOrDefaultAsync<LigneEntete>(SelectEntete + "WHERE e.DO_Domaine = 0 AND e.DO_Type = @type AND e.DO_Piece = @piece", new { type, piece });
         if (e is null) return null;
         var lignes = await c.QueryAsync<LignePiece>(
-            "SELECT NULLIF(l.AR_Ref, '') AS Article, NULLIF(l.DL_Design, '') AS Designation, g1.EG_Enumere AS Gamme1, g2.EG_Enumere AS Gamme2, " +
-            "CAST(l.DL_Qte AS decimal(18,6)) AS Quantite, CAST(l.DL_PrixUnitaire AS decimal(18,6)) AS PrixUnitaireHT, " +
-            "CAST(l.DL_MontantHT AS decimal(18,2)) AS MontantHT, CAST(l.DL_MontantTTC AS decimal(18,2)) AS MontantTTC " +
-            "FROM F_DOCLIGNE l " +
-            "LEFT JOIN F_ARTGAMME g1 ON g1.AG_No = l.AG_No1 AND l.AG_No1 <> 0 " +
-            "LEFT JOIN F_ARTGAMME g2 ON g2.AG_No = l.AG_No2 AND l.AG_No2 <> 0 " +
-            "WHERE l.DO_Domaine = 0 AND l.DO_Type = @type AND l.DO_Piece = @piece ORDER BY l.DL_Ligne",
+            LecturesSql.SelectLignes + "WHERE l.DO_Domaine = 0 AND l.DO_Type = @type AND l.DO_Piece = @piece ORDER BY l.DL_Ligne",
             new { type, piece });
         return new DetailDocument(e.Entete(), lignes.AsList());
     }
 
-    public async Task<IReadOnlyList<ALivrer>> ALivrer(DateTime? jusquAu, int? depot)
+    /// <summary>Types de documents qu'une tournée peut livrer : commande, préparation, bon de livraison, facture, facture comptabilisée.</summary>
+    public static readonly int[] TypesLivrables = [1, 2, 3, 6, 7];
+
+    public async Task<IReadOnlyList<ALivrer>> ALivrer(DateTime? jusquAu, int? depot, IReadOnlyCollection<int>? types = null, DateTime? depuis = null)
     {
-        // Bons de commande et préparations non clôturés ; adresse de livraison du document, sinon celle de la fiche client.
+        // Commandes, préparations et BL non clôturés ; factures hors factures d'acompte (elles sont le règlement), d'avoir et de retour.
+        // Adresse de livraison du document, sinon celle de la fiche client.
+        var codes = (types ?? TypesLivrables).Where(TypesLivrables.Contains).Distinct().ToArray();
+        if (codes.Length == 0) return [];
         using var c = Cnx();
         return (await c.QueryAsync<ALivrer>(
-            "SELECT CASE e.DO_Type WHEN 1 THEN 'commande' ELSE 'preparation' END AS Type, e.DO_Piece AS Piece, e.DO_Date AS Date, " + Date("e.DO_DateLivr") + " AS DateLivraison, " +
+            "SELECT CASE e.DO_Type WHEN 1 THEN 'commande' WHEN 2 THEN 'preparation' WHEN 3 THEN 'livraison' WHEN 6 THEN 'facture' " +
+            "ELSE 'facture-comptabilisee' END AS Type, e.DO_Piece AS Piece, e.DO_Date AS Date, " + Date("e.DO_DateLivr") + " AS DateLivraison, " +
             "e.DO_Tiers AS Client, t.CT_Intitule AS Intitule, NULLIF(e.DO_Ref, '') AS Reference, " +
             "CAST(e.DO_TotalTTC AS decimal(18,2)) AS TotalTTC, CAST(e.DO_NetAPayer AS decimal(18,2)) AS NetAPayer, NULLIF(e.DE_No, 0) AS Depot, " +
             "NULLIF(e.LI_No, 0) AS AdresseLivraison, " +
@@ -384,10 +395,12 @@ public sealed class LecturesErpSql(IOptions<SageOptions> options) : ILecturesErp
             "NULLIF(COALESCE(li.LI_Pays, t.CT_Pays), '') AS Pays, NULLIF(COALESCE(NULLIF(li.LI_Contact, ''), t.CT_Contact), '') AS Contact, " +
             "NULLIF(COALESCE(NULLIF(li.LI_Telephone, ''), t.CT_Telephone), '') AS Telephone " +
             "FROM F_DOCENTETE e LEFT JOIN F_COMPTET t ON t.CT_Num = e.DO_Tiers LEFT JOIN F_LIVRAISON li ON li.LI_No = e.LI_No AND e.LI_No <> 0 " +
-            "WHERE e.DO_Domaine = 0 AND e.DO_Type IN (1, 2) AND e.DO_Cloture = 0 " +
+            "WHERE e.DO_Domaine = 0 AND e.DO_Type IN @codes " +
+            "AND (e.DO_Type IN (1, 2, 3) AND e.DO_Cloture = 0 OR e.DO_Type IN (6, 7) AND e.DO_Provenance NOT IN (1, 2) " +
+            "  AND NOT EXISTS (SELECT 1 FROM F_DOCREGL fa WHERE fa.DO_PieceAcompte = e.DO_Piece) AND (@depuis IS NULL OR e.DO_Date >= @depuis)) " +
             "AND (@jusquAu IS NULL OR " + Date("e.DO_DateLivr") + " IS NULL OR e.DO_DateLivr <= @jusquAu) AND (@depot IS NULL OR e.DE_No = @depot) " +
             "ORDER BY " + Date("e.DO_DateLivr") + ", e.DO_Piece",
-            new { jusquAu, depot })).AsList();
+            new { jusquAu, depot, codes, depuis })).AsList();
     }
 
     public async Task<IReadOnlyList<Echeance>> Echeances(string? client)

@@ -201,10 +201,12 @@ public sealed partial class Livraison
         foreach (var p in pieces)
         {
             if (existants.ContainsKey(p)) continue;
-            if (!aLivrer.ContainsKey(p)) erreurs.Add($"{p} n'est pas une pièce à livrer (bon de commande ou préparation non clôturé).");
-            var ailleurs = c.QueryFirstOrDefault<string>(
-                "SELECT tournee FROM arrets WHERE piece = @p AND tournee <> @id AND statut IN ('a-livrer', 'livre')", new { p, id }, tx);
-            if (ailleurs != null) erreurs.Add($"{p} est déjà prévue dans la tournée {ailleurs}.");
+            if (!aLivrer.ContainsKey(p)) erreurs.Add($"{p} n'est pas une pièce à livrer (commande, préparation ou BL non clôturé, facture).");
+            // Une pièce livrée en partie (ou en échec) peut repartir dans une nouvelle tournée ; prévue ou livrée, non.
+            var ailleurs = c.QueryFirstOrDefault<(string Tournee, string Statut)>(
+                "SELECT tournee, statut FROM arrets WHERE piece = @p AND tournee <> @id AND statut IN ('a-livrer', 'livre')", new { p, id }, tx);
+            if (ailleurs.Tournee != null)
+                erreurs.Add(ailleurs.Statut == "livre" ? $"{p} est déjà livrée (tournée {ailleurs.Tournee})." : $"{p} est déjà prévue dans la tournée {ailleurs.Tournee}.");
         }
         if (erreurs.Count > 0) return (null, erreurs);
 
@@ -310,6 +312,17 @@ public sealed partial class Livraison
     }
 
     /// <summary>Suivi d'une pièce : tous ses passages en tournée, le plus récent d'abord.</summary>
+    /// <summary>Dernier passage prévu de chaque pièce : tournée, date et statut (a-livrer, livre, partiel, echec).</summary>
+    public IReadOnlyDictionary<string, (string Tournee, DateTime Date, string Statut)> Planifications()
+    {
+        using var c = Ouvrir();
+        var r = new Dictionary<string, (string, DateTime, string)>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (piece, tournee, date, statut) in c.Query<(string, string, string, string)>(
+            "SELECT a.piece, a.tournee, t.date, a.statut FROM arrets a JOIN tournees t ON t.id = a.tournee ORDER BY t.date, t.cree_le"))
+            r[piece] = (tournee, DateTime.Parse(date, CultureInfo.InvariantCulture), statut);
+        return r;
+    }
+
     public IReadOnlyList<Arret> Suivi(string piece)
     {
         using var c = Ouvrir();

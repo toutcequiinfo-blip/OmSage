@@ -624,6 +624,41 @@ public sealed class ApiTests : IDisposable
     }
 
     [Fact]
+    public async Task Les_pieces_a_livrer_suivent_les_types_choisis_et_signalent_celles_deja_en_tournee()
+    {
+        using var usine = Usine(connexion: true);
+        var http = ClientAvecConnexion(usine);
+        var marie = ClientAvecConnexion(usine, await Jeton(http, "MARIE"));
+        var tournee = new TourneeRequest(new DateTime(2026, 10, 5), null, 4, 1, ["BC00042", "BC00043", "FA00050"]);
+        var creee = await (await marie.PutAsJsonAsync("/api/v1/livraisons/tournees/t1", tournee)).Content.ReadFromJsonAsync<JsonElement>();
+        await marie.PutAsJsonAsync("/api/v1/livraisons/tournees/t1/arrets/BC00043", new CompteRenduArret("livre", null, "M. Rabe", null, null, null, null));
+        await marie.PutAsJsonAsync("/api/v1/livraisons/tournees/t1/arrets/BC00042",
+            new CompteRenduArret("livre", null, "M. Rabe", null, null, null, null, [new(1, 1, "manque-marchandise"), new(3, 3, null)]));
+
+        var factures = await marie.GetFromJsonAsync<JsonElement>("/api/v1/livraisons/a-livrer?types=facture,facture-comptabilisee");
+        var toutes = await marie.GetFromJsonAsync<JsonElement>("/api/v1/livraisons/a-livrer");
+        var devis = await marie.GetAsync("/api/v1/livraisons/a-livrer?types=devis");
+        var doublon = await marie.PutAsJsonAsync("/api/v1/livraisons/tournees/t2", tournee with { Pieces = ["FA00050"] });
+        var livree = await marie.PutAsJsonAsync("/api/v1/livraisons/tournees/t2", tournee with { Pieces = ["BC00043"] });
+        var reliquat = await marie.PutAsJsonAsync("/api/v1/livraisons/tournees/t2", tournee with { Pieces = ["BC00042"] });
+        var bague = creee.GetProperty("arrets")[0].GetProperty("articles")[1];
+
+        Assert.Equal("FA00050", Assert.Single(factures.EnumerateArray()).GetProperty("piece").GetString());
+        var pieces = toutes.EnumerateArray().ToDictionary(a => a.GetProperty("piece").GetString()!);
+        Assert.False(pieces.ContainsKey("BC00043")); // livrée : plus proposée
+        Assert.Equal("partiel", pieces["BC00042"].GetProperty("statutLivraison").GetString());
+        Assert.Equal("a-livrer", pieces["FA00050"].GetProperty("statutLivraison").GetString());
+        Assert.Equal("t1", pieces["FA00050"].GetProperty("tournee").GetString());
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, devis.StatusCode);
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, doublon.StatusCode);
+        Assert.Contains("déjà livrée", await livree.Content.ReadAsStringAsync());
+        Assert.Equal(HttpStatusCode.OK, reliquat.StatusCode); // livrée en partie : peut repartir
+        Assert.Equal("Pièce", bague.GetProperty("unite").GetString());
+        Assert.Equal("Lot de 3", bague.GetProperty("conditionnement").GetString());
+        Assert.Equal(1m, bague.GetProperty("quantiteConditionnement").GetDecimal());
+    }
+
+    [Fact]
     public async Task Le_chargement_et_la_livraison_se_controlent_ligne_par_ligne_avec_les_autres_courses()
     {
         using var usine = Usine(connexion: true);
@@ -763,13 +798,19 @@ public sealed class ApiTests : IDisposable
         {
             DernierType = type;
             IReadOnlyList<LignePiece> lignes = piece == "BC00042"
-                ? [new("CHORFA", "Chaîne forçat Or", null, null, 2, 1071, 2142, 2570.4m), new(null, "Livrer avant midi", null, null, 0, 0, 0, 0),
-                   new("BAOR01", "Bague Or", "54", null, 3, 2292, 6876, 8251.2m)]
+                ? [new("CHORFA", "Chaîne forçat Or", null, null, 2, 1071, 2142, 2570.4m, "Pièce", "Pièce", 2), new(null, "Livrer avant midi", null, null, 0, 0, 0, 0),
+                   new("BAOR01", "Bague Or", "54", null, 3, 2292, 6876, 8251.2m, "Pièce", "Lot de 3", 1)]
                 : [];
             return Task.FromResult<DetailDocument?>(new DetailDocument(new EnteteDocument { Type = TypesDocument.Nom(type), Piece = piece }, lignes));
         }
-        public Task<IReadOnlyList<ALivrer>> ALivrer(DateTime? jusquAu, int? depot) => Task.FromResult<IReadOnlyList<ALivrer>>(
-            [new ALivrer { Type = "commande", Piece = "BC00042", Client = "CISEL", AdresseLivraison = 7 }, new ALivrer { Type = "commande", Piece = "BC00043", Client = "CISEL" }]);
+        public IReadOnlyCollection<int>? DerniersTypes;
+        public Task<IReadOnlyList<ALivrer>> ALivrer(DateTime? jusquAu, int? depot, IReadOnlyCollection<int>? types = null, DateTime? depuis = null)
+        {
+            DerniersTypes = types;
+            ALivrer[] toutes = [new ALivrer { Type = "commande", Piece = "BC00042", Client = "CISEL", AdresseLivraison = 7 },
+                new ALivrer { Type = "commande", Piece = "BC00043", Client = "CISEL" }, new ALivrer { Type = "facture", Piece = "FA00050", Client = "CISEL" }];
+            return Task.FromResult<IReadOnlyList<ALivrer>>(toutes.Where(a => types is null || types.Contains(TypesDocument.Code(a.Type) ?? -1)).ToList());
+        }
         public Task<IReadOnlyList<Echeance>> Echeances(string? client) => Task.FromResult<IReadOnlyList<Echeance>>([]);
         public Task<IReadOnlyList<Modification>?> Modifications(string table, DateTime depuis, int taille) => Task.FromResult<IReadOnlyList<Modification>?>([]);
         public Task<IndicateursClient> Indicateurs(string client, DateTime aujourdhui) => Task.FromResult(new IndicateursClient { CaDouzeMois = 12000m });

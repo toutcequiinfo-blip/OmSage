@@ -24,6 +24,24 @@ function ecrireJson(cle, valeur) {
   try { valeur == null ? localStorage.removeItem(cle) : localStorage.setItem(cle, JSON.stringify(valeur)); } catch { /* ignoré */ }
 }
 /** La clé d'API de la borne ou du CRM est reprise si l'un d'eux a déjà été réglé sur cet appareil. */
+// Types de pièces livrables proposés à la préparation (réglage de l'appareil) et période des factures.
+const TYPES_LIVRABLES = { commande: "BC", preparation: "PL", livraison: "BL", facture: "FA", "facture-comptabilisee": "FA compta." };
+const REGLAGES_DEFAUT = { types: Object.keys(TYPES_LIVRABLES), joursFactures: 30 };
+function reglages() {
+  const r = lireJson(CLE_REGLAGES, null) ?? {};
+  return {
+    types: Array.isArray(r.types) ? r.types.filter((t) => t in TYPES_LIVRABLES) : REGLAGES_DEFAUT.types,
+    joursFactures: Number(r.joursFactures) > 0 ? Number(r.joursFactures) : REGLAGES_DEFAUT.joursFactures,
+  };
+}
+function remplirReglages() {
+  const f = $("#form-reglages");
+  const r = reglages();
+  f.cle.value = cleApi();
+  for (const c of f.querySelectorAll('input[name="types"]')) c.checked = r.types.includes(c.value);
+  f.joursFactures.value = r.joursFactures;
+}
+
 function cleApi() {
   return lireJson(CLE_REGLAGES, null)?.cle || lireJson("crm.reglages", null)?.cle || lireJson("borne.reglages", null)?.cle || "";
 }
@@ -57,7 +75,7 @@ async function api(methode, chemin, corps) {
   if (r.ok) return donnees;
   if (r.status === 401 && donnees?.erreur && !donnees?.code) {
     // Refus du middleware de clé d'API.
-    $("#form-reglages").cle.value = cleApi();
+    remplirReglages();
     afficher("reglages");
     throw new ErreurApi("Clé d'API refusée : vérifiez-la.", 401);
   }
@@ -127,7 +145,7 @@ const ECRANS = ["reglages", "connexion", "tournees", "preparation", "tournee", "
 function afficher(ecran, titre) {
   for (const e of ECRANS) $(`#ecran-${e}`).hidden = e !== ecran;
   const s = session();
-  $("#btn-retour").hidden = !["preparation", "tournee", "chargement"].includes(ecran);
+  $("#btn-retour").hidden = !["preparation", "tournee", "chargement"].includes(ecran) && !(ecran === "reglages" && etat.reglagesDepuisPreparation);
   $("#btn-utilisateur").hidden = !s;
   if (s) $("#btn-utilisateur").textContent = s.collaborateur ? `${s.collaborateur.prenom ?? ""} ${s.collaborateur.nom ?? ""}`.trim() || s.utilisateur : s.utilisateur;
   $("#titre").textContent = titre ?? { reglages: "Réglages", connexion: "Livraisons", tournees: "Tournées", preparation: "Préparer une tournée", tournee: "Tournée" }[ecran];
@@ -142,7 +160,7 @@ async function chargerReferentiels() {
 }
 
 function demarrer() {
-  if (!cleApi()) return afficher("reglages");
+  if (!cleApi()) { remplirReglages(); return afficher("reglages"); }
   if (!session()) return afficher("connexion");
   if (!session().collaborateur && etat.segment === "miennes") etat.segment = "toutes";
   // Lien depuis le tableau de bord : ?tournee=<id>
@@ -157,14 +175,29 @@ function demarrer() {
 // ---------- Réglages et connexion ----------
 $("#form-reglages").addEventListener("submit", (e) => {
   e.preventDefault();
-  ecrireJson(CLE_REGLAGES, { cle: new FormData(e.target).get("cle").trim() });
+  const f = new FormData(e.target);
+  const types = f.getAll("types");
+  if (!types.length) return bandeau("Cochez au moins un type de pièce à livrer.", "erreur");
+  ecrireJson(CLE_REGLAGES, { cle: f.get("cle").trim(), types, joursFactures: Number(f.get("joursFactures")) || REGLAGES_DEFAUT.joursFactures });
   bandeau("Réglages enregistrés.", "ok");
+  if (etat.reglagesDepuisPreparation) return revenirPreparation(true);
   demarrer();
 });
 $("#btn-ouvrir-reglages").addEventListener("click", () => {
-  $("#form-reglages").cle.value = cleApi();
+  remplirReglages();
   afficher("reglages");
 });
+// Depuis la préparation : changer les types proposés sans perdre la tournée en cours.
+$("#btn-types-pieces").addEventListener("click", () => {
+  etat.reglagesDepuisPreparation = true;
+  remplirReglages();
+  afficher("reglages");
+});
+function revenirPreparation(recharger) {
+  etat.reglagesDepuisPreparation = false;
+  afficher("preparation", etat.edition ? "Modifier la tournée" : "Préparer une tournée");
+  if (recharger) chargerALivrer();
+}
 $("#form-connexion").addEventListener("submit", async (e) => {
   e.preventDefault();
   const f = new FormData(e.target);
@@ -188,6 +221,7 @@ $("#btn-utilisateur").addEventListener("click", () => {
   afficher("connexion");
 });
 $("#btn-retour").addEventListener("click", () => {
+  if (!$("#ecran-reglages").hidden && etat.reglagesDepuisPreparation) return revenirPreparation(false);
   if ((!$("#ecran-preparation").hidden || !$("#ecran-chargement").hidden) && etat.edition) return ouvrirTournee(etat.edition);
   ouvrirTournees();
 });
@@ -261,24 +295,35 @@ async function chargerALivrer() {
   const zone = $("#pieces");
   zone.innerHTML = `<p class="discret">Chargement…</p>`;
   try {
-    etat.aLivrer = await api("GET", "/livraisons/a-livrer");
+    const r = reglages();
+    const depuis = new Date(Date.now() - r.joursFactures * 86400000).toISOString().slice(0, 10);
+    etat.aLivrer = await api("GET", `/livraisons/a-livrer?types=${encodeURIComponent(r.types.join(","))}&depuis=${depuis}`);
     dessinerPieces();
   } catch (e) { zone.innerHTML = ""; erreur(e); }
 }
+
+/** Pièce déjà prévue dans une autre tournée (pas encore livrée) : non sélectionnable. Livrée en partie ou en échec : elle peut repartir. */
+const prevueAilleurs = (a) => a.statutLivraison === "a-livrer" && a.tournee !== etat.edition;
 
 function dessinerPieces() {
   const t = $("#filtre-pieces").value.trim().toLowerCase();
   const choisies = new Set(etat.choisies.map((a) => a.piece));
   const liste = etat.aLivrer.filter((a) => !t || [a.piece, a.client, a.intitule, a.ville].some((v) => v?.toLowerCase().includes(t)));
   $("#pieces").innerHTML = liste.length
-    ? liste.map((a) => `
-      <label class="piece-choix">
-        <input type="checkbox" data-piece="${echapper(a.piece)}" ${choisies.has(a.piece) ? "checked" : ""}>
-        <span><strong>${echapper(a.intitule || a.client)}</strong> ${a.position ? "📍" : ""}<br>
-          <span class="discret">${echapper(a.piece)} · ${echapper(a.ville || "ville ?")}${a.dateLivraison ? ` · pour le ${dateCourte(a.dateLivraison)}` : ""}</span></span>
+    ? liste.map((a) => {
+      const prevue = prevueAilleurs(a) && !choisies.has(a.piece);
+      const suivi = prevue ? ` ${etiquette(["Déjà en tournée", "neutre"])}<br><span class="discret">Prévue le ${dateCourte(a.dateTournee)}</span>`
+        : a.statutLivraison === "partiel" ? ` ${etiquette(["Livrée en partie", "alerte"])}`
+        : a.statutLivraison === "echec" ? ` ${etiquette(["Échec précédent", "erreur"])}` : "";
+      return `
+      <label class="piece-choix${prevue ? " prevue" : ""}">
+        <input type="checkbox" data-piece="${echapper(a.piece)}" ${choisies.has(a.piece) ? "checked" : ""} ${prevue ? "disabled" : ""}>
+        <span><strong>${echapper(a.intitule || a.client)}</strong> ${a.position ? "📍" : ""}${suivi}<br>
+          <span class="discret"><span class="type-piece">${echapper(TYPES_LIVRABLES[a.type] ?? a.type)}</span> ${echapper(a.piece)} · ${echapper(a.ville || "ville ?")}${a.dateLivraison ? ` · pour le ${dateCourte(a.dateLivraison)}` : ""}</span></span>
         <span class="nombre">${montant(a.totalTTC)}</span>
-      </label>`).join("")
-    : `<p class="vide">${t ? "Aucune pièce ne correspond." : "Aucune commande à livrer dans Sage."}</p>`;
+      </label>`;
+    }).join("")
+    : `<p class="vide">${t ? "Aucune pièce ne correspond." : "Aucune pièce à livrer dans Sage pour les types choisis."}</p>`;
 }
 $("#filtre-pieces").addEventListener("input", dessinerPieces);
 $("#pieces").addEventListener("change", (e) => {
@@ -286,6 +331,7 @@ $("#pieces").addEventListener("change", (e) => {
   if (!piece) return;
   if (e.target.checked) {
     const a = etat.aLivrer.find((x) => x.piece === piece);
+    if (prevueAilleurs(a)) { e.target.checked = false; return bandeau(`${piece} est déjà prévue dans une autre tournée.`, "erreur"); }
     etat.choisies.push({ ...a, latitude: a.position?.latitude ?? null, longitude: a.position?.longitude ?? null });
   } else {
     const a = etat.choisies.find((x) => x.piece === piece);
@@ -428,7 +474,7 @@ function afficherTournee(t) {
         const reference = l.quantiteChargee ?? l.quantite;
         const manque = l.quantiteLivree != null && l.quantiteLivree < reference;
         return `<li class="${manque ? "manque" : ""}"><span>${echapper(l.designation || l.article)}${l.gamme1 ? ` (${echapper(l.gamme1)})` : ""}</span>
-          <span>${l.quantiteLivree != null ? `${qte(l.quantiteLivree)} / ` : ""}${qte(reference)}${manque && l.motif ? ` · ${echapper(MOTIFS[l.motif] ?? l.motif)}` : ""}</span></li>`;
+          <span>${l.quantiteLivree != null ? `${qte(l.quantiteLivree)} / ` : ""}${qte(reference)}${unite(l, reference)}${manque && l.motif ? ` · ${echapper(MOTIFS[l.motif] ?? l.motif)}` : ""}</span></li>`;
       }).join("")}</ul></div>` : ""}
       <div class="actions">
         ${tel ? `<a href="tel:${echapper(tel)}">📞 Appeler</a>` : `<a aria-disabled="true" style="opacity:.4">📞 Appeler</a>`}
@@ -490,6 +536,18 @@ function zoneSignature(toile) {
 
 const nomArticle = (l) => `${echapper(l.designation || l.article)}<small>${echapper(l.article ?? "")}${l.gamme1 ? ` · ${echapper(l.gamme1)}` : ""}${l.gamme2 ? ` ${echapper(l.gamme2)}` : ""}</small>`;
 const qte = (n) => (Number(n) || 0).toLocaleString("fr-FR", { maximumFractionDigits: 3 });
+/**
+ * Unité de la ligne à côté d'une quantité (en unité de vente) : « Pièce », et le conditionnement saisi dans Sage
+ * s'il est différent (« · 2 Carton de 12 » pour 24 pièces), recalculé pour la quantité affichée.
+ */
+function unite(l, n = l.quantite) {
+  const u = l.unite || (l.quantiteConditionnement === l.quantite ? l.conditionnement : null);
+  let texte = u ? ` <span class="unite">${echapper(u)}</span>` : "";
+  const qc = Number(l.quantiteConditionnement);
+  if (l.conditionnement && l.conditionnement !== u && qc > 0 && Number(l.quantite) > 0 && qc !== Number(l.quantite))
+    texte += ` <span class="unite">· ${qte((Number(n) * qc) / Number(l.quantite))} ${echapper(l.conditionnement)}</span>`;
+  return texte;
+}
 
 // ---------- Contrôle du chargement au dépôt ----------
 const signatureChargement = zoneSignature($("#signature-chargement"));
@@ -523,7 +581,7 @@ function ouvrirChargement() {
         return `<div class="article-ligne${l.quantiteChargee != null && charge !== l.quantite ? " ecart" : ""}" data-piece="${echapper(a.piece)}" data-ligne="${l.ligne}" data-commande="${l.quantite}">
           <input type="checkbox" aria-label="Reçu" ${coche ? "checked" : ""}>
           <span class="nom">${nomArticle(l)}</span>
-          <span class="qte">Cdé ${qte(l.quantite)}<input type="number" inputmode="decimal" min="0" step="any" value="${charge}" aria-label="Quantité reçue"></span>
+          <span class="qte"><span>Cdé ${qte(l.quantite)}${unite(l)}</span><input type="number" inputmode="decimal" min="0" step="any" value="${charge}" aria-label="Quantité reçue"></span>
         </div>`;
       }).join("")}
     </section>`).join("");
@@ -602,7 +660,7 @@ function dessinerArticlesLivraison(a) {
       return `<div class="article-ligne${manque ? " ecart" : ""}" data-ligne="${l.ligne}" data-reference="${reference}">
         <input type="checkbox" aria-label="Livré" ${!manque ? "checked" : ""}>
         <span class="nom">${nomArticle(l)}</span>
-        <span class="qte">${l.quantiteChargee != null ? "Chargé" : "Cdé"} ${qte(reference)}<input type="number" inputmode="decimal" min="0" max="${reference}" step="any" value="${livree}" aria-label="Quantité livrée"></span>
+        <span class="qte"><span>${l.quantiteChargee != null ? "Chargé" : "Cdé"} ${qte(reference)}${unite(l, reference)}</span><input type="number" inputmode="decimal" min="0" max="${reference}" step="any" value="${livree}" aria-label="Quantité livrée"></span>
         <select aria-label="Raison" ${manque ? "" : "hidden"}>${OPTIONS_MOTIF}</select>
       </div>`;
     }).join("") : "";

@@ -22,6 +22,16 @@
     <form id="form-reglages" class="carte formulaire">
       <h2>Réglages</h2>
       <label>Clé d'API <input name="cle" type="password" required autocomplete="off"></label>
+      <fieldset class="types-livrables">
+        <legend>Types de pièces à livrer</legend>
+        <label class="case"><input type="checkbox" name="types" value="commande"> Bon de commande</label>
+        <label class="case"><input type="checkbox" name="types" value="preparation"> Préparation de livraison</label>
+        <label class="case"><input type="checkbox" name="types" value="livraison"> Bon de livraison</label>
+        <label class="case"><input type="checkbox" name="types" value="facture"> Facture</label>
+        <label class="case"><input type="checkbox" name="types" value="facture-comptabilisee"> Facture comptabilisée</label>
+        <p class="discret">Les factures d'acompte, d'avoir et de retour ne sont jamais proposées.</p>
+      </fieldset>
+      <label>Factures des derniers jours <input name="joursFactures" type="number" min="1" max="3650" step="1" inputmode="numeric"></label>
       <button type="submit" class="principal">Enregistrer</button>
     </form>
   </main>
@@ -70,7 +80,7 @@
       <p id="distance" class="discret" hidden></p>
     </section>
     <section class="carte">
-      <h3>Pièces à livrer</h3>
+      <h3 class="ligne-titre"><span>Pièces à livrer</span><button id="btn-types-pieces" type="button" class="lien">⚙ Types de pièces</button></h3>
       <input id="filtre-pieces" class="recherche" type="search" placeholder="Filtrer (pièce, client, ville)" autocomplete="off">
       <div id="pieces"></div>
     </section>

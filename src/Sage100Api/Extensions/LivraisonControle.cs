@@ -16,7 +16,13 @@ public sealed record ArticleArret
     public string? Designation { get; init; }
     public string? Gamme1 { get; init; }
     public string? Gamme2 { get; init; }
+    /// <summary>Quantité en unité de vente de l'article (Unite).</summary>
     public decimal Quantite { get; init; }
+    /// <summary>Unité de vente de l'article (par exemple « Pièce »).</summary>
+    public string? Unite { get; init; }
+    /// <summary>Conditionnement saisi dans Sage (par exemple « Carton de 12 ») et quantité dans ce conditionnement, s'il diffère de l'unité.</summary>
+    public string? Conditionnement { get; init; }
+    public decimal? QuantiteConditionnement { get; init; }
     public decimal? QuantiteChargee { get; init; }
     public decimal? QuantiteLivree { get; init; }
     /// <summary>Raison de la non-livraison ou du retour, quand la quantité livrée est inférieure à la quantité chargée.</summary>
@@ -70,7 +76,16 @@ public sealed partial class Livraison
     public static readonly string[] TypesCourse = ["livrer", "recuperer", "autre"];
     public static readonly string[] StatutsCourse = ["a-faire", "en-cours", "fait", "reporte", "annule"];
 
-    static void CreerTablesControle(SqliteConnection c) => c.Execute("""
+    static void CreerTablesControle(SqliteConnection c)
+    {
+        CreerTablesControleInitiales(c);
+        // Unité et conditionnement des lignes, ajoutés après la première version : tournées plus anciennes sans unité.
+        var colonnes = c.Query<string>("SELECT name FROM pragma_table_info('arret_articles')").ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var (nom, type) in new[] { ("unite", "TEXT"), ("conditionnement", "TEXT"), ("qte_conditionnement", "REAL") })
+            if (!colonnes.Contains(nom)) c.Execute($"ALTER TABLE arret_articles ADD COLUMN {nom} {type} NULL");
+    }
+
+    static void CreerTablesControleInitiales(SqliteConnection c) => c.Execute("""
         CREATE TABLE IF NOT EXISTS arret_articles (
           tournee TEXT NOT NULL,
           piece TEXT NOT NULL,
@@ -122,16 +137,20 @@ public sealed partial class Livraison
             n++;
             if (l.Article is null) continue;
             c.Execute("""
-                INSERT OR REPLACE INTO arret_articles (tournee, piece, ligne, article, designation, gamme1, gamme2, quantite)
-                VALUES (@tournee, @piece, @ligne, @article, @designation, @gamme1, @gamme2, @quantite);
-                """, new { tournee, piece, ligne = n, article = l.Article, designation = l.Designation, gamme1 = l.Gamme1, gamme2 = l.Gamme2, quantite = l.Quantite }, tx);
+                INSERT OR REPLACE INTO arret_articles (tournee, piece, ligne, article, designation, gamme1, gamme2, quantite, unite, conditionnement, qte_conditionnement)
+                VALUES (@tournee, @piece, @ligne, @article, @designation, @gamme1, @gamme2, @quantite, @unite, @conditionnement, @qteConditionnement);
+                """, new
+            {
+                tournee, piece, ligne = n, article = l.Article, designation = l.Designation, gamme1 = l.Gamme1, gamme2 = l.Gamme2, quantite = l.Quantite,
+                unite = l.Unite, conditionnement = l.Conditionnement, qteConditionnement = l.QuantiteConditionnement,
+            }, tx);
         }
     }
 
     static Dictionary<string, IReadOnlyList<ArticleArret>> Articles(SqliteConnection c, string tournee) =>
         c.Query<LigneArticle>("""
             SELECT piece AS Piece, ligne AS Ligne, article AS Article, designation AS Designation, gamme1 AS Gamme1, gamme2 AS Gamme2,
-              quantite AS Quantite, qte_chargee AS QuantiteChargee, qte_livree AS QuantiteLivree, motif AS Motif
+              quantite AS Quantite, unite AS Unite, conditionnement AS Conditionnement, qte_conditionnement AS QuantiteConditionnement, qte_chargee AS QuantiteChargee, qte_livree AS QuantiteLivree, motif AS Motif
             FROM arret_articles WHERE tournee = @tournee ORDER BY piece, ligne
             """, new { tournee })
         .GroupBy(l => l.Piece)
@@ -272,6 +291,9 @@ public sealed partial class Livraison
         public string? Gamme1 { get; set; }
         public string? Gamme2 { get; set; }
         public double Quantite { get; set; }
+        public string? Unite { get; set; }
+        public string? Conditionnement { get; set; }
+        public double? QuantiteConditionnement { get; set; }
         public double? QuantiteChargee { get; set; }
         public double? QuantiteLivree { get; set; }
         public string? Motif { get; set; }
@@ -279,6 +301,7 @@ public sealed partial class Livraison
         public ArticleArret EnArticle() => new()
         {
             Ligne = (int)Ligne, Article = Article, Designation = Designation, Gamme1 = Gamme1, Gamme2 = Gamme2, Quantite = (decimal)Quantite,
+            Unite = Unite, Conditionnement = Conditionnement, QuantiteConditionnement = (decimal?)QuantiteConditionnement,
             QuantiteChargee = (decimal?)QuantiteChargee, QuantiteLivree = (decimal?)QuantiteLivree, Motif = Motif,
         };
     }

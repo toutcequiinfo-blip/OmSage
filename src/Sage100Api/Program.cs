@@ -219,13 +219,29 @@ documents.MapGet("/{type}/{piece}", async (ILecturesErp l, string type, string p
 
 var livraisons = v1.MapGroup("/livraisons").WithTags("Livraison");
 
-livraisons.MapGet("/a-livrer", async (ILecturesErp l, Geolocalisation geo, DateTime? jusquau, int? depot) =>
-    AvecPositions(await l.ALivrer(jusquau, depot), geo))
-  .WithSummary("Bons de commande et préparations non clôturés à livrer (jusqu'à une date), avec adresse, contact, téléphone et position GPS");
+livraisons.MapGet("/a-livrer", async (ILecturesErp l, Geolocalisation geo, Livraison liv, DateTime? jusquau, int? depot, string? types, DateTime? depuis) =>
+{
+    int[]? codes = null;
+    if (!string.IsNullOrWhiteSpace(types))
+    {
+        var noms = types.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var inconnus = noms.Where(n => TypesDocument.Code(n) is not (1 or 2 or 3 or 6 or 7)).ToList();
+        if (inconnus.Count > 0)
+            return Reponses.Invalide([$"Type de pièce non livrable : {string.Join(", ", inconnus)}. Types : commande, preparation, livraison, facture, facture-comptabilisee."]);
+        codes = noms.Select(n => TypesDocument.Code(n)!.Value).ToArray();
+    }
+    // Une pièce déjà livrée n'est plus proposée ; prévue dans une tournée, elle est signalée (non sélectionnable dans l'application).
+    var planifiees = liv.Planifications();
+    return Results.Ok(AvecPositions(await l.ALivrer(jusquau, depot, codes, depuis), geo)
+        .Select(a => planifiees.TryGetValue(a.Piece, out var p) ? a with { Tournee = p.Tournee, DateTournee = p.Date, StatutLivraison = p.Statut } : a)
+        .Where(a => a.StatutLivraison != "livre"));
+}).WithSummary("Pièces à livrer : commandes, préparations et BL non clôturés, factures (hors factures d'acompte, d'avoir et de retour), avec adresse, contact, " +
+    "téléphone, position GPS et dernière tournée prévue. types : liste séparée par des virgules (commande, preparation, livraison, facture, " +
+    "facture-comptabilisee). depuis : factures datées de ce jour ou après. Les pièces déjà livrées ne sont pas listées");
 
 livraisons.MapPost("/optimiser", async (ILecturesErp l, Geolocalisation geo, OptimisationRequest o) =>
 {
-    var aLivrer = AvecPositions(await l.ALivrer(null, null), geo).ToDictionary(a => a.Piece, StringComparer.OrdinalIgnoreCase);
+    var aLivrer = ParPiece(AvecPositions(await l.ALivrer(null, null), geo));
     var avec = new List<Itineraire.Point>();
     var sans = new List<string>();
     foreach (var piece in o.Pieces.Select(p => p.Trim().ToUpperInvariant()))
@@ -247,7 +263,7 @@ livraisons.MapPut("/tournees/{id}", async (ILecturesErp l, Geolocalisation geo, 
     if (u == null && auth.Options.Active) return Reponses.ConnexionRequise();
     var erreurs = Livraison.Verifier(id, t).ToList();
     if (erreurs.Count > 0) return Reponses.Invalide(erreurs);
-    var aLivrer = AvecPositions(await l.ALivrer(null, null), geo).ToDictionary(a => a.Piece, StringComparer.OrdinalIgnoreCase);
+    var aLivrer = ParPiece(AvecPositions(await l.ALivrer(null, null), geo));
     // Lignes d'articles des pièces, pour le contrôle au chargement et chez le client.
     var lignes = new Dictionary<string, IReadOnlyList<LignePiece>>(StringComparer.OrdinalIgnoreCase);
     foreach (var piece in t.Pieces.Select(p => p.Trim().ToUpperInvariant()).Distinct())
@@ -318,6 +334,12 @@ livraisons.MapGet("/tableau-de-bord", (Livraison liv, DateTime? du, DateTime? au
   .WithSummary("Tableau de bord des livraisons : indicateurs, par jour, par livreur, motifs d'échec, courses, et liste des arrêts, sur les mêmes filtres");
 livraisons.MapGet("/suivi/{piece}", (Livraison liv, string piece) => liv.Suivi(piece))
   .WithSummary("Passages d'une pièce en tournée (livrée, échec, motif, heure, réceptionnaire), le plus récent d'abord");
+
+// Même numéro possible sur deux types (souches) : la pièce la plus avancée l'emporte (facture, puis BL, puis commande).
+static Dictionary<string, ALivrer> ParPiece(IEnumerable<ALivrer> liste) => liste
+    .OrderByDescending(a => TypesDocument.Code(a.Type) ?? 0)
+    .GroupBy(a => a.Piece, StringComparer.OrdinalIgnoreCase)
+    .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
 
 static IEnumerable<ALivrer> AvecPositions(IEnumerable<ALivrer> liste, Geolocalisation geo)
 {

@@ -177,3 +177,16 @@ a.bouton.secondaire { background: var(--clair); color: var(--principal); }
 .course .texte { color: var(--discret); font-size: .84rem; }
 .courses .secondaire { width: 100%; margin-top: 8px; }
 .etiquette.discret-etiquette { background: #eef0f3; color: var(--discret); }
+
+/* Réglages : types de pièces livrables */
+.types-livrables { border: 1px solid #e3e7ee; border-radius: 8px; padding: 8px 12px; display: grid; gap: 6px; margin: 0; }
+.types-livrables legend { font-size: .9rem; color: var(--discret); padding: 0 4px; }
+.types-livrables p { margin: 0; font-size: .8rem; }
+/* Pièce déjà prévue dans une autre tournée : visible mais non sélectionnable */
+.piece-choix.prevue { opacity: .55; }
+.piece-choix .type-piece { font-size: .72rem; font-weight: 600; color: var(--principal); }
+/* Unité ou conditionnement à côté des quantités */
+.unite { color: var(--discret); margin-left: 3px; }
+.article-ligne .qte > span { text-align: right; max-width: 180px; }
+.carte h3.ligne-titre { display: flex; justify-content: space-between; align-items: center; }
+.carte h3.ligne-titre button { font-size: .85rem; }
