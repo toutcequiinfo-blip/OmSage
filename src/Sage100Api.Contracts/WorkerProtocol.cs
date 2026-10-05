@@ -24,6 +24,7 @@ namespace Sage100Api.Contracts
         public const string CreerCommande = "creerCommande";
         public const string CreerEncaissement = "creerEncaissement";
         public const string VerifierUtilisateur = "verifierUtilisateur";
+        public const string SupprimerCommande = "supprimerCommande";
     }
 
     public sealed class WorkerRequest
@@ -46,6 +47,13 @@ namespace Sage100Api.Contracts
     public sealed class CommandeWorkerRequest
     {
         public CommandeRequest Commande { get; set; } = new CommandeRequest();
+        public Auteur? Auteur { get; set; }
+    }
+
+    /// <summary>Suppression d'une pièce créée par l'application (retrouvée par DO_RefExterne), tant que rien n'est encaissé.</summary>
+    public sealed class SuppressionWorkerRequest
+    {
+        public string IdExterne { get; set; } = "";
         public Auteur? Auteur { get; set; }
     }
 

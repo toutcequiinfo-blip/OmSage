@@ -461,3 +461,8 @@ label input { font: inherit; color: var(--texte); min-height: 52px; padding: 0 1
 .dialogue.fenetre-qte .actions button { flex: 1; }
 .case { display: flex; align-items: center; gap: 8px; grid-column: 1 / -1; }
 .case input { width: 22px; height: 22px; min-height: 0; }
+
+/* Encaissement : « Modifier le ticket » en haut, visible sans faire défiler les modes sur téléphone. */
+.titre-paiement { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.titre-paiement h1 { margin-right: auto; }
+.titre-paiement button { min-height: 38px; font-size: .88rem; }

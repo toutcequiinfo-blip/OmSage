@@ -37,9 +37,16 @@ public sealed record RemiseTarif(int Type, decimal Valeur);
 /// <summary>Tranche de tarif par quantité ou par montant (F_TARIFQTE), jusqu'à BorneSup incluse.</summary>
 public sealed record TarifQuantite(string Article, int? Categorie, string? Client, decimal BorneSup, IReadOnlyList<RemiseTarif> Remises, decimal PrixNet);
 
+/// <summary>
+/// Remise d'une famille d'articles : pour un client (F_FAMCLIENT.FC_Remise) ou une catégorie tarifaire (F_FAMTARIF.FT_Remise).
+/// Sage l'applique (SetDefaultRemise) quand le tarif de l'article ne porte pas de remise ; la borne s'en sert pour son estimation.
+/// </summary>
+public sealed record RemiseFamille(string Famille, int? Categorie, string? Client, decimal Remise, bool HorsRemise);
+
 /// <summary>Toutes les données de tarification, pour la borne (hors ligne) et pour le calcul des prix envoyés à Sage.</summary>
 public sealed record DonneesTarifs(IReadOnlyList<CategorieTarif> Categories, IReadOnlyList<TarifArticle> Articles, IReadOnlyList<TarifGamme> Gammes,
-    IReadOnlyList<Conditionnement> Conditionnements, IReadOnlyList<TarifConditionnement> TarifsConditionnement, IReadOnlyList<TarifQuantite> Quantites)
+    IReadOnlyList<Conditionnement> Conditionnements, IReadOnlyList<TarifConditionnement> TarifsConditionnement, IReadOnlyList<TarifQuantite> Quantites,
+    IReadOnlyList<RemiseFamille>? Familles = null)
 {
     public static readonly DonneesTarifs Vide = new([], [], [], [], [], []);
 }
@@ -128,6 +135,15 @@ public sealed class LecturesTarifsSql(IOptions<SageOptions> options) : ILectures
             "FROM F_TARIFQTE t WHERE " + FiltreRefCF("t.TQ_RefCF", client, categorie) + FiltreArticle("t.AR_Ref") +
             " ORDER BY t.AR_Ref, t.TQ_RefCF, t.TQ_BorneSup", p);
 
+        // Remises par famille : FT_TypeRem = 1 « hors remise » ; FT_Categorie = numéro de catégorie (= N_CatTarif), comme AC_Categorie.
+        var familles = (await c.QueryAsync<LigneFamille>(
+            "SELECT FA_CodeFamille AS Famille, CAST(FT_Categorie AS int) AS Categorie, CAST(NULL AS varchar(17)) AS Client, " +
+            "CAST(FT_Remise AS decimal(18,6)) AS Remise, CAST(CASE WHEN FT_TypeRem = 1 THEN 1 ELSE 0 END AS bit) AS HorsRemise " +
+            "FROM F_FAMTARIF WHERE (FT_Remise <> 0 OR FT_TypeRem = 1)" + (categorie is null ? "" : " AND FT_Categorie = @categorie") +
+            " UNION ALL SELECT FA_CodeFamille, CAST(NULL AS int), CAST(CT_Num AS varchar(17)), CAST(FC_Remise AS decimal(18,6)), CAST(0 AS bit) " +
+            "FROM F_FAMCLIENT WHERE FC_Remise <> 0" + (client is null ? "" : " AND CT_Num = @client"), p))
+            .Select(l => new RemiseFamille(l.Famille, l.Client is null ? l.Categorie : null, l.Client, l.Remise, l.HorsRemise)).ToList();
+
         return new DonneesTarifs(
             categories,
             lignesArticles.Select(l => new TarifArticle(l.Article, l.Client is null ? l.Categorie : null, l.Client, l.Prix, l.PrixTTC, l.Remise, l.QteMont, l.HorsRemise)).ToList(),
@@ -136,7 +152,8 @@ public sealed class LecturesTarifsSql(IOptions<SageOptions> options) : ILectures
             lignesCond.Select(l => Cible(l.RefCF) is { } x ? new TarifConditionnement(l.Article, x.Categorie, x.Client, l.Conditionnement, l.Prix) : null)
                 .OfType<TarifConditionnement>().ToList(),
             lignesQte.Select(l => Cible(l.RefCF) is { } x ? new TarifQuantite(l.Article, x.Categorie, x.Client, l.BorneSup, l.Remises(), l.PrixNet) : null)
-                .OfType<TarifQuantite>().ToList());
+                .OfType<TarifQuantite>().ToList(),
+            familles);
     }
 
     /// <summary>
@@ -199,6 +216,15 @@ public sealed class LecturesTarifsSql(IOptions<SageOptions> options) : ILectures
             "WHERE a.AR_Sommeil = 0 AND (gs.GS_QteSto <> 0 OR gs.GS_QteRes <> 0) AND (@article IS NULL OR gs.AR_Ref = @article)",
             new { article });
         return simples.Concat(gammes).ToList();
+    }
+
+    sealed class LigneFamille
+    {
+        public string Famille { get; set; } = "";
+        public int? Categorie { get; set; }
+        public string? Client { get; set; }
+        public decimal Remise { get; set; }
+        public bool HorsRemise { get; set; }
     }
 
     sealed class LigneArtClient

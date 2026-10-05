@@ -132,6 +132,29 @@ public sealed class ApiTests : IDisposable
     }
 
     [Fact]
+    public async Task Supprimer_une_commande_la_retire_de_Sage_et_permet_de_la_renvoyer()
+    {
+        var c = Commande("BORNE1-000091");
+        Assert.Equal(HttpStatusCode.Created, (await _http.PostAsJsonAsync("/api/v1/commandes", c)).StatusCode);
+        var r = await _http.DeleteAsync("/api/v1/commandes/BORNE1-000091");
+        Assert.Equal(HttpStatusCode.OK, r.StatusCode);
+        Assert.Equal("BC00100", (await r.Content.ReadFromJsonAsync<SuppressionResult>())!.Piece);
+        Assert.Equal(1, _worker.Appels(Operations.SupprimerCommande));
+        // Le journal ne renvoie plus l'ancienne pièce : la même commande repart vers le worker.
+        Assert.Equal(HttpStatusCode.Created, (await _http.PostAsJsonAsync("/api/v1/commandes", c)).StatusCode);
+        Assert.Equal(2, _worker.Appels(Operations.CreerCommande));
+    }
+
+    [Fact]
+    public async Task Une_suppression_refusee_par_Sage_renvoie_son_message()
+    {
+        _worker.ProchaineErreur = (CodesErreur.SageMetier, "Suppression interdite");
+        var r = await _http.DeleteAsync("/api/v1/commandes/BORNE1-000092");
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, r.StatusCode);
+        Assert.Contains("Suppression interdite", await r.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
     public void Une_operation_en_cours_depuis_longtemps_peut_repartir()
     {
         var j = new JournalOperations(Options.Create(new SageOptions { CheminJournal = Path.Combine(_dossier, "abandon.db") }));
@@ -759,6 +782,7 @@ public sealed class ApiTests : IDisposable
             {
                 CommandeWorkerRequest c => Commande(c),
                 EncaissementCommandeRequest p => Encaissement(p),
+                SuppressionWorkerRequest d => new SuppressionResult { IdExterne = d.IdExterne, Piece = "BC00100" },
                 ConnexionRequest l => new UtilisateurVerifie { Utilisateur = l.Utilisateur },
                 _ => new { sage = true },
             };

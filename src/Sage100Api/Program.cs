@@ -462,6 +462,17 @@ ecritures.MapPost("", async (CommandeRequest c, ServiceEcritures s, ServiceAuthe
 ecritures.MapGet("/{idExterne}", async (string idExterne, ServiceEcritures s) =>
     await s.PieceCommande(idExterne) is { } piece ? Results.Ok(new { idExterne, piece }) : Results.NotFound());
 
+// Le client change d'avis avant de payer : la pièce créée par la borne est supprimée de Sage, la borne la recrée corrigée.
+ecritures.MapDelete("/{idExterne}", async (string idExterne, ServiceEcritures s, ServiceAuthentification auth, HttpContext http, CancellationToken ct) =>
+{
+    var u = auth.Lire(http);
+    if (u == null && auth.Options.Active) return Reponses.ConnexionRequise();
+    if (string.IsNullOrWhiteSpace(idExterne) || idExterne.Length > Validation.LongueurIdExterne)
+        return Reponses.Invalide(new[] { $"idExterne : {Validation.LongueurIdExterne} caractères maximum." });
+    var r = await s.SupprimerCommande(idExterne, u, ct);
+    return Reponses.Depuis(r, v => Results.Ok(v));
+}).WithSummary("Supprime de Sage la pièce créée pour cette commande, tant qu'aucun encaissement n'y est lié");
+
 ecritures.MapPost("/{idExterne}/encaissements", async (string idExterne, EncaissementRequest e, ServiceEcritures s, ServiceAuthentification auth,
     HttpContext http, CancellationToken ct) =>
 {

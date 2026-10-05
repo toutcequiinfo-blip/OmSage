@@ -3,7 +3,8 @@
 //  1. prix : tarif propre au client, sinon celui de sa catégorie tarifaire, sinon prix de la fiche article ;
 //  2. une valeur de gamme ou un conditionnement peuvent avoir leur propre prix (client, sinon catégorie) ;
 //     sans prix propre, un « Carton de 12 » vaut 12 fois l'unité ;
-//  3. remises : remise générale du tarif, ou tranches par quantité / montant, ou prix net par quantité.
+//  3. remises : remise générale du tarif, ou tranches par quantité / montant, ou prix net par quantité ;
+//     sans remise sur le tarif de l'article, remise de sa famille (client, sinon catégorie), comme le fait Sage.
 
 const index = new WeakMap();
 
@@ -90,7 +91,20 @@ export function prixLigne(catalogue, client, article, { enumere = null, conditio
       remises = [{ type: 1, valeur: regle.remise }];
     }
   }
+  const parTranches = regle && regle.qteMont >= 1 && regle.qteMont <= 3;
+  if (!remises.length && !regle?.horsRemise && !parTranches) {
+    const f = remiseFamille(catalogue, article, numero, categorie);
+    if (f) remises = [{ type: 1, valeur: f }];
+  }
   return { prix: arrondi4(prix), prixUnitaire: arrondi4(prix / contenu), ttc, remises, prixNet: arrondi4(net(prix, remises, contenu)), origine };
+}
+
+/** Remise de la famille de l'article : celle du client (fiche famille, volet Tarifs), sinon celle de sa catégorie tarifaire. */
+function remiseFamille(catalogue, article, numero, categorie) {
+  if (!article.famille) return 0;
+  const lignes = (catalogue.tarifs?.familles || []).filter((x) => egal(x.famille, article.famille));
+  const r = lignes.find((x) => x.client && egal(x.client, numero)) || lignes.find((x) => !x.client && x.categorie === categorie);
+  return r && !r.horsRemise ? r.remise : 0;
 }
 
 /** Remises en cascade : un pourcentage sur le prix déjà remisé, un montant par unité de vente. */

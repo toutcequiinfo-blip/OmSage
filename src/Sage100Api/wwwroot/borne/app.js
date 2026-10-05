@@ -10,7 +10,7 @@ import {
   lireSession, ecrireSession, utilisateurMemorise, lireUtilisateurs, lireAttente, ecrireAttente,
   lireAffichage, ecrireAffichage,
 } from "./stockage.js";
-import { etatConnexion, rechargerCatalogue, synchroniser, envoyerMaintenant, commandesOuvertes, detailCommande } from "./synchro.js";
+import { etatConnexion, rechargerCatalogue, synchroniser, envoyerMaintenant, attendreFinEnvoi, appeler, commandesOuvertes, detailCommande } from "./synchro.js";
 import { seConnecter } from "./connexion.js";
 import { prixLigne, conditionnementsDe, categorieDe, texteRemises, enHT } from "./tarifs.js";
 
@@ -602,12 +602,18 @@ function totaux() {
   const paye = arrondi(vente.paiements.reduce((s, p) => s + p.montant, 0));
   if (vente.sage) {
     const s = vente.sage;
-    return { ht: s.totalHT, tva: arrondi(s.totalTTC - s.totalHT), ttc: s.netAPayer, paye, reste: Math.max(0, arrondi(s.netAPayer - paye)), sage: true };
+    // Escompte du client : Sage le déduit du total TTC pour donner le net à payer.
+    const escompte = Math.max(0, arrondi(s.totalTTC - s.netAPayer));
+    return { ht: s.totalHT, escompte, tauxEscompte: vente.client?.escompte || 0, tva: arrondi(s.totalTTC - s.totalHT), ttc: s.netAPayer, paye,
+      reste: Math.max(0, arrondi(s.netAPayer - paye)), sage: true };
   }
+  // Estimation comme Sage : escompte du client (CT_Taux02) déduit du HT, TVA calculée sur le montant escompté.
+  const taux = (vente.client?.escompte || 0) / 100;
   const ht = arrondi([...vente.lignes.values()].reduce((s, l) => s + montantLigne(l), 0));
-  const tva = arrondi([...vente.lignes.values()].reduce((s, l) => s + montantLigne(l) * tauxTva(l.article) / 100, 0));
-  const ttc = arrondi(ht + tva);
-  return { ht, tva, ttc, paye, reste: Math.max(0, arrondi(ttc - paye)), sage: false };
+  const escompte = arrondi(ht * taux);
+  const tva = arrondi([...vente.lignes.values()].reduce((s, l) => s + montantLigne(l) * (1 - taux) * tauxTva(l.article) / 100, 0));
+  const ttc = arrondi(ht - escompte + tva);
+  return { ht, escompte, tauxEscompte: vente.client?.escompte || 0, tva, ttc, paye, reste: Math.max(0, arrondi(ttc - paye)), sage: false };
 }
 
 function dessinerPanier() {
@@ -638,6 +644,9 @@ function dessinerPanier() {
   const t = totaux();
   $("#total-ht").textContent = euros.format(t.ht);
   $("#total-tva").textContent = euros.format(t.tva);
+  $("#ligne-escompte").hidden = !(t.escompte > 0);
+  $("#lbl-escompte").textContent = t.tauxEscompte ? `Escompte ${quantiteTexte(t.tauxEscompte)} %` : "Escompte";
+  $("#total-escompte").textContent = `-${euros.format(t.escompte || 0)}`;
   $("#total-ttc").textContent = euros.format(t.ttc);
   const vide = vente.lignes.size === 0;
   // Un vendeur sans la case Caissier enregistre la commande ; le caissier choisit directement le mode de règlement.
@@ -700,7 +709,7 @@ async function validerCommande() {
   const r = lireReglages();
   const pr = parametres();
   vente.id = nouvelIdVente(r.borne);
-  vente.numero = prochainNumeroVente();
+  vente.numero ||= prochainNumeroVente(); // ticket rouvert par « Modifier le ticket » : même numéro
   vente.typeDocument = pr.typeDocument;
   const t = totaux();
   await ajouterOperation({
@@ -729,6 +738,7 @@ async function validerCommande() {
   // (remises du client et de la famille, TVA, escompte), pas l'estimation de la borne.
   // L'écran d'encaissement s'ouvre tout de suite ; seule cette pièce part, sans attendre le reste de la file ni un test de connexion.
   const v = vente;
+  v.estimation = t.ttc;
   modeChoisi = null;
   $("#saisie-paiement").hidden = true;
   bandeau("");
@@ -781,6 +791,15 @@ function dessinerPaiement() {
   $("#p-total-libelle").textContent = vente.existante ? "Total TTC" : t.sage ? "Net à payer (Sage)" : "Total TTC estimé";
   // Pièce en cours de création dans Sage : les modes s'affichent mais attendent le net à payer de Sage.
   $("#paiement-envoi").hidden = !vente.envoiEnCours;
+  // Montant de Sage différent de l'estimation de la borne : on le dit, plutôt que de changer le montant sans explication.
+  const ecart = t.sage && vente.estimation != null && Math.abs(vente.estimation - t.ttc) > 0.01;
+  $("#paiement-ecart").hidden = !ecart;
+  $("#paiement-ecart").textContent = ecart
+    ? `Estimation de la borne : ${euros.format(vente.estimation)}. Sage a calculé ${euros.format(t.ttc)} avec ses remises et son escompte : c'est ce montant qui est encaissé.`
+    : "";
+  // Retour au ticket tant que rien n'est encaissé (la pièce Sage est supprimée puis recréée corrigée).
+  $("#btn-modifier-ticket").hidden = !!vente.existante || vente.paiements.length > 0;
+  $("#btn-modifier-ticket").disabled = !!vente.envoiEnCours || !!vente.suppressionEnCours;
   $("#p-total").textContent = euros.format(t.ttc);
   $("#p-paye").textContent = euros.format(t.paye);
   $("#p-reste").textContent = euros.format(t.reste);
@@ -871,11 +890,50 @@ async function enregistrerEncaissement() {
 }
 
 /**
+ * Le client change d'avis sur l'écran d'encaissement : retour au ticket pour le corriger.
+ * Pièce déjà créée dans Sage : elle est supprimée (rien n'y est encaissé), puis recréée au prochain « Régler ».
+ * Pièce encore en file (hors ligne) ou refusée par Sage : elle est simplement retirée de la file.
+ */
+async function modifierTicket() {
+  const v = vente;
+  if (!v || v.existante || v.paiements.length > 0 || v.envoiEnCours || v.suppressionEnCours) return;
+  const cle = `commande:${v.id}`;
+  v.suppressionEnCours = true;
+  dessinerPaiement();
+  try {
+    await attendreFinEnvoi(); // la pièce ne doit pas partir pendant qu'on la retire
+    const op = (await lireFile()).find((o) => o.cle === cle);
+    const piece = op?.statut === "ok" ? op.resultat?.piece : null;
+    if (piece) {
+      if (!confirm(`${piece} est déjà dans Sage. Elle sera supprimée, puis recréée corrigée quand vous réglerez. Continuer ?`)) return;
+      bandeau(`Suppression de ${piece} dans Sage…`);
+      let r;
+      try { r = await appeler("DELETE", `/commandes/${encodeURIComponent(v.id)}`, null, 90000, utilisateur?.jeton || null); }
+      catch { return bandeau(`Serveur injoignable : ${piece} reste dans Sage. Réessayez, ou terminez la vente.`, "erreur"); }
+      if (r.statut !== 200) {
+        const msg = r.donnees?.message || (r.donnees?.erreurs || []).join(" ") || `code ${r.statut}`;
+        return bandeau(`Sage n'a pas supprimé ${piece} : ${msg}`, "erreur");
+      }
+    }
+    if (op) await supprimerOperation(cle);
+    Object.assign(v, { validee: false, id: null, piece: null, sage: null, refus: null, estimation: null });
+    modeChoisi = null;
+    $("#saisie-paiement").hidden = true;
+    afficher("vente");
+    bandeau(piece ? `${piece} supprimée de Sage : corrigez le ticket puis réglez.` : "Ticket rouvert : corrigez-le puis réglez.", "ok");
+    majEtat();
+  } finally {
+    v.suppressionEnCours = false;
+    if (vente === v && !$("#ecran-paiement").hidden) dessinerPaiement();
+  }
+}
+
+/**
  * Fin de la vente : la caisse ouvre aussitôt un ticket vide pour le même client (pas d'écran « Nouvelle vente »).
  * Le ticket de la vente terminée reste imprimable (bouton 🖨) tant que le nouveau ticket est vide.
  */
 function terminer() {
-  if (!vente || vente.envoiEnCours) return;
+  if (!vente || vente.envoiEnCours || vente.suppressionEnCours) return;
   const t = totaux();
   dernierTicket = ticketAImprimer();
   const fini = vente;
@@ -1050,6 +1108,7 @@ function imprimer(ticket) {
       ligne(`  ${String(l.quantite).replace(".", ",")}${l.unite ? " " + l.unite : ""} x ${euros.format(l.prix)}${l.remise ? " " + l.remise : ""}`, euros.format(l.montant)))),
     element("hr"),
     ticket.existante ? null : ligne("Total HT", euros.format(ticket.ht)),
+    ticket.existante || !(ticket.escompte > 0) ? null : ligne("Escompte", `-${euros.format(ticket.escompte)}`),
     ticket.existante ? null : ligne(ticket.sage ? "TVA" : "TVA estimée", euros.format(ticket.tva)),
     ligne(ticket.existante ? "TOTAL TTC" : ticket.sage ? "NET À PAYER" : "TOTAL TTC estimé", euros.format(ticket.ttc)),
     ...ticket.paiements.map((p) => ligne(p.mode, euros.format(p.montant))),
@@ -1462,6 +1521,7 @@ function brancher() {
   $("#p-montant").addEventListener("input", majRendu);
   $("#btn-encaisser").addEventListener("click", encaisser);
   $("#btn-terminer").addEventListener("click", terminer);
+  $("#btn-modifier-ticket").addEventListener("click", modifierTicket);
   $("#btn-reglages").addEventListener("click", () => afficher("reglages"));
   $("#btn-saisie").addEventListener("click", ouvrirSaisie);
   $("#btn-document-ticket").addEventListener("click", ouvrirSaisie);

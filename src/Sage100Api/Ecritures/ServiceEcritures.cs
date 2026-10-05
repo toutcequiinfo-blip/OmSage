@@ -81,6 +81,24 @@ public sealed class ServiceEcritures(JournalOperations journal, IWorkerClient wo
         }
     }
 
+    /// <summary>
+    /// Supprime de Sage la pièce créée pour cette commande, tant qu'elle n'a aucun encaissement (le client a changé d'avis
+    /// sur l'écran d'encaissement). Le journal passe en erreur : la même commande pourrait être renvoyée et recréée.
+    /// </summary>
+    public async Task<ResultatEcriture<SuppressionResult>> SupprimerCommande(string idExterne, Utilisateur? utilisateur, CancellationToken ct)
+    {
+        var cle = JournalOperations.Cle(TypeCommande, idExterne);
+        if (journal.Lire(cle) is { Statut: StatutOperation.EnCours } op && DateTime.UtcNow - op.MajLe.ToUniversalTime() < JournalOperations.DelaiAbandon)
+            return ResultatEcriture<SuppressionResult>.Echec(CodesApi.EnCours, "La pièce est encore en cours de création. Réessayez dans quelques secondes.");
+        var reponse = await worker.Envoyer(Operations.SupprimerCommande, new SuppressionWorkerRequest { IdExterne = idExterne, Auteur = utilisateur?.Auteur() }, ct);
+        if (!reponse.Ok || reponse.Resultat is null)
+            return ResultatEcriture<SuppressionResult>.Echec(reponse.CodeErreur ?? CodesErreur.Technique, reponse.MessageErreur ?? "Erreur inconnue.");
+        var r = reponse.Resultat.Value.Deserialize<SuppressionResult>(WorkerProtocol.Json)!;
+        if (journal.Lire(cle) != null)
+            journal.Terminer(cle, StatutOperation.Erreur, null, r.DejaAbsente ? "Aucune pièce dans Sage." : $"{r.Piece} supprimée depuis la borne.");
+        return ResultatEcriture<SuppressionResult>.Reussite(r);
+    }
+
     public async Task<ResultatEcriture<EncaissementResult>> CreerEncaissement(string idCommande, EncaissementRequest e, string application, Utilisateur? utilisateur, CancellationToken ct)
     {
         var piece = await PieceCommande(idCommande);
