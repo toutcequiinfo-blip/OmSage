@@ -108,3 +108,15 @@ table.tableau { width: 100%; border-collapse: collapse; font-size: .85rem; }
 @media (min-width: 700px) {
   .indicateurs { grid-template-columns: repeat(4, 1fr); }
 }
+
+/* Téléphone : en-tête fin, boutons et police resserrés (même traitement que la borne). */
+@media (max-width: 699px) {
+  :root { font-size: 15px; }
+  header { padding: 4px 8px; padding-top: max(4px, env(safe-area-inset-top)); gap: 6px; }
+  header h1 { font-size: .95rem; }
+  header .icone { font-size: 1.4rem; min-height: 36px; padding: 0 6px; }
+  header .utilisateur { min-height: 30px; font-size: .75rem; padding: 0 8px; border-radius: 6px; }
+  button, a.bouton { min-height: 40px; border-radius: 8px; padding: 0 12px; }
+  .recherche { min-height: 40px; margin-bottom: 8px; }
+  .formulaire input, .formulaire select, .formulaire textarea { min-height: 40px; }
+}
