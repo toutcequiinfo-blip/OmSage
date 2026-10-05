@@ -166,6 +166,52 @@ button.regler { background: var(--regler); border-color: var(--regler); color: #
 .actions .principal { flex: 1; }
 .actions.centre { justify-content: center; }
 
+/* PC et tablette : caisse compacte. En-tête fin, informations du document sur deux bandeaux,
+   boutons de caisse et de règlement plus bas, pour laisser la place au ticket et aux articles. */
+@media (min-width: 761px) {
+  :root { font-size: 16px; }
+  button { min-height: 40px; border-radius: 8px; padding: 0 12px; }
+  header { gap: 8px; padding: 4px 12px; }
+  header .marque { font-size: .95rem; }
+  header button, .utilisateur, .etat { min-height: 32px; padding: 0 10px; font-size: .78rem; border-radius: 6px; }
+  header .icone { width: 36px; padding: 0; font-size: 1rem; }
+  .bandeau { padding: 6px 12px; font-size: .85rem; }
+
+  /* Entête du ticket sur deux bandeaux : le document (type, n° de pièce, dépôt), puis date, ticket, vendeur et tarif côte à côte. */
+  .ticket-entete { display: flex; flex-wrap: wrap; font-size: .78rem; }
+  .ticket-entete .ligne-info { flex: 1 1 auto; justify-content: flex-start; gap: 6px; padding: 3px 8px; min-width: 0; white-space: nowrap; }
+  .ticket-entete .ligne-info + .ligne-info:not(.document) { border-left: 1px solid var(--bord); }
+  .ticket-entete .ligne-info.document { order: -1; flex-basis: 100%; justify-content: space-between; font-size: .8rem; border-left: 0; }
+  .ticket-entete .ligne-info > * { overflow: hidden; text-overflow: ellipsis; }
+  .ticket-entete .ticket-client { flex-basis: 100%; min-height: 36px; font-size: .88rem; }
+  .lignes li { padding: 4px 8px; }
+  .totaux div { padding: 3px 12px; font-size: .9rem; }
+  .totaux .ttc { font-size: 1.2rem; padding: 5px 12px; }
+
+  .caisse .catalogue { padding: 8px 10px; }
+  .raccourcis { gap: 6px; margin-bottom: 6px; }
+  .raccourcis button { min-height: 36px; font-size: .82rem; }
+  .recherche { min-height: 38px; margin-bottom: 6px; border-radius: 8px; }
+  .bascule button { min-height: 36px; width: 40px; font-size: 1rem; }
+  .familles { gap: 6px; padding-bottom: 4px; margin-bottom: 6px; }
+  .puce { min-height: 30px; padding: 0 12px; font-size: .82rem; }
+  .articles.en-boutons { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 6px; }
+  .tuile { min-height: 78px; padding: 6px 8px 6px 10px; gap: 2px; }
+
+  .pave { gap: 6px; padding: 8px 8px 8px 2px; }
+  .saisie-pave { padding: 4px 10px; }
+  .saisie-pave strong { font-size: 1.2rem; }
+  .touches button { min-height: 44px; font-size: 1.15rem; }
+  .touches .fonction { font-size: .8rem; }
+  .fonctions button { padding: 6px 8px; font-size: .85rem; }
+
+  /* Boutons de caisse et modes de règlement : une rangée basse chacun. */
+  .commandes-caisse { gap: 4px; padding: 0 8px 8px; }
+  .commandes-caisse > button { min-height: 40px; font-size: .88rem; }
+  .modes-rapides { grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); gap: 4px; }
+  .modes-rapides button { min-height: 36px; font-size: .8rem; padding: 0 6px; line-height: 1.1; }
+}
+
 /* Tablette en portrait : le pavé passe sous les articles. */
 @media (max-width: 1100px) and (min-width: 761px) {
   .caisse { grid-template-columns: minmax(280px, 40%) 1fr; grid-template-rows: 1fr auto auto;
