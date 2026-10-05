@@ -150,8 +150,6 @@ button.loupe { min-height: 40px; width: 44px; padding: 0; font-size: 1.1rem; bor
 .touches .fonction { background: var(--clair); color: #fff; border-color: var(--clair); font-size: .9rem; font-weight: 600; }
 .touches .large { grid-column: 1 / -1; }
 .touches .haute { grid-row: span 2; }
-.fonctions { display: grid; gap: 6px; }
-.fonctions button { min-width: 0; padding: 10px 8px; }
 button.sombre { background: var(--sombre); color: #fff; border-color: var(--sombre); font-weight: 600; }
 
 .commandes-caisse { grid-area: commandes; display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; padding: 0 12px 12px; }
@@ -203,7 +201,6 @@ button.regler { background: var(--regler); border-color: var(--regler); color: #
   .saisie-pave strong { font-size: 1.2rem; }
   .touches button { min-height: 44px; font-size: 1.15rem; }
   .touches .fonction { font-size: .8rem; }
-  .fonctions button { padding: 6px 8px; font-size: .85rem; }
 
   /* Boutons de caisse et modes de règlement : une rangée basse chacun. */
   .commandes-caisse { gap: 4px; padding: 0 8px 8px; }
@@ -216,7 +213,7 @@ button.regler { background: var(--regler); border-color: var(--regler); color: #
 @media (max-width: 1100px) and (min-width: 761px) {
   .caisse { grid-template-columns: minmax(280px, 40%) 1fr; grid-template-rows: 1fr auto auto;
     grid-template-areas: "ticket catalogue" "ticket pave" "commandes commandes"; }
-  .pave { padding: 0 12px 12px; display: grid; grid-template-columns: 1fr 170px; }
+  .pave { padding: 0 12px 12px; display: grid; grid-template-columns: 1fr; }
   .touches .fonction { font-size: .8rem; }
   .saisie-pave { grid-column: 1 / -1; }
   .commandes-caisse { padding-top: 12px; }
@@ -338,10 +335,6 @@ label input { font: inherit; color: var(--texte); min-height: 52px; padding: 0 1
 .paiements { list-style: none; padding: 0; margin: 0 0 16px; }
 .paiements li { display: flex; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid var(--bord); }
 
-.fin { display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; }
-.recap { background: var(--carte); border: 1px solid var(--bord); border-radius: 12px; padding: 16px 24px; margin-bottom: 24px; min-width: 320px; }
-.recap ul { text-align: left; }
-
 .reglages { max-width: 860px; margin: 0 auto; width: 100%; }
 .form { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .form .actions { grid-column: 1 / -1; }
@@ -423,3 +416,48 @@ label input { font: inherit; color: var(--texte); min-height: 52px; padding: 0 1
 .totaux-piece .fort { font-weight: 700; border-top: 1px solid var(--bord); padding-top: 6px; color: var(--principal); }
 .tableau .nombre { text-align: right; white-space: nowrap; }
 #dialogue-liste { width: min(780px, 94vw); }
+
+/* Raccourcis : boutons texte qui se partagent la largeur, puis Imprimer, Verrouiller et Pavé en petites icônes. */
+@media (min-width: 761px) {
+  .raccourcis { display: flex; }
+  .raccourcis button { flex: 1 1 0; min-width: 0; padding: 0 6px; }
+  .raccourcis .icone-r { flex: 0 0 40px; padding: 0; font-size: 1rem; }
+  .raccourcis .icone-r.actif { background: var(--clair); border-color: var(--clair); }
+  /* Pavé masqué : les articles prennent toute la largeur. */
+  .caisse.sans-pave { grid-template-columns: minmax(300px, 34%) 1fr; grid-template-areas: "ticket catalogue" "ticket commandes"; }
+  .caisse.sans-pave .pave { display: none; }
+}
+@media (max-width: 1100px) and (min-width: 761px) {
+  .caisse.sans-pave { grid-template-columns: minmax(280px, 40%) 1fr; grid-template-rows: 1fr auto;
+    grid-template-areas: "ticket catalogue" "commandes commandes"; }
+}
+@media (max-width: 760px) {
+  .raccourcis .icone-r { display: none; }
+}
+
+/* Encaissement : pièce en cours de création dans Sage. */
+.envoi { background: #eef5fb; border: 1px solid #c9dcee; border-radius: 8px; padding: 8px 12px; margin: 0 0 10px; font-size: .9rem; color: var(--principal); }
+.envoi::before { content: ""; display: inline-block; width: .8em; height: .8em; margin-right: 8px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: tourne .8s linear infinite; vertical-align: -1px; }
+@keyframes tourne { to { transform: rotate(360deg); } }
+
+/* Fenêtre quantité : quantité au centre, mini pavé, choix du conditionnement ou de la gamme, OK. */
+.dialogue.fenetre-qte { width: min(440px, 94vw); padding: 14px 16px; }
+.dialogue.fenetre-qte h2 { margin: 0 0 2px; font-size: 1rem; }
+.dialogue.fenetre-qte #qte-info { margin: 0 0 8px; font-size: .82rem; min-height: 1.2em; }
+.erreur-qte { margin: 0 0 8px; font-size: .85rem; color: var(--erreur); font-weight: 600; }
+.ligne-qte { display: grid; grid-template-columns: 56px 1fr 56px; gap: 6px; margin-bottom: 6px; }
+.ligne-qte .pas { min-height: 48px; font-size: 1.5rem; padding: 0; background: var(--clair); color: #fff; border-color: var(--clair); }
+.ligne-qte input { min-height: 48px; font-size: 1.5rem; font-weight: 700; text-align: center; border: 2px solid var(--principal); border-radius: 8px; min-width: 0; }
+.mini-pave { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; margin-bottom: 8px; }
+.mini-pave button { min-height: 40px; font-size: 1.15rem; padding: 0; border-radius: 6px; }
+.choix-titre { margin: 4px 0; font-size: .82rem; font-weight: 600; color: var(--discret); }
+.choix-titre:empty { display: none; }
+.dialogue.fenetre-qte .valeurs { gap: 6px; margin-bottom: 10px; max-height: 32vh; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); }
+.dialogue.fenetre-qte .valeurs:empty { display: none; }
+.dialogue.fenetre-qte .valeur { min-height: 52px; padding: 4px 6px; font-size: .88rem; }
+.valeur.choisi { background: var(--principal); color: #fff; border-color: var(--principal); }
+.valeur.choisi .prix-valeur, .valeur.choisi .contenu, .valeur.choisi .stock { color: #fff; }
+.valeur.choisi .stock { background: rgba(255, 255, 255, .2); }
+.dialogue.fenetre-qte .actions button { flex: 1; }
+.case { display: flex; align-items: center; gap: 8px; grid-column: 1 / -1; }
+.case input { width: 22px; height: 22px; min-height: 0; }

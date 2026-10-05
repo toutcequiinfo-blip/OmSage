@@ -75,14 +75,24 @@ export function synchroniser() {
   return enCours;
 }
 
-async function envoyerFile() {
+/**
+ * Envoie tout de suite une seule opération (la pièce que le caissier va encaisser), sans attendre le reste de la file.
+ * Un envoi déjà en cours se termine d'abord : la même opération ne part jamais deux fois en même temps.
+ */
+export async function envoyerMaintenant(cle) {
+  while (enCours) await enCours.catch(() => {});
+  enCours = envoyerFile(cle).finally(() => (enCours = null));
+  return enCours;
+}
+
+async function envoyerFile(seulement = null) {
   const bilan = { envoyees: 0, restantes: 0, cleRefusee: false, reconnexions: [] };
   const ops = await lireFile();
   const commandesOk = new Set(ops.filter((o) => o.type === "commande" && o.statut === "ok").map((o) => o.idExterne));
   let arret = false;
 
   for (const op of ops) {
-    if (op.statut !== "attente") continue;
+    if (op.statut !== "attente" || (seulement && op.cle !== seulement)) continue;
     // Un encaissement attend que sa commande soit dans Sage (sauf s'il vise directement une pièce Sage).
     if (arret || (op.type === "encaissement" && !op.piece && !commandesOk.has(op.idCommande))) {
       bilan.restantes++;
