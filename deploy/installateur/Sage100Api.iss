@@ -81,7 +81,9 @@ var
 begin
   Result := True;
   { Le worker Objets Métiers exige le .NET Framework 4.8 (présent d'office sur Windows 10, 11 et Server 2019+). }
-  if not RegQueryDWordValue(HKLM, 'SOFTWARE\Microsoft\NET Framework Setup\NDP\v4\Full', 'Release', Release) or (Release < 528040) then
+  Release := 0;
+  RegQueryDWordValue(HKLM, 'SOFTWARE\Microsoft\NET Framework Setup\NDP\v4\Full', 'Release', Release);
+  if Release < 528040 then
   begin
     MsgBox('Le .NET Framework 4.8 est nécessaire au worker Objets Métiers. Installez-le (Windows Update ou site de Microsoft), puis relancez l''installation.', mbCriticalError, MB_OK);
     Result := False;
@@ -177,7 +179,7 @@ begin
   Exec(PowerShell, '-NoProfile -Command "Stop-Service Sage100Api, Sage100Api.Worker -Force -ErrorAction SilentlyContinue"', '', SW_HIDE, ewWaitUntilTerminated, Code);
 end;
 
-function Json(Texte: String): String;
+function TexteJson(Texte: String): String;
 begin
   Result := Texte;
   StringChangeEx(Result, '\', '\\', True);
@@ -194,6 +196,7 @@ procedure CurStepChanged(CurStep: TSetupStep);
 var
   Code: Integer;
   Fichier, Parametres, Script: String;
+  Lignes: TArrayOfString;
 begin
   if CurStep <> ssPostInstall then Exit;
   Script := '-NoProfile -ExecutionPolicy Bypass -File "' + ExpandConstant('{app}\outils\configurer.ps1') + '" -Dossier "' + ExpandConstant('{app}') + '"';
@@ -205,18 +208,20 @@ begin
     { Paramètres passés par un fichier temporaire (effacé tout de suite) : les mots de passe ne passent pas sur la ligne de commande. }
     Fichier := ExpandConstant('{tmp}\parametres.json');
     Parametres := '{' +
-      '"serveurSql":' + Json(Trim(PageSage.Values[0])) + ',' +
-      '"baseCial":' + Json(Trim(PageSage.Values[1])) + ',' +
-      '"baseCpta":' + Json(Trim(PageSage.Values[2])) + ',' +
-      '"utilisateurSage":' + Json(Trim(PageSage.Values[3])) + ',' +
-      '"motDePasseSage":' + Json(PageSage.Values[4]) + ',' +
-      '"compteService":' + Json(Trim(PageCompte.Values[0])) + ',' +
-      '"motDePasseService":' + Json(PageCompte.Values[1]) + ',' +
+      '"serveurSql":' + TexteJson(Trim(PageSage.Values[0])) + ',' +
+      '"baseCial":' + TexteJson(Trim(PageSage.Values[1])) + ',' +
+      '"baseCpta":' + TexteJson(Trim(PageSage.Values[2])) + ',' +
+      '"utilisateurSage":' + TexteJson(Trim(PageSage.Values[3])) + ',' +
+      '"motDePasseSage":' + TexteJson(PageSage.Values[4]) + ',' +
+      '"compteService":' + TexteJson(Trim(PageCompte.Values[0])) + ',' +
+      '"motDePasseService":' + TexteJson(PageCompte.Values[1]) + ',' +
       '"portHttp":' + IntToStr(StrToIntDef(Trim(PagePorts.Values[0]), 5080)) + ',' +
       '"portHttps":' + IntToStr(StrToIntDef(Trim(PagePorts.Values[1]), 5443)) + ',' +
       '"https":' + Booleen(PageOptions.Values[0]) + ',' +
       '"compteLecture":' + Booleen(PageOptions.Values[1]) + '}';
-    SaveStringToUTF8File(Fichier, Parametres, False);
+    SetArrayLength(Lignes, 1);
+    Lignes[0] := Parametres;
+    SaveStringsToUTF8File(Fichier, Lignes, False);
     Exec(PowerShell, Script + ' -Parametres "' + Fichier + '"', '', SW_HIDE, ewWaitUntilTerminated, Code);
     DeleteFile(Fichier);
   end;
