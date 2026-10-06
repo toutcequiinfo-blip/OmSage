@@ -84,7 +84,7 @@ input[type="month"], input[type="date"] { padding: 0 6px; }
 .legende { display: flex; flex-wrap: wrap; gap: 10px; font-size: .78rem; color: var(--discret); margin-bottom: 6px; }
 .legende i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; }
 .legende i.pointille { height: 2px; border-top: 2px dashed; background: none !important; vertical-align: 3px; }
-.barresh { display: grid; gap: 4px; }
+.barresh { display: grid; gap: 4px; max-height: 70vh; overflow-y: auto; padding-right: 4px; }
 .barresh .rang { display: grid; grid-template-columns: minmax(90px, 38%) 1fr auto; gap: 8px; align-items: center; font-size: .82rem; cursor: default; }
 .barresh .rang.cliquable { cursor: pointer; } .barresh .rang.cliquable:hover .nom { color: var(--accent); }
 .barresh .nom { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

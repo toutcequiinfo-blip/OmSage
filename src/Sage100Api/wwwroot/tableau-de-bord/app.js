@@ -709,7 +709,7 @@ async function explorateur(c, nom, sens) {
     } else if (TEMPS.includes(cube.axeLignes)) {
       barres(zone, { categories: cube.lignes.map(etiquette), series: [{ nom: libMesure(cfg.mesure), valeurs: cube.lignes.map((l) => l.total[cfg.mesure]) }], format: (v) => fmt(cfg.mesure, v) });
     } else {
-      barresH(zone, cube.lignes.slice(0, 25).map((l) => ({ libelle: etiquette(l), valeur: l.total[cfg.mesure], ligne: l, couleur: l.total[cfg.mesure] < 0 ? "var(--erreur)" : undefined })),
+      barresH(zone, cube.lignes.map((l) => ({ libelle: etiquette(l), valeur: l.total[cfg.mesure], ligne: l, couleur: l.total[cfg.mesure] < 0 ? "var(--erreur)" : undefined })),
         { format: (v) => fmt(cfg.mesure, v), surClic: peutZoomer ? (it) => zoomer(it.ligne) : undefined });
     }
   }
