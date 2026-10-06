@@ -10,6 +10,7 @@ using Microsoft.Extensions.Options;
 using Sage100Api.Extensions;
 using Sage100Api.Journal;
 using Sage100Api.Lectures;
+using Sage100Api.TableauDeBord;
 using Sage100Api.Worker;
 using Xunit;
 
@@ -53,6 +54,8 @@ public sealed class ApiTests : IDisposable
                 s.AddSingleton<ILecturesErp>(_erp);
                 s.RemoveAll<ILecturesTarifs>();
                 s.AddSingleton<ILecturesTarifs>(_tarifs);
+                s.RemoveAll<ILecturesTableauDeBord>();
+                s.AddSingleton<ILecturesTableauDeBord>(new FaussesLecturesTableauDeBord());
             });
         });
 
@@ -758,7 +761,7 @@ public sealed class ApiTests : IDisposable
         Directory.Delete(_dossier, recursive: true);
     }
 
-    sealed class FauxWorker : IWorkerClient
+    internal sealed class FauxWorker : IWorkerClient
     {
         readonly Dictionary<string, int> _appels = new();
         public (string Code, string Message)? ProchaineErreur;
@@ -803,7 +806,7 @@ public sealed class ApiTests : IDisposable
         }
     }
 
-    sealed class FaussesLecturesErp : ILecturesErp
+    internal sealed class FaussesLecturesErp : ILecturesErp
     {
         public int? DernierType;
         public Task<FicheClient?> FicheClient(string numero) => Task.FromResult<FicheClient?>(numero == "CISEL"
@@ -843,7 +846,7 @@ public sealed class ApiTests : IDisposable
             : []);
     }
 
-    sealed class FaussesLectures : ILecturesSage
+    internal sealed class FaussesLectures : ILecturesSage
     {
         public readonly Dictionary<string, Article> Stocks = new();
         public bool NegatifAutorise;
@@ -877,7 +880,7 @@ public sealed class ApiTests : IDisposable
             : null);
     }
 
-    sealed class FaussesLecturesTarifs : ILecturesTarifs
+    internal sealed class FaussesLecturesTarifs : ILecturesTarifs
     {
         public readonly List<StockDepot> Stocks = new();
         public bool Panne;

@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0f141b">
+  <title>Tableau de bord Sage 100</title>
+  <link rel="icon" href="../borne/icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="entete">
+    <div class="marque">
+      <span class="logo" aria-hidden="true">◧</span>
+      <nav class="tableaux" role="tablist" aria-label="Tableau de bord">
+        <button type="button" data-tableau="compta" role="tab">Comptable</button>
+        <button type="button" data-tableau="commercial" role="tab">Commercial</button>
+      </nav>
+    </div>
+    <div class="outils">
+      <label class="exercice">Exercice <select id="exercice"></select></label>
+      <button id="btn-etat" type="button" class="etat" title="Dernière actualisation"><span class="point"></span><span id="etat-texte">…</span></button>
+      <button id="btn-actualiser" type="button" class="icone" title="Relire Sage maintenant" aria-label="Actualiser">↻</button>
+      <button id="btn-theme" type="button" class="icone" title="Thème clair / sombre" aria-label="Changer de thème">◐</button>
+      <button id="btn-utilisateur" type="button" class="utilisateur"></button>
+    </div>
+  </header>
+  <nav id="onglets" class="onglets" aria-label="Écrans"></nav>
+  <div id="bandeau" class="bandeau" hidden></div>
+
+  <main id="contenu" class="contenu"></main>
+
+  <!-- Connexion : clé d'API (une fois par poste) et login Sage -->
+  <dialog id="connexion" class="dialogue">
+    <form id="form-connexion" method="dialog" class="formulaire">
+      <h2>Tableau de bord Sage 100</h2>
+      <p class="discret">Connectez-vous avec votre utilisateur Sage. Vos droits dépendent de votre profil (Direction, Comptable, Commercial ou Vendeur).</p>
+      <label id="champ-cle">Clé d'API du poste <input name="cle" autocomplete="off" required></label>
+      <label>Utilisateur Sage <input name="utilisateur" autocomplete="username" required></label>
+      <label>Mot de passe <input name="motDePasse" type="password" autocomplete="current-password"></label>
+      <p id="erreur-connexion" class="erreur" hidden></p>
+      <div class="boutons"><button id="btn-connexion" type="submit" class="principal">Se connecter</button></div>
+    </form>
+  </dialog>
+
+  <!-- Détail d'une cellule, d'un client... -->
+  <dialog id="detail" class="dialogue large">
+    <div class="titre-detail">
+      <h2 id="detail-titre"></h2>
+      <button type="button" class="icone" data-fermer aria-label="Fermer">✕</button>
+    </div>
+    <p id="detail-sous-titre" class="discret"></p>
+    <div id="detail-corps" class="detail-corps"></div>
+  </dialog>
+
+  <div id="infobulle" class="infobulle" hidden></div>
+  <script type="module" src="app.js"></script>
+</body>
+</html>
