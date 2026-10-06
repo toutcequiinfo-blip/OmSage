@@ -152,11 +152,45 @@ $("#btn-actualiser").addEventListener("click", async () => {
   } catch (e) { bandeau(e.message); }
 });
 
+// Documents comptés dans le CA en plus des factures (réglage de la société, modifiable par la Direction).
+const DOCUMENTS = [
+  ["livraisons", "Bons de livraison", "BL non encore facturés"],
+  ["retours", "Bons de retour", "en négatif"],
+  ["avoirsFinanciers", "Bons d'avoir financier", "en négatif"],
+];
+const texteDocuments = (d) => ["Factures", ...DOCUMENTS.filter(([cle]) => d?.[cle]).map(([, libelle]) => libelle.toLowerCase())].join(", ");
+
+$("#btn-reglages").addEventListener("click", () => {
+  const d = etat.meta.documents ?? {};
+  ouvrirDetail("Réglages du tableau de bord", nomSociete(session()?.dossier) ?? "", `
+    <form id="form-reglages" class="reglages">
+      <p><b>Documents comptés dans le CA, les quantités et les marges</b> (ventes et achats)</p>
+      <label class="case"><input type="checkbox" checked disabled> Factures et factures comptabilisées <span class="discret">(toujours)</span></label>
+      ${DOCUMENTS.map(([cle, libelle, note]) => `<label class="case"><input type="checkbox" name="${cle}" ${d[cle] ? "checked" : ""}> ${libelle} <span class="discret">(${note})</span></label>`).join("")}
+      <p class="discret">Ces bons ont déjà fait bouger le stock. Pas de double compte : un bon transformé en facture n'existe plus comme bon dans Sage.
+        Le rapprochement avec la comptabilité ne compte que les factures.</p>
+      <div class="boutons"><button type="submit" class="principal">Enregistrer</button></div>
+    </form>`);
+  $("#form-reglages").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const f = e.target;
+    try {
+      await api("/tableau-de-bord/reglages", { methode: "PUT", corps: { documents: Object.fromEntries(DOCUMENTS.map(([cle]) => [cle, f[cle].checked])) } });
+      etat.meta = await api("/tableau-de-bord/etat");
+      etat.cache.clear();
+      $("#detail").close();
+      bandeau(`CA calculé sur : ${texteDocuments(etat.meta.documents)}.`, true);
+      afficherOnglet();
+    } catch (err) { bandeau(err.message); }
+  });
+});
+
 $("#btn-etat").addEventListener("click", () => {
   const m = etat.meta;
   ouvrirDetail("Actualisation des données", "", `
     <p>Dernière lecture de Sage : <b>${m.genere ? new Date(m.genere).toLocaleString("fr-FR") : "pas encore faite"}</b>${m.dureeSecondes ? ` en ${nombre(m.dureeSecondes, 1)} s` : ""}.</p>
     <p>Prochaine actualisation automatique : ${m.prochaine ? new Date(m.prochaine).toLocaleString("fr-FR") : "–"}.</p>
+    <p>Documents comptés dans le CA : ${echapper(texteDocuments(m.documents))}.</p>
     ${m.erreurs?.length ? `<p class="erreur">Parties non relues (version précédente gardée) :</p><ul>${m.erreurs.map((x) => `<li>${echapper(x)}</li>`).join("")}</ul>` : "<p>Toutes les parties ont été lues.</p>"}
     <p class="discret">Profil : ${echapper(m.profil)}${m.utilisateur ? ` (${echapper(m.utilisateur)})` : ""}. Lecture seule : rien n'est écrit dans Sage.</p>`);
 });
@@ -180,6 +214,7 @@ function afficherEtat() {
   b.className = `etat${m.enCours || !m.genere ? " encours" : m.erreurs?.length ? " attention" : ""}`;
   $("#etat-texte").textContent = m.enCours || !m.genere ? "Lecture de Sage…" : `Actualisé à ${heure(m.genere)}`;
   $("#btn-actualiser").hidden = !m.droits.actualiser;
+  $("#btn-reglages").hidden = !m.droits.reglages;
   $("#btn-utilisateur").textContent = m.utilisateur ? `👤 ${[m.utilisateur, nomSociete(session()?.dossier)].filter(Boolean).join(" · ")}` : "Se connecter";
   $("#btn-utilisateur").hidden = !m.utilisateur && !session();
 }

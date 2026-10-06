@@ -27,7 +27,7 @@ public static class Routes
                 droits = new
                 {
                     compta = p.VoitCompta, commercial = p.VoitCommercial, achats = p.VoitAchats, clients = p.VoitClients,
-                    fournisseurs = p.VoitFournisseurs, objectifs = p.ModifieObjectifs, actualiser = p.Profil is Perimetre.Direction or Perimetre.Comptable,
+                    fournisseurs = p.VoitFournisseurs, objectifs = p.ModifieObjectifs, reglages = p.Profil == Perimetre.Direction, actualiser = p.Profil is Perimetre.Direction or Perimetre.Comptable,
                 },
                 exercices = (i.Exercices.Count > 0 ? i.Exercices : [courant]).Where(e => e.Fin >= i.Depuis)
                     .Select(e => new { cle = Periodes.CleExercice(e), intitule = Periodes.IntituleExercice(e), debut = e.Debut, fin = e.Fin }),
@@ -47,8 +47,22 @@ public static class Routes
                 axesAnalytiques = Comptabilite.AxesAnalytiques(i, 1).Values.Select(a => new { a.Code, a.Libelle }),
                 axesVentes = Commercial.Axes(i).Values.Select(a => new { a.Code, a.Libelle }),
                 seuils = c.Options.Seuils,
+                documents = i.Documents,
             });
         }).WithSummary("État de la dernière actualisation, droits de l'utilisateur, exercices et listes des filtres");
+
+        g.MapGet("/reglages", (Contexte c) =>
+        {
+            if (c.Refus(p => p.Profil != Perimetre.Aucun) is { } refus) return refus;
+            return Results.Ok(new { documents = c.Reglages.Documents() });
+        }).WithSummary("Réglages de la société : documents comptés dans le CA en plus des factures");
+
+        g.MapPut("/reglages", (Contexte c, ReglagesRequete r) =>
+        {
+            if (c.Refus(p => p.Profil == Perimetre.Direction) is { } refus) return refus;
+            c.Reglages.Enregistrer(r.Documents ?? DocumentsCa.Factures, c.Perimetre.Utilisateur);
+            return Results.Ok(new { documents = c.Reglages.Documents() });
+        }).WithSummary("Change les documents comptés dans le CA (Direction) : bons de livraison, de retour, d'avoir financier");
 
         g.MapPost("/actualiser", (Contexte c) =>
         {
@@ -145,7 +159,9 @@ public sealed class Contexte
     public required TableauDeBordOptions Options { get; init; }
     public required Perimetre Perimetre { get; init; }
     public required ILogger Log { get; init; }
-    public Instantane Instantane => Service.Instantane;
+    public required ReglagesTableauDeBord Reglages { get; init; }
+    /// <summary>Instantané de la société, limité aux documents que ses réglages comptent dans le CA.</summary>
+    public Instantane Instantane => Service.Instantane.Retenir(Reglages.Documents());
 
     public static ValueTask<Contexte?> BindAsync(HttpContext http)
     {
@@ -158,6 +174,7 @@ public sealed class Contexte
             Options = options,
             Perimetre = Perimetre.De(auth.Lire(http), options, auth.Options.Active),
             Log = s.GetRequiredService<ILoggerFactory>().CreateLogger("TableauDeBord"),
+            Reglages = s.GetRequiredService<ReglagesTableauDeBord>(),
         });
     }
 
@@ -186,3 +203,5 @@ public sealed class Contexte
         }
     }
 }
+
+public sealed record ReglagesRequete(DocumentsCa? Documents);

@@ -70,7 +70,7 @@ public sealed class TableauDeBordTests : IDisposable
     {
         var s = new ServiceTableauDeBord(new FaussesLecturesTableauDeBord(), new OptionsFixes<TableauDeBordOptions>(new()),
             Microsoft.Extensions.Logging.Abstractions.NullLogger<ServiceTableauDeBord>.Instance);
-        return await s.Actualiser();
+        return (await s.Actualiser()).Retenir(DocumentsCa.Factures);
     }
 
     static readonly Perimetre Direction = new(Perimetre.Direction, null, "DIR");
@@ -313,6 +313,37 @@ public sealed class TableauDeBordTests : IDisposable
     }
 
     [Fact]
+    public async Task Les_bons_de_livraison_et_de_retour_comptent_dans_le_CA_seulement_si_coches()
+    {
+        var http = await Client("DIR");
+        decimal Ca(JsonElement cube) => cube.GetProperty("total").GetProperty("total").GetProperty("ca").GetDecimal();
+        var avant = await http.GetFromJsonAsync<JsonElement>("/api/v1/tableau-de-bord/commercial/cube?lignes=article");
+        Assert.False((await http.GetFromJsonAsync<JsonElement>("/api/v1/tableau-de-bord/reglages")).GetProperty("documents").GetProperty("livraisons").GetBoolean());
+
+        var r = await http.PutAsJsonAsync("/api/v1/tableau-de-bord/reglages", new { documents = new { livraisons = true, retours = true, avoirsFinanciers = false } });
+        Assert.Equal(HttpStatusCode.OK, r.StatusCode);
+        var apres = await http.GetFromJsonAsync<JsonElement>("/api/v1/tableau-de-bord/commercial/cube?lignes=article");
+        Assert.Equal(Ca(avant) + 1000 - 300, Ca(apres));
+        var s = await http.GetFromJsonAsync<JsonElement>("/api/v1/tableau-de-bord/commercial/synthese");
+        Assert.Equal(5700m, s.GetProperty("caMois").GetDecimal());
+
+        await http.PutAsJsonAsync("/api/v1/tableau-de-bord/reglages", new { documents = new { livraisons = true, retours = false, avoirsFinanciers = false } });
+        Assert.Equal(Ca(avant) + 1000, Ca(await http.GetFromJsonAsync<JsonElement>("/api/v1/tableau-de-bord/commercial/cube?lignes=article")));
+
+        var compta = await Client("COMPTA");
+        Assert.Equal(HttpStatusCode.Forbidden, (await compta.PutAsJsonAsync("/api/v1/tableau-de-bord/reglages", new { documents = new { livraisons = false } })).StatusCode);
+    }
+
+    [Fact]
+    public void Les_types_de_pieces_retenus_suivent_le_reglage()
+    {
+        Assert.Equal([6, 7], DocumentsCa.Factures.Types(0));
+        Assert.Equal([13, 14, 16, 17], new DocumentsCa(Livraisons: true, Retours: true).Types(1));
+        Assert.True(new DocumentsCa(AvoirsFinanciers: true).Retient(15));
+        Assert.False(DocumentsCa.Factures.Retient(3));
+    }
+
+    [Fact]
     public async Task Une_partie_illisible_n_empeche_pas_les_autres()
     {
         var lectures = new FaussesLecturesTableauDeBord { StockEnPanne = true };
@@ -371,13 +402,17 @@ sealed class FaussesLecturesTableauDeBord : ILecturesTableauDeBord
         new FaitLigne { Mois = M, Article = "CHORFA", Tiers = "CISEL", Commercial = 3, Depot = 1, MontantHT = 3000, Quantite = 2, Cout = 2000 },
         new FaitLigne { Mois = M, Article = "BAOR01", Tiers = "BAGUES", Commercial = 4, Depot = 1, MontantHT = 2000, Quantite = 1, Cout = 1500 },
         new FaitLigne { Mois = M.AddYears(-1), Article = "CHORFA", Tiers = "CISEL", Commercial = 3, Depot = 1, MontantHT = 4000, Quantite = 3, Cout = 3000 },
-        new FaitLigne { Domaine = 1, Mois = M, Article = "CHORFA", Tiers = "FOUR", Depot = 1, MontantHT = 2000, Quantite = 3 });
+        new FaitLigne { Domaine = 1, Mois = M, Article = "CHORFA", Tiers = "FOUR", Depot = 1, MontantHT = 2000, Quantite = 3 },
+        new FaitLigne { Type = 3, Mois = M, Date = J, Article = "CHORFA", Tiers = "CISEL", Commercial = 3, Depot = 1, MontantHT = 1000, Quantite = 1, Cout = 600 },
+        new FaitLigne { Type = 4, Mois = M, Date = J, Article = "CHORFA", Tiers = "CISEL", Commercial = 3, Depot = 1, MontantHT = -300, Quantite = -1, Cout = -200 });
 
     public Task<IReadOnlyList<FaitPiece>> Pieces(DateTime depuis) => L(
         new FaitPiece { Date = J, Piece = "FA00001", Tiers = "CISEL", Commercial = 3, MontantHT = 3000 },
         new FaitPiece { Date = J, Piece = "FA00002", Tiers = "BAGUES", Commercial = 4, MontantHT = 2000 },
         new FaitPiece { Date = J.AddYears(-1), Piece = "FA00000", Tiers = "CISEL", Commercial = 3, MontantHT = 4000 },
-        new FaitPiece { Domaine = 1, Date = J, Piece = "FF00001", Tiers = "FOUR", MontantHT = 2000 });
+        new FaitPiece { Domaine = 1, Date = J, Piece = "FF00001", Tiers = "FOUR", MontantHT = 2000 },
+        new FaitPiece { Type = 3, Date = J, Piece = "BL00001", Tiers = "CISEL", Commercial = 3, MontantHT = 1000 },
+        new FaitPiece { Type = 4, Date = J, Piece = "BR00001", Tiers = "CISEL", Commercial = 3, MontantHT = -300, Avoir = true });
 
     public Task<IReadOnlyList<FaitEnCours>> EnCours() => L(
         new FaitEnCours { Type = 1, Date = J.AddDays(-10), DateLivraison = J.AddDays(-2), Piece = "BC00001", Tiers = "CISEL", Commercial = 3, MontantHT = 800 },

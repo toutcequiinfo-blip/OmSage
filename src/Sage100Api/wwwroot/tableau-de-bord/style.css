@@ -167,3 +167,5 @@ table.liste tr.cliquable { cursor: pointer; } table.liste tr.cliquable:hover td 
   .entete, .onglets, .commandes { position: static; }
   .outils, #btn-theme { display: none; }
 }
+.reglages .case { display: flex; align-items: center; gap: 8px; margin: 6px 0; }
+.reglages .case input { width: 18px; height: 18px; }

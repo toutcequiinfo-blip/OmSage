@@ -52,7 +52,7 @@ public static class Creances
     {
         var echeances = Filtrer(i, type, p, commercial, categorie, qualite).ToList();
         var total = Ventiler(echeances, aujourdhui);
-        var derniereFacture = i.Pieces.Where(x => x.Domaine == type && !x.Avoir).GroupBy(x => x.Tiers)
+        var derniereFacture = i.Pieces.Where(x => x.Domaine == type && x.Facture && !x.Avoir).GroupBy(x => x.Tiers)
             .ToDictionary(g => g.Key, g => g.Max(x => x.Date), StringComparer.OrdinalIgnoreCase);
 
         var parTiers = echeances.GroupBy(e => e.Tiers).Select(g =>

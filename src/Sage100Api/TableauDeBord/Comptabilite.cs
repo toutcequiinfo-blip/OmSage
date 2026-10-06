@@ -283,11 +283,11 @@ public static class Comptabilite
         {
             var fin = m.AddMonths(1);
             var mois = i.Compta.Where(f => !f.ANouveau && f.Mois == m).ToList();
-            var caG = i.Pieces.Where(x => x.Domaine == 0 && x.Date >= m && x.Date < fin).Sum(x => x.MontantHT);
+            var caG = i.Pieces.Where(x => x.Domaine == 0 && x.Facture && x.Date >= m && x.Date < fin).Sum(x => x.MontantHT);
             var caC = mois.Where(f => f.Compte.StartsWith("70")).Sum(f => f.Credit - f.Debit);
             var rgG = i.Reglements.Where(x => x.Type == 0 && x.Mois == m).Sum(x => x.Montant);
             var rgC = mois.Where(f => f.Compte.StartsWith("41") && i.Journaux.TryGetValue(f.Journal, out var j) && j.Type == 2).Sum(f => f.Credit - f.Debit);
-            var acG = i.Pieces.Where(x => x.Domaine == 1 && x.Date >= m && x.Date < fin).Sum(x => x.MontantHT);
+            var acG = i.Pieces.Where(x => x.Domaine == 1 && x.Facture && x.Date >= m && x.Date < fin).Sum(x => x.MontantHT);
             var acC = mois.Where(f => f.Compte.StartsWith("60")).Sum(f => f.Debit - f.Credit);
             liste.Add(new LigneRapprochement(Periodes.Mois(m), caG, caC, caG - caC, Periodes.Variation(caG, caC), rgG, rgC, rgG - rgC, acG, acC, acG - acC));
         }

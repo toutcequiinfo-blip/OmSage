@@ -81,13 +81,16 @@ public sealed class FaitAnalytique
 }
 
 /// <summary>
-/// Lignes de factures (ventes : DO_Type 6, 7 ; achats : 16, 17) regroupées par jour, article, tiers, commercial et dépôt.
-/// Les factures de retour et d'avoir (DO_Provenance 1, 2) sont en négatif.
+/// Lignes de factures (ventes : DO_Type 6, 7 ; achats : 16, 17), et de bons de livraison, de retour et d'avoir financier
+/// (3, 4, 5 ; 13, 14, 15) que le tableau compte ou non selon <see cref="DocumentsCa"/>, regroupées par jour, type, article, tiers, commercial et dépôt.
+/// Les factures de retour et d'avoir (DO_Provenance 1, 2), bons de retour et d'avoir financier sont en négatif.
 /// </summary>
 public sealed class FaitLigne
 {
     /// <summary>0 = vente, 1 = achat.</summary>
     public int Domaine { get; init; }
+    /// <summary>Type de pièce (DO_Type) : facture par défaut ; bon de livraison, de retour, d'avoir financier selon <see cref="DocumentsCa"/>.</summary>
+    public int Type { get; init; } = 6;
     public DateTime Mois { get; init; }
     /// <summary>Jour des factures (les filtres Du / Au sont au jour près) ; à défaut, le mois.</summary>
     public DateTime Date { get => _date == default ? Mois : _date; init => _date = value; }
@@ -106,13 +109,16 @@ public sealed class FaitLigne
 public sealed class FaitPiece
 {
     public int Domaine { get; init; }
+    /// <summary>Type de pièce (DO_Type) : facture par défaut.</summary>
+    public int Type { get; init; } = 6;
+    public bool Facture => Type % 10 is 6 or 7;
     public DateTime Date { get; init; }
     public string Piece { get; init; } = "";
     public string Tiers { get; init; } = "";
     public int? Commercial { get; init; }
     public int? Depot { get; init; }
     public decimal MontantHT { get; init; }
-    /// <summary>Facture de retour ou d'avoir.</summary>
+    /// <summary>Facture de retour ou d'avoir, bon de retour ou d'avoir financier.</summary>
     public bool Avoir { get; init; }
 }
 
@@ -215,7 +221,7 @@ public sealed class DetailLigne
 
 public sealed record FiltreDetailCompta(DateTime Du, DateTime Au, IReadOnlyList<string>? Comptes, IReadOnlyList<string>? Journaux, string? Tiers, bool ANouveaux, int Taille);
 public sealed record FiltreDetailVentes(int Domaine, DateTime Du, DateTime Au, string? Article, IReadOnlyList<string>? Articles, string? Tiers,
-    IReadOnlyList<string>? TiersListe, int? Commercial, int? Depot, int Taille);
+    IReadOnlyList<string>? TiersListe, int? Commercial, int? Depot, int Taille, DocumentsCa? Documents = null);
 
 /// <summary>
 /// Lectures du tableau de bord. Toutes en SQL, en lecture seule : aucune ne modifie Sage.
@@ -254,9 +260,10 @@ public sealed class LecturesTableauDeBordSql(Dossiers dossiers, IOptionsMonitor<
     const string SansVerrou = "SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED; ";
     // Journaux de situation (JO_Type 4) exclus : ce ne sont pas des écritures réelles.
     const string JournauxReels = "JOIN F_JOURNAUX j ON j.JO_Num = e.JO_Num AND j.JO_Type <> 4 ";
-    // Signe d'une facture : retour et avoir (DO_Provenance 1, 2) en négatif.
-    const string Signe = "CASE WHEN e.DO_Provenance IN (1, 2) THEN -1 ELSE 1 END";
-    const string Factures = "((e.DO_Domaine = 0 AND e.DO_Type IN (6, 7)) OR (e.DO_Domaine = 1 AND e.DO_Type IN (16, 17)))";
+    // Signe d'une pièce : facture de retour et d'avoir (DO_Provenance 1, 2), bon de retour et d'avoir financier en négatif.
+    const string Signe = "CASE WHEN e.DO_Provenance IN (1, 2) OR e.DO_Type IN (4, 5, 14, 15) THEN -1 ELSE 1 END";
+    // Factures, et les bons que le réglage DocumentsCa peut ajouter : tous sont lus, le tri se fait à l'affichage.
+    const string Documents = "((e.DO_Domaine = 0 AND e.DO_Type IN (3, 4, 5, 6, 7)) OR (e.DO_Domaine = 1 AND e.DO_Type IN (13, 14, 15, 16, 17)))";
 
     SqlConnection Cnx() => new(dossiers.Adapter(options.CurrentValue.ChaineSql));
     int Delai => Math.Max(30, options.CurrentValue.DelaiSqlSecondes);
@@ -300,21 +307,21 @@ public sealed class LecturesTableauDeBordSql(Dossiers dossiers, IOptionsMonitor<
         "GROUP BY e.JM_Date, e.EC_Jour, a.N_Analytique, a.CA_Num, e.CG_Num, e.JO_Num", new { depuis });
 
     public Task<IReadOnlyList<FaitLigne>> Lignes(DateTime depuis) => Lire<FaitLigne>(
-        "SELECT CAST(e.DO_Domaine AS int) AS Domaine, DATEFROMPARTS(YEAR(e.DO_Date), MONTH(e.DO_Date), 1) AS Mois, e.DO_Date AS Date, l.AR_Ref AS Article, " +
+        "SELECT CAST(e.DO_Domaine AS int) AS Domaine, CAST(e.DO_Type AS int) AS Type, DATEFROMPARTS(YEAR(e.DO_Date), MONTH(e.DO_Date), 1) AS Mois, e.DO_Date AS Date, l.AR_Ref AS Article, " +
         "e.DO_Tiers AS Tiers, NULLIF(e.CO_No, 0) AS Commercial, NULLIF(l.DE_No, 0) AS Depot, " +
         $"CAST(SUM({Signe} * l.DL_MontantHT) AS decimal(18,2)) AS MontantHT, " +
         $"CAST(SUM({Signe} * ABS(l.DL_Qte)) AS decimal(18,4)) AS Quantite, " +
         $"CAST(SUM({Signe} * ABS(l.DL_Qte) * l.DL_PrixRU) AS decimal(18,2)) AS Cout " +
         "FROM F_DOCLIGNE l JOIN F_DOCENTETE e ON e.DO_Domaine = l.DO_Domaine AND e.DO_Type = l.DO_Type AND e.DO_Piece = l.DO_Piece " +
-        $"WHERE {Factures} AND e.DO_Date >= @depuis AND l.AR_Ref <> '' " +
-        "GROUP BY e.DO_Domaine, e.DO_Date, l.AR_Ref, e.DO_Tiers, NULLIF(e.CO_No, 0), NULLIF(l.DE_No, 0)",
+        $"WHERE {Documents} AND e.DO_Date >= @depuis AND l.AR_Ref <> '' " +
+        "GROUP BY e.DO_Domaine, e.DO_Type, e.DO_Date, l.AR_Ref, e.DO_Tiers, NULLIF(e.CO_No, 0), NULLIF(l.DE_No, 0)",
         new { depuis });
 
     public Task<IReadOnlyList<FaitPiece>> Pieces(DateTime depuis) => Lire<FaitPiece>(
-        "SELECT CAST(e.DO_Domaine AS int) AS Domaine, e.DO_Date AS Date, e.DO_Piece AS Piece, e.DO_Tiers AS Tiers, NULLIF(e.CO_No, 0) AS Commercial, " +
+        "SELECT CAST(e.DO_Domaine AS int) AS Domaine, CAST(e.DO_Type AS int) AS Type, e.DO_Date AS Date, e.DO_Piece AS Piece, e.DO_Tiers AS Tiers, NULLIF(e.CO_No, 0) AS Commercial, " +
         $"NULLIF(e.DE_No, 0) AS Depot, CAST({Signe} * e.DO_TotalHT AS decimal(18,2)) AS MontantHT, " +
-        "CAST(CASE WHEN e.DO_Provenance IN (1, 2) THEN 1 ELSE 0 END AS bit) AS Avoir " +
-        $"FROM F_DOCENTETE e WHERE {Factures} AND e.DO_Date >= @depuis", new { depuis });
+        "CAST(CASE WHEN e.DO_Provenance IN (1, 2) OR e.DO_Type IN (4, 5, 14, 15) THEN 1 ELSE 0 END AS bit) AS Avoir " +
+        $"FROM F_DOCENTETE e WHERE {Documents} AND e.DO_Date >= @depuis", new { depuis });
 
     public Task<IReadOnlyList<FaitEnCours>> EnCours() => Lire<FaitEnCours>(
         "SELECT CAST(e.DO_Type AS int) AS Type, e.DO_Date AS Date, NULLIF(e.DO_DateLivr, '1900-01-01') AS DateLivraison, e.DO_Piece AS Piece, " +
@@ -400,13 +407,13 @@ public sealed class LecturesTableauDeBordSql(Dossiers dossiers, IOptionsMonitor<
 
     public Task<IReadOnlyList<DetailLigne>> DetailVentes(FiltreDetailVentes f)
     {
-        var p = new DynamicParameters(new { domaine = f.Domaine, du = f.Du, au = f.Au.AddDays(1), article = f.Article, tiers = f.Tiers,
-            commercial = f.Commercial, depot = f.Depot, taille = f.Taille });
+        var p = new DynamicParameters(new { domaine = f.Domaine, types = (f.Documents ?? DocumentsCa.Factures).Types(f.Domaine), du = f.Du, au = f.Au.AddDays(1),
+            article = f.Article, tiers = f.Tiers, commercial = f.Commercial, depot = f.Depot, taille = f.Taille });
         var sql = "SELECT TOP (@taille) e.DO_Date AS Date, e.DO_Piece AS Piece, e.DO_Tiers AS Tiers, l.AR_Ref AS Article, l.DL_Design AS Designation, " +
             $"CAST({Signe} * ABS(l.DL_Qte) AS decimal(18,4)) AS Quantite, CAST({Signe} * l.DL_MontantHT AS decimal(18,2)) AS MontantHT, " +
             $"CAST({Signe} * ABS(l.DL_Qte) * l.DL_PrixRU AS decimal(18,2)) AS Cout " +
             "FROM F_DOCLIGNE l JOIN F_DOCENTETE e ON e.DO_Domaine = l.DO_Domaine AND e.DO_Type = l.DO_Type AND e.DO_Piece = l.DO_Piece " +
-            $"WHERE {Factures} AND e.DO_Domaine = @domaine AND e.DO_Date >= @du AND e.DO_Date < @au AND l.AR_Ref <> '' " +
+            "WHERE e.DO_Domaine = @domaine AND e.DO_Type IN @types AND e.DO_Date >= @du AND e.DO_Date < @au AND l.AR_Ref <> '' " +
             "AND (@article IS NULL OR l.AR_Ref = @article) AND (@tiers IS NULL OR e.DO_Tiers = @tiers) " +
             "AND (@commercial IS NULL OR e.CO_No = @commercial) AND (@depot IS NULL OR l.DE_No = @depot) ";
         sql += Liste("l.AR_Ref", f.Articles, p, "ar") + Liste("e.DO_Tiers", f.TiersListe, p, "ti");

@@ -47,6 +47,7 @@ builder.Services.AddSingleton<ILecturesTableauDeBord, LecturesTableauDeBordSql>(
 builder.Services.AddSingleton<ServiceTableauDeBord>();
 builder.Services.AddHostedService(s => s.GetRequiredService<ServiceTableauDeBord>());
 builder.Services.AddSingleton<Objectifs>();
+builder.Services.AddSingleton<ReglagesTableauDeBord>();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(o =>
 {
