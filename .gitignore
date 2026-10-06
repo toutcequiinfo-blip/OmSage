@@ -6,3 +6,4 @@ obj/
 *.db-shm
 *.db-wal
 appsettings.Local.json
+deploy/sortie/

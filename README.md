@@ -239,6 +239,45 @@ L'API sert l'application sur **https://<serveur>:5443/livraison/**. Au bureau, o
 - Pour optimiser depuis le dépôt, enregistre une fois sa position : `PUT /api/v1/geolocalisation/depot/1` dans Swagger. Sinon, choisis « Ma position » comme départ.
 - Rien n'est écrit dans Sage : le bon de livraison se fait toujours dans Sage, à partir du bon de commande.
 
+## Installation chez un client (Setup.exe)
+
+En production, on n'installe ni Visual Studio ni Git sur le serveur du client : on lui apporte un seul fichier, `Sage100Api-Setup-<version>.exe`.
+
+**Fabriquer le Setup, sur le PC de développement.** Il faut une seule fois [Inno Setup 6](https://jrsoftware.org/isdl.php), qui est gratuit. Ensuite :
+```
+powershell -ExecutionPolicy Bypass -File C:\Dev\OmSage\deploy\fabriquer-installateur.ps1
+```
+Le script fait trois choses :
+- il publie l'API en mode autonome, si bien que le serveur n'a pas besoin du runtime .NET 8 ;
+- il compile le worker avec le MSBuild de Visual Studio (à cause de la référence COM Objets Métiers) ;
+- il produit `deploy\sortie\Sage100Api-Setup-<version>.exe`.
+
+Le paquet ne contient aucun secret de ce PC : ni `appsettings.Local.json`, ni certificats, ni bases.
+
+**Sur le serveur du client.**
+
+Prérequis :
+- Sage 100 V12 et ses Objets Métiers ;
+- le .NET Framework 4.8, déjà présent sur Windows 10, 11 et Server 2019 et versions suivantes.
+
+Lance le Setup en administrateur. L'assistant demande :
+- le serveur SQL, la base Sage, l'utilisateur Sage et son mot de passe ;
+- le compte Windows des services et son mot de passe ;
+- les ports ;
+- deux options : créer le certificat HTTPS des tablettes, créer le compte SQL en lecture seule des tableaux de bord.
+
+Il installe ensuite tout dans `C:\Sage100Api` :
+- les deux services, avec redémarrage automatique en cas de plantage ;
+- la configuration, avec une clé d'API aléatoire pour la borne ;
+- l'ouverture du pare-feu ;
+- les certificats et le compte SQL en lecture seule, si ces options sont cochées.
+
+Il vérifie enfin que l'API répond, puis affiche `LISEZMOI-installation.txt`. Ce fichier donne les adresses des applications, la clé d'API et le chemin du certificat à installer sur les tablettes. Le détail de l'installation est dans `installation.log`, sans les mots de passe.
+
+**Mise à jour :** lance un Setup plus récent. La configuration du serveur est gardée : les services sont arrêtés, les fichiers remplacés, puis les services redémarrés.
+
+**Désinstallation :** Panneau de configuration > Programmes. Les services et la règle de pare-feu sont supprimés. La configuration, les journaux, la base des extensions et les certificats restent dans `C:\Sage100Api`.
+
 ## Installation sur le serveur (services Windows et HTTPS)
 
 L'API et le worker deviennent deux services Windows qui démarrent avec le PC : **Sage100Api** et **Sage100Api.Worker**. Ils redémarrent seuls en cas de plantage. Plus besoin de Visual Studio ni de F5 pour faire tourner la borne.
