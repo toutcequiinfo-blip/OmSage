@@ -24,7 +24,7 @@ public sealed class Instantane
     IReadOnlyList<FaitLigne> _lignes = [];
     IReadOnlyList<FaitPiece> _pieces = [];
     /// <summary>Documents comptés dans le CA par cette vue (voir <see cref="Retenir"/>).</summary>
-    public DocumentsCa Documents { get; private set; } = DocumentsCa.Factures;
+    public DocumentsCa Documents { get; private set; } = DocumentsCa.Defaut;
     // Vues par réglage, partagées avec les vues (copies) : toujours calculées depuis l'instantané d'origine.
     readonly ConcurrentDictionary<DocumentsCa, Instantane> _vues = new();
     Instantane? _origine;
@@ -56,8 +56,8 @@ public sealed class Instantane
         var origine = _origine ?? this;
         var v = (Instantane)origine.MemberwiseClone();
         v._origine = origine;
-        v._lignes = origine._lignes.Where(l => d.Retient(l.Type)).ToList();
-        v._pieces = origine._pieces.Where(p => d.Retient(p.Type)).ToList();
+        v._lignes = origine._lignes.Where(l => d.Retient(l.Type, l.Provenance)).ToList();
+        v._pieces = origine._pieces.Where(p => d.Retient(p.Type, p.Provenance)).ToList();
         v.Documents = d;
         return v;
     });

@@ -55,14 +55,14 @@ public static class Routes
         {
             if (c.Refus(p => p.Profil != Perimetre.Aucun) is { } refus) return refus;
             return Results.Ok(new { documents = c.Reglages.Documents() });
-        }).WithSummary("Réglages de la société : documents comptés dans le CA en plus des factures");
+        }).WithSummary("Réglages de la société : documents comptés dans le CA");
 
         g.MapPut("/reglages", (Contexte c, ReglagesRequete r) =>
         {
             if (c.Refus(p => p.Profil == Perimetre.Direction) is { } refus) return refus;
-            c.Reglages.Enregistrer(r.Documents ?? DocumentsCa.Factures, c.Perimetre.Utilisateur);
+            c.Reglages.Enregistrer(r.Documents ?? DocumentsCa.Defaut, c.Perimetre.Utilisateur);
             return Results.Ok(new { documents = c.Reglages.Documents() });
-        }).WithSummary("Change les documents comptés dans le CA (Direction) : bons de livraison, de retour, d'avoir financier");
+        }).WithSummary("Change les documents comptés dans le CA (Direction) : factures, factures de retour et d'avoir, bons de livraison, de retour, d'avoir financier");
 
         g.MapPost("/actualiser", (Contexte c) =>
         {

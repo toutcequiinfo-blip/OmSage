@@ -152,22 +152,24 @@ $("#btn-actualiser").addEventListener("click", async () => {
   } catch (e) { bandeau(e.message); }
 });
 
-// Documents comptés dans le CA en plus des factures (réglage de la société, modifiable par la Direction).
+// Documents comptés dans le CA (réglage de la société, modifiable par la Direction), dans l'ordre de Sage.
 const DOCUMENTS = [
-  ["livraisons", "Bons de livraison", "BL non encore facturés"],
+  ["livraisons", "Bons de livraison", "non encore facturés"],
   ["retours", "Bons de retour", "en négatif"],
   ["avoirsFinanciers", "Bons d'avoir financier", "en négatif"],
+  ["factures", "Factures", "et factures comptabilisées"],
+  ["facturesRetour", "Factures de retour", "en négatif"],
+  ["facturesAvoir", "Factures d'avoir", "en négatif"],
 ];
-const texteDocuments = (d) => ["Factures", ...DOCUMENTS.filter(([cle]) => d?.[cle]).map(([, libelle]) => libelle.toLowerCase())].join(", ");
+const texteDocuments = (d) => DOCUMENTS.filter(([cle]) => d?.[cle] ?? ["factures", "facturesRetour", "facturesAvoir"].includes(cle)).map(([, libelle]) => libelle).join(", ") || "aucun document";
 
 $("#btn-reglages").addEventListener("click", () => {
   const d = etat.meta.documents ?? {};
   ouvrirDetail("Réglages du tableau de bord", nomSociete(session()?.dossier) ?? "", `
     <form id="form-reglages" class="reglages">
       <p><b>Documents comptés dans le CA, les quantités et les marges</b> (ventes et achats)</p>
-      <label class="case"><input type="checkbox" checked disabled> Factures et factures comptabilisées <span class="discret">(toujours)</span></label>
       ${DOCUMENTS.map(([cle, libelle, note]) => `<label class="case"><input type="checkbox" name="${cle}" ${d[cle] ? "checked" : ""}> ${libelle} <span class="discret">(${note})</span></label>`).join("")}
-      <p class="discret">Ces bons ont déjà fait bouger le stock. Pas de double compte : un bon transformé en facture n'existe plus comme bon dans Sage.
+      <p class="discret">Les bons ont déjà fait bouger le stock. Pas de double compte : un bon transformé en facture n'existe plus comme bon dans Sage.
         Le rapprochement avec la comptabilité ne compte que les factures.</p>
       <div class="boutons"><button type="submit" class="principal">Enregistrer</button></div>
     </form>`);

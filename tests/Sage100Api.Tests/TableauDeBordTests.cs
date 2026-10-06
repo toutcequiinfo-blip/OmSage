@@ -70,7 +70,7 @@ public sealed class TableauDeBordTests : IDisposable
     {
         var s = new ServiceTableauDeBord(new FaussesLecturesTableauDeBord(), new OptionsFixes<TableauDeBordOptions>(new()),
             Microsoft.Extensions.Logging.Abstractions.NullLogger<ServiceTableauDeBord>.Instance);
-        return (await s.Actualiser()).Retenir(DocumentsCa.Factures);
+        return (await s.Actualiser()).Retenir(DocumentsCa.Defaut);
     }
 
     static readonly Perimetre Direction = new(Perimetre.Direction, null, "DIR");
@@ -330,6 +330,9 @@ public sealed class TableauDeBordTests : IDisposable
         await http.PutAsJsonAsync("/api/v1/tableau-de-bord/reglages", new { documents = new { livraisons = true, retours = false, avoirsFinanciers = false } });
         Assert.Equal(Ca(avant) + 1000, Ca(await http.GetFromJsonAsync<JsonElement>("/api/v1/tableau-de-bord/commercial/cube?lignes=article")));
 
+        await http.PutAsJsonAsync("/api/v1/tableau-de-bord/reglages", new { documents = new { livraisons = true, factures = false } });
+        Assert.Equal(1000m, Ca(await http.GetFromJsonAsync<JsonElement>("/api/v1/tableau-de-bord/commercial/cube?lignes=article")));
+
         var compta = await Client("COMPTA");
         Assert.Equal(HttpStatusCode.Forbidden, (await compta.PutAsJsonAsync("/api/v1/tableau-de-bord/reglages", new { documents = new { livraisons = false } })).StatusCode);
     }
@@ -337,10 +340,17 @@ public sealed class TableauDeBordTests : IDisposable
     [Fact]
     public void Les_types_de_pieces_retenus_suivent_le_reglage()
     {
-        Assert.Equal([6, 7], DocumentsCa.Factures.Types(0));
-        Assert.Equal([13, 14, 16, 17], new DocumentsCa(Livraisons: true, Retours: true).Types(1));
+        var d = DocumentsCa.Defaut;
+        Assert.True(d.Retient(6) && d.Retient(7, 1) && d.Retient(17, 2));
+        Assert.False(d.Retient(3));
         Assert.True(new DocumentsCa(AvoirsFinanciers: true).Retient(15));
-        Assert.False(DocumentsCa.Factures.Retient(3));
+        var sansAvoir = new DocumentsCa(FacturesAvoir: false);
+        Assert.False(sansAvoir.Retient(6, 2));
+        Assert.True(sansAvoir.Retient(6, 1));
+        Assert.Equal("(e.DO_Type IN (6, 7))", d.Condition(0));
+        Assert.Equal("(e.DO_Type IN (13, 14) OR (e.DO_Type IN (16, 17) AND (e.DO_Provenance NOT IN (1, 2) OR e.DO_Provenance = 1)))",
+            new DocumentsCa(Livraisons: true, Retours: true, FacturesAvoir: false).Condition(1));
+        Assert.Equal("1 = 0", new DocumentsCa(Factures: false, FacturesRetour: false, FacturesAvoir: false).Condition(0));
     }
 
     [Fact]
