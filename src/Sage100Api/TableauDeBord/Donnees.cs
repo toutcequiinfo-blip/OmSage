@@ -91,6 +91,8 @@ public sealed class FaitLigne
     public int Domaine { get; init; }
     /// <summary>Type de pièce (DO_Type) : facture par défaut ; bon de livraison, de retour, d'avoir financier selon <see cref="DocumentsCa"/>.</summary>
     public int Type { get; init; } = 6;
+    /// <summary>Provenance d'une facture (DO_Provenance) : 1 = facture de retour, 2 = facture d'avoir.</summary>
+    public int Provenance { get; init; }
     public DateTime Mois { get; init; }
     /// <summary>Jour des factures (les filtres Du / Au sont au jour près) ; à défaut, le mois.</summary>
     public DateTime Date { get => _date == default ? Mois : _date; init => _date = value; }
@@ -111,6 +113,8 @@ public sealed class FaitPiece
     public int Domaine { get; init; }
     /// <summary>Type de pièce (DO_Type) : facture par défaut.</summary>
     public int Type { get; init; } = 6;
+    /// <summary>Provenance d'une facture (DO_Provenance) : 1 = facture de retour, 2 = facture d'avoir.</summary>
+    public int Provenance { get; init; }
     public bool Facture => Type % 10 is 6 or 7;
     public DateTime Date { get; init; }
     public string Piece { get; init; } = "";
@@ -307,18 +311,18 @@ public sealed class LecturesTableauDeBordSql(Dossiers dossiers, IOptionsMonitor<
         "GROUP BY e.JM_Date, e.EC_Jour, a.N_Analytique, a.CA_Num, e.CG_Num, e.JO_Num", new { depuis });
 
     public Task<IReadOnlyList<FaitLigne>> Lignes(DateTime depuis) => Lire<FaitLigne>(
-        "SELECT CAST(e.DO_Domaine AS int) AS Domaine, CAST(e.DO_Type AS int) AS Type, DATEFROMPARTS(YEAR(e.DO_Date), MONTH(e.DO_Date), 1) AS Mois, e.DO_Date AS Date, l.AR_Ref AS Article, " +
+        "SELECT CAST(e.DO_Domaine AS int) AS Domaine, CAST(e.DO_Type AS int) AS Type, CAST(e.DO_Provenance AS int) AS Provenance, DATEFROMPARTS(YEAR(e.DO_Date), MONTH(e.DO_Date), 1) AS Mois, e.DO_Date AS Date, l.AR_Ref AS Article, " +
         "e.DO_Tiers AS Tiers, NULLIF(e.CO_No, 0) AS Commercial, NULLIF(l.DE_No, 0) AS Depot, " +
         $"CAST(SUM({Signe} * l.DL_MontantHT) AS decimal(18,2)) AS MontantHT, " +
         $"CAST(SUM({Signe} * ABS(l.DL_Qte)) AS decimal(18,4)) AS Quantite, " +
         $"CAST(SUM({Signe} * ABS(l.DL_Qte) * l.DL_PrixRU) AS decimal(18,2)) AS Cout " +
         "FROM F_DOCLIGNE l JOIN F_DOCENTETE e ON e.DO_Domaine = l.DO_Domaine AND e.DO_Type = l.DO_Type AND e.DO_Piece = l.DO_Piece " +
         $"WHERE {Documents} AND e.DO_Date >= @depuis AND l.AR_Ref <> '' " +
-        "GROUP BY e.DO_Domaine, e.DO_Type, e.DO_Date, l.AR_Ref, e.DO_Tiers, NULLIF(e.CO_No, 0), NULLIF(l.DE_No, 0)",
+        "GROUP BY e.DO_Domaine, e.DO_Type, e.DO_Provenance, e.DO_Date, l.AR_Ref, e.DO_Tiers, NULLIF(e.CO_No, 0), NULLIF(l.DE_No, 0)",
         new { depuis });
 
     public Task<IReadOnlyList<FaitPiece>> Pieces(DateTime depuis) => Lire<FaitPiece>(
-        "SELECT CAST(e.DO_Domaine AS int) AS Domaine, CAST(e.DO_Type AS int) AS Type, e.DO_Date AS Date, e.DO_Piece AS Piece, e.DO_Tiers AS Tiers, NULLIF(e.CO_No, 0) AS Commercial, " +
+        "SELECT CAST(e.DO_Domaine AS int) AS Domaine, CAST(e.DO_Type AS int) AS Type, CAST(e.DO_Provenance AS int) AS Provenance, e.DO_Date AS Date, e.DO_Piece AS Piece, e.DO_Tiers AS Tiers, NULLIF(e.CO_No, 0) AS Commercial, " +
         $"NULLIF(e.DE_No, 0) AS Depot, CAST({Signe} * e.DO_TotalHT AS decimal(18,2)) AS MontantHT, " +
         "CAST(CASE WHEN e.DO_Provenance IN (1, 2) OR e.DO_Type IN (4, 5, 14, 15) THEN 1 ELSE 0 END AS bit) AS Avoir " +
         $"FROM F_DOCENTETE e WHERE {Documents} AND e.DO_Date >= @depuis", new { depuis });
@@ -407,13 +411,13 @@ public sealed class LecturesTableauDeBordSql(Dossiers dossiers, IOptionsMonitor<
 
     public Task<IReadOnlyList<DetailLigne>> DetailVentes(FiltreDetailVentes f)
     {
-        var p = new DynamicParameters(new { domaine = f.Domaine, types = (f.Documents ?? DocumentsCa.Factures).Types(f.Domaine), du = f.Du, au = f.Au.AddDays(1),
+        var p = new DynamicParameters(new { domaine = f.Domaine, du = f.Du, au = f.Au.AddDays(1),
             article = f.Article, tiers = f.Tiers, commercial = f.Commercial, depot = f.Depot, taille = f.Taille });
         var sql = "SELECT TOP (@taille) e.DO_Date AS Date, e.DO_Piece AS Piece, e.DO_Tiers AS Tiers, l.AR_Ref AS Article, l.DL_Design AS Designation, " +
             $"CAST({Signe} * ABS(l.DL_Qte) AS decimal(18,4)) AS Quantite, CAST({Signe} * l.DL_MontantHT AS decimal(18,2)) AS MontantHT, " +
             $"CAST({Signe} * ABS(l.DL_Qte) * l.DL_PrixRU AS decimal(18,2)) AS Cout " +
             "FROM F_DOCLIGNE l JOIN F_DOCENTETE e ON e.DO_Domaine = l.DO_Domaine AND e.DO_Type = l.DO_Type AND e.DO_Piece = l.DO_Piece " +
-            "WHERE e.DO_Domaine = @domaine AND e.DO_Type IN @types AND e.DO_Date >= @du AND e.DO_Date < @au AND l.AR_Ref <> '' " +
+            $"WHERE e.DO_Domaine = @domaine AND {(f.Documents ?? DocumentsCa.Defaut).Condition(f.Domaine)} AND e.DO_Date >= @du AND e.DO_Date < @au AND l.AR_Ref <> '' " +
             "AND (@article IS NULL OR l.AR_Ref = @article) AND (@tiers IS NULL OR e.DO_Tiers = @tiers) " +
             "AND (@commercial IS NULL OR e.CO_No = @commercial) AND (@depot IS NULL OR l.DE_No = @depot) ";
         sql += Liste("l.AR_Ref", f.Articles, p, "ar") + Liste("e.DO_Tiers", f.TiersListe, p, "ti");
