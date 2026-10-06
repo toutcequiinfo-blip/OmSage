@@ -7,6 +7,7 @@ using Sage100Api.Ecritures;
 using Sage100Api.Extensions;
 using Sage100Api.Journal;
 using Sage100Api.Lectures;
+using Sage100Api.TableauDeBord;
 using Sage100Api.Worker;
 
 // En service Windows, le dossier courant est C:\Windows\System32 : la configuration et le journal se lisent à côté de l'exécutable.
@@ -39,6 +40,12 @@ builder.Services.AddSingleton<JournalOperations>();
 builder.Services.AddSingleton<ControleStock>();
 builder.Services.AddSingleton<ServiceEcritures>();
 builder.Services.AddSingleton<ServiceAuthentification>();
+// Tableau de bord : instantané des données Sage relu en SQL (lecture seule) au démarrage et aux heures configurées.
+builder.Services.Configure<TableauDeBordOptions>(builder.Configuration.GetSection("TableauDeBord"));
+builder.Services.AddSingleton<ILecturesTableauDeBord, LecturesTableauDeBordSql>();
+builder.Services.AddSingleton<ServiceTableauDeBord>();
+builder.Services.AddHostedService(s => s.GetRequiredService<ServiceTableauDeBord>());
+builder.Services.AddSingleton<Objectifs>();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(o =>
 {
@@ -389,6 +396,9 @@ v1.MapGet("/modifications", async (ILecturesErp l, string table, DateTime depuis
         : Results.Problem("Cette base Sage n'a pas de colonne cbModification : synchronisation incrémentale impossible.", statusCode: 501);
 }).WithTags("Synchronisation")
   .WithSummary("Codes modifiés dans Sage depuis une date (clients, articles, documents, adresses-livraison, contacts, ecritures), pour qu'une extension ne relise que ce qui a changé");
+
+// ---------- Tableaux de bord comptable et commercial (lecture seule, voir TableauDeBord/) ----------
+v1.MapTableauDeBord();
 
 // ---------- CRM : vue 360° des clients et activités des commerciaux (visites, appels, rendez-vous...) ----------
 var crmApp = v1.MapGroup("/crm").WithTags("CRM");
