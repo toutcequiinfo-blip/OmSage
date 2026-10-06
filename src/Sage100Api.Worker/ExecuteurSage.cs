@@ -148,7 +148,8 @@ namespace Sage100Api.Worker
             }
             catch (Exception ex)
             {
-                throw new ErreurMetier(CodesErreur.Technique, "Connexion Sage impossible : " + ex.Message);
+                // La base et l'utilisateur dans le message : avec plusieurs sociétés, on voit tout de suite laquelle refuse.
+                throw new ErreurMetier(CodesErreur.Technique, $"Connexion Sage impossible à {_config.BaseCial} avec l'utilisateur {_config.Utilisateur} : {ex.Message}");
             }
             _cial = cial;
             _cpta = cpta;

@@ -13,12 +13,19 @@
 
   Le script met à jour worker\worker.json (dossiers) et api\appsettings.Local.json (Sage:Dossiers), garde les réglages
   déjà faits pour une société (journaux par mode, intitulé...), puis redémarre les services.
-  Toutes les bases doivent être sur le même serveur SQL ; l'utilisateur Sage est le même partout, sauf si on en donne un
-  propre à une société dans worker.json (dossiers : utilisateur, motDePasse).
+  Toutes les bases doivent être sur le même serveur SQL.
+
+  Utilisateur Sage propre à une société (celui avec lequel le worker ouvre la base par les Objets Métiers) :
+      powershell -ExecutionPolicy Bypass -File C:\Dev\OmSage\deploy\serveur\societes.ps1 -Societe VITA2026 -Utilisateur "<Administrateur>"
+  Le mot de passe est demandé à l'écran (Entrée seule : pas de mot de passe). Sans ce réglage, une société s'ouvre avec
+  l'utilisateur du haut de worker.json (celui de la société principale).
 #>
 param(
-    [Parameter(Mandatory = $true)][string]$Bases,
+    [string]$Bases = "",
     [string]$Comptas = "",
+    [string]$Societe = "",
+    [string]$Utilisateur = "",
+    [string]$MotDePasse,
     [string]$Dossier = "",
     [switch]$SansRedemarrer
 )
@@ -37,6 +44,37 @@ if (-not $Dossier) {
 $cheminWorker = "$Dossier\worker\worker.json"
 $cheminApi = "$Dossier\api\appsettings.Local.json"
 if (-not (Test-Path $cheminWorker) -or -not (Test-Path $cheminApi)) { throw "Installation introuvable dans $Dossier (worker\worker.json et api\appsettings.Local.json)." }
+
+# ---------- Utilisateur Sage d'une société ----------
+if ($Societe) {
+    if (-not $Utilisateur) { throw "Indiquez l'utilisateur Sage de $Societe : -Utilisateur ""<Administrateur>""." }
+    if (-not $PSBoundParameters.ContainsKey("MotDePasse")) {
+        $saisi = Read-Host "Mot de passe Sage de $Utilisateur dans $Societe (Entrée seule : aucun)" -AsSecureString
+        $MotDePasse = [Runtime.InteropServices.Marshal]::PtrToStringBSTR([Runtime.InteropServices.Marshal]::SecureStringToBSTR($saisi))
+    }
+    $w = LireJson $cheminWorker
+    $d = @($w.dossiers | Where-Object { $_ -and "$($_.baseCial)" -eq $Societe }) | Select-Object -First 1
+    if (-not $d) {
+        if ("$($w.baseCial)" -ne $Societe -or @($w.dossiers | Where-Object { $_ }).Count -gt 0) {
+            throw "Société $Societe absente de $cheminWorker. Déclarez-la d'abord : societes.ps1 -Bases ""$($w.baseCial),$Societe""."
+        }
+        # Une seule société : c'est l'utilisateur du haut du fichier.
+        Propriete $w "utilisateur" $Utilisateur
+        Propriete $w "motDePasse" $MotDePasse
+    }
+    else {
+        Propriete $d "utilisateur" $Utilisateur
+        Propriete $d "motDePasse" $MotDePasse
+    }
+    EcrireJson $cheminWorker $w
+    Write-Host "Utilisateur Sage de $Societe : $Utilisateur (enregistré dans $cheminWorker)." -ForegroundColor Green
+    if (-not $SansRedemarrer -and (Get-Service "Sage100Api.Worker" -ErrorAction SilentlyContinue)) {
+        Restart-Service "Sage100Api.Worker"
+        Write-Host "  Service Sage100Api.Worker redémarré"
+    }
+    return
+}
+if (-not $Bases) { throw "Indiquez les bases (-Bases ""BIJOU,MODE"") ou l'utilisateur d'une société (-Societe MODE -Utilisateur ...)." }
 
 $listeBases = @($Bases.Split(",") | ForEach-Object { $_.Trim() } | Where-Object { $_ })
 $listeComptas = @($Comptas.Split(",") | ForEach-Object { $_.Trim() })

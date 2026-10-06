@@ -284,7 +284,11 @@ powershell -ExecutionPolicy Bypass -File C:\Sage100Api\outils\societes.ps1 -Base
 - tout est séparé par société : lectures, pièces et règlements (une session Objets Métiers par société dans le worker), tableaux de bord, tournées, activités CRM, journal des opérations (`dossiers\<base>\` à côté du journal ; la principale garde les fichiers d'avant) ;
 - sur la borne, catalogue, paramètres de saisie, tickets en attente et utilisateurs connus hors ligne sont rangés par société ; une vente faite hors ligne part toujours vers sa société, avec la connexion de son vendeur dans cette société.
 
-Options par société dans `worker.json` (`dossiers`) : `utilisateur` et `motDePasse` si l'utilisateur Sage diffère, `journauxParMode`. Dans `appsettings.Local.json` (`Sage:Dossiers`) : `Intitule` pour le nom affiché (sinon la raison sociale lue dans Sage). Pour les appels directs à l'API, la société se donne par la connexion (`dossier` dans `POST /api/v1/connexion`) ou par l'en-tête `X-Dossier` ; `GET /api/v1/dossiers` liste les sociétés. Avec une seule base, rien ne change.
+Le worker ouvre chaque société par les Objets Métiers avec l'utilisateur Sage du haut de `worker.json`. Si une société a un autre utilisateur ou un autre mot de passe (erreur « Connexion Sage impossible à VITA2026 avec l'utilisateur … : Le mot de passe est incorrect »), enregistre le sien ; le mot de passe est demandé à l'écran :
+```
+powershell -ExecutionPolicy Bypass -File C:\Dev\OmSage\deploy\serveur\societes.ps1 -Societe VITA2026 -Utilisateur "<Administrateur>"
+```
+Autres options par société dans `worker.json` (`dossiers`) : `journauxParMode`. Dans `appsettings.Local.json` (`Sage:Dossiers`) : `Intitule` pour le nom affiché (sinon la raison sociale lue dans Sage). Pour les appels directs à l'API, la société se donne par la connexion (`dossier` dans `POST /api/v1/connexion`) ou par l'en-tête `X-Dossier` ; `GET /api/v1/dossiers` liste les sociétés. Avec une seule base, rien ne change.
 
 **Mise à jour :** lance un Setup plus récent. La configuration du serveur est gardée : les services sont arrêtés, les fichiers remplacés, puis les services redémarrés.
 
