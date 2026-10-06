@@ -38,7 +38,11 @@ public static class Routes
                     .Select(x => new { numero = x.Key, intitule = x.Value }),
                 depots = i.Depots.OrderBy(x => x.Key).Select(x => new { numero = x.Key, intitule = x.Value }),
                 familles = i.Familles.OrderBy(x => x.Key).Select(x => new { code = x.Key, intitule = x.Value }),
-                categories = i.Categories.OrderBy(x => x.Key).Select(x => new { numero = x.Key, intitule = x.Value }),
+                // Catégories de P_CATTARIF, plus celles portées par des clients sans intitulé dans les paramètres.
+                categories = i.Categories.Keys.Concat(i.Tiers.Values.Where(t => t.Type == 0 && t.Categorie != null).Select(t => t.Categorie!.Value))
+                    .Distinct().Order().Select(k => new { numero = k, intitule = i.Categories.GetValueOrDefault(k) is { Length: > 0 } x ? x : $"Catégorie {k}" }),
+                qualites = i.Tiers.Values.Where(t => t.Type == 0 && t.Qualite != null).Select(t => t.Qualite!)
+                    .Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase),
                 axesCompta = Comptabilite.Axes(i).Values.Select(a => new { a.Code, a.Libelle }),
                 axesAnalytiques = Comptabilite.AxesAnalytiques(i, 1).Values.Select(a => new { a.Code, a.Libelle }),
                 axesVentes = Commercial.Axes(i).Values.Select(a => new { a.Code, a.Libelle }),
@@ -77,12 +81,12 @@ public static class Routes
             .WithSummary("Contrôle par mois : CA, règlements et achats de la gestion commerciale face à la comptabilité");
 
         // ---------- Recouvrement ----------
-        g.MapGet("/recouvrement/{type}", (Contexte c, string type, int? commercial, int? categorie) =>
+        g.MapGet("/recouvrement/{type}", (Contexte c, string type, int? commercial, int? categorie, string? qualite) =>
         {
             var t = type == "fournisseurs" ? 1 : 0;
             return c.Refus(p => t == 0 ? p.VoitClients : p.VoitFournisseurs)
-                ?? Results.Ok(Creances.Analyse(c.Instantane, t, c.Perimetre, commercial, categorie, DateTime.Today));
-        }).WithSummary("Balance âgée (clients ou fournisseurs) : tranches, par tiers, par commercial, par catégorie, règlements par mode");
+                ?? Results.Ok(Creances.Analyse(c.Instantane, t, c.Perimetre, commercial, categorie, DateTime.Today, string.IsNullOrWhiteSpace(qualite) ? null : qualite));
+        }).WithSummary("Balance âgée (clients ou fournisseurs) : tranches, par tiers, par commercial, par catégorie, par qualité, règlements par mode");
 
         g.MapGet("/recouvrement/{type}/{tiers}", (Contexte c, string type, string tiers) =>
         {
@@ -101,7 +105,7 @@ public static class Routes
         g.MapGet("/commercial/cube", (Contexte c, [AsParameters] RequeteVentes r) =>
             c.Refus(p => Commercial.Domaine(r.Domaine) == 1 ? p.VoitAchats : p.VoitCommercial)
                 ?? Results.Ok(Commercial.Croiser(c.Instantane, r, c.Perimetre, DateTime.Today)))
-            .WithSummary("Tableau croisé des factures de vente (ou d'achat) : axes article, famille, client, commercial, dépôt, mois... ; mesures CA, quantité, coût, marge, taux");
+            .WithSummary("Tableau croisé des factures de vente (ou d'achat) : axes article, famille, client, catégorie tarifaire, qualité client, commercial, dépôt, mois... ; mesures CA, quantité, coût, marge, taux");
 
         g.MapGet("/commercial/detail", async (Contexte c, ILecturesTableauDeBord l, [AsParameters] RequeteVentes r, string? cleLigne, string? cleColonne) =>
         {

@@ -59,11 +59,11 @@ input[type="month"] { padding: 0 6px; }
 .alerte { display: flex; align-items: center; gap: 6px; padding: 5px 10px; border-radius: 999px; font-size: .82rem; border: 1px solid var(--bord); background: var(--panneau); }
 .alerte::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
 .alerte.critique::before { background: var(--erreur); } .alerte.attention::before { background: var(--alerte); }
-.tuiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 10px; }
+.tuiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 10px; }
 .tuile { background: var(--panneau); border: 1px solid var(--bord); border-radius: 10px; padding: 10px 12px; box-shadow: var(--ombre); min-height: 92px;
   display: grid; align-content: start; gap: 2px; position: relative; overflow: hidden; }
 .tuile .libelle { font-size: .76rem; color: var(--discret); text-transform: uppercase; letter-spacing: .04em; }
-.tuile .valeur { font-size: 1.55rem; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1.2; }
+.tuile .valeur { font-size: 1.35rem; overflow-wrap: anywhere; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1.2; }
 .tuile .pied { font-size: .78rem; color: var(--discret); display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
 .tuile.critique { border-color: var(--erreur); } .tuile.attention { border-color: var(--alerte); }
 .tuile.cliquable { cursor: pointer; } .tuile.cliquable:hover { border-color: var(--accent); }
@@ -159,7 +159,7 @@ table.liste tr.cliquable { cursor: pointer; } table.liste tr.cliquable:hover td 
   .carte, .carte.l4, .carte.l8, .carte.l3, .carte.l12 { grid-column: span 12; }
   .tuiles { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
   .tuile { min-height: 80px; padding: 8px 10px; }
-  .tuile .valeur { font-size: 1.25rem; }
+  .tuile .valeur { font-size: 1.02rem; }
   .tuile svg.mini { display: none; }
   .anneau { grid-template-columns: 100px 1fr; }
 }
