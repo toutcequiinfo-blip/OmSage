@@ -34,17 +34,18 @@ foreach ($f in $fichiers + "$Dossier\api\appsettings.json") {
 }
 if (-not $chaine) { throw "Chaîne Sage:ChaineSql introuvable dans la configuration de l'API." }
 $b = New-Object System.Data.SqlClient.SqlConnectionStringBuilder $chaine
-$serveur = $b.DataSource
-$base = $b.InitialCatalog
+$serveur = $b.PSBase.DataSource
+$base = $b.PSBase.InitialCatalog
 Write-Host "Serveur SQL : $serveur   Base Sage : $base" -ForegroundColor Cyan
 
 # Connexion d'administration avec le compte Windows qui lance le script.
+# PSBase : sans lui, PowerShell prend « $x.DataSource = ... » pour une clé du dictionnaire et SqlClient la refuse.
 $admin = New-Object System.Data.SqlClient.SqlConnectionStringBuilder
-$admin.DataSource = $serveur
-$admin.InitialCatalog = "master"
-$admin.IntegratedSecurity = $true
-$admin["TrustServerCertificate"] = $true
-$cnx = New-Object System.Data.SqlClient.SqlConnection $admin.ConnectionString
+$admin.PSBase.DataSource = $serveur
+$admin.PSBase.InitialCatalog = "master"
+$admin.PSBase.IntegratedSecurity = $true
+$admin.PSBase.TrustServerCertificate = $true
+$cnx = New-Object System.Data.SqlClient.SqlConnection $admin.PSBase.ConnectionString
 $cnx.Open()
 function Executer($sql, $params = @{}) {
     $cmd = $cnx.CreateCommand()
@@ -89,13 +90,13 @@ finally { $cnx.Close() }
 
 # Vérification : le compte lit, et ne peut pas écrire.
 $lecture = New-Object System.Data.SqlClient.SqlConnectionStringBuilder
-$lecture.DataSource = $serveur
-$lecture.InitialCatalog = $base
-$lecture.UserID = $Login
-$lecture.Password = $motDePasse
-$lecture["TrustServerCertificate"] = $true
-$lecture.ApplicationName = "Sage100Api tableaux de bord"
-$test = New-Object System.Data.SqlClient.SqlConnection $lecture.ConnectionString
+$lecture.PSBase.DataSource = $serveur
+$lecture.PSBase.InitialCatalog = $base
+$lecture.PSBase.UserID = $Login
+$lecture.PSBase.Password = $motDePasse
+$lecture.PSBase.TrustServerCertificate = $true
+$lecture.PSBase.ApplicationName = "Sage100Api tableaux de bord"
+$test = New-Object System.Data.SqlClient.SqlConnection $lecture.PSBase.ConnectionString
 $test.Open()
 $cmd = $test.CreateCommand()
 $cmd.CommandText = "SELECT COUNT(*) FROM F_COMPTEG"
@@ -106,7 +107,7 @@ $test.Close()
 foreach ($f in $fichiers) {
     $json = Get-Content $f -Raw -Encoding UTF8 | ConvertFrom-Json
     if (-not $json.TableauDeBord) { $json | Add-Member -NotePropertyName TableauDeBord -NotePropertyValue ([pscustomobject]@{}) }
-    $json.TableauDeBord | Add-Member -NotePropertyName ChaineSql -NotePropertyValue $lecture.ConnectionString -Force
+    $json.TableauDeBord | Add-Member -NotePropertyName ChaineSql -NotePropertyValue $lecture.PSBase.ConnectionString -Force
     [System.IO.File]::WriteAllText($f, ($json | ConvertTo-Json -Depth 20), (New-Object System.Text.UTF8Encoding $false))
     Write-Host "  TableauDeBord:ChaineSql écrite dans $f"
 }
