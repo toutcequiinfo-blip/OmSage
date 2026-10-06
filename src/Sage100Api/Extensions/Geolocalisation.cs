@@ -16,42 +16,31 @@ public sealed record PositionRequest(double Latitude, double Longitude, double? 
 public sealed class Geolocalisation
 {
     public static readonly string[] Cibles = ["client", "adresse-livraison", "depot"];
-    readonly string _cnx;
+    readonly BaseLocale _base;
 
-    public Geolocalisation(IOptions<SageOptions> options)
+    public Geolocalisation(IOptions<SageOptions> options, Dossiers dossiers)
     {
-        _cnx = ChaineExtensions(options.Value);
-        using var c = Ouvrir();
-        using var cmd = c.CreateCommand();
-        cmd.CommandText = """
-            CREATE TABLE IF NOT EXISTS positions (
-              cible TEXT NOT NULL,
-              cle TEXT NOT NULL,
-              latitude REAL NOT NULL,
-              longitude REAL NOT NULL,
-              precision_m REAL NULL,
-              source TEXT NULL,
-              utilisateur TEXT NULL,
-              maj_le TEXT NOT NULL,
-              PRIMARY KEY (cible, cle)
-            );
-            """;
-        cmd.ExecuteNonQuery();
+        _base = new BaseLocale(dossiers, options.Value, "sage100api-extensions.db", c =>
+        {
+            using var cmd = c.CreateCommand();
+            cmd.CommandText = """
+                CREATE TABLE IF NOT EXISTS positions (
+                  cible TEXT NOT NULL,
+                  cle TEXT NOT NULL,
+                  latitude REAL NOT NULL,
+                  longitude REAL NOT NULL,
+                  precision_m REAL NULL,
+                  source TEXT NULL,
+                  utilisateur TEXT NULL,
+                  maj_le TEXT NOT NULL,
+                  PRIMARY KEY (cible, cle)
+                );
+                """;
+            cmd.ExecuteNonQuery();
+        });
     }
 
-    /// <summary>Base SQLite des extensions (positions GPS, activités CRM), à côté du journal.</summary>
-    public static string ChaineExtensions(SageOptions o)
-    {
-        var dossier = Path.GetDirectoryName(Path.GetFullPath(o.CheminJournal)) ?? ".";
-        return new SqliteConnectionStringBuilder { DataSource = Path.Combine(dossier, "sage100api-extensions.db") }.ToString();
-    }
-
-    SqliteConnection Ouvrir()
-    {
-        var c = new SqliteConnection(_cnx);
-        c.Open();
-        return c;
-    }
+    SqliteConnection Ouvrir() => _base.Ouvrir();
 
     public static IEnumerable<string> Verifier(string cible, PositionRequest p)
     {

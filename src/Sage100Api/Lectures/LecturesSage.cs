@@ -92,13 +92,15 @@ public interface ILecturesSage
     Task<string?> PieceCommande(string idExterne);
     /// <summary>Collaborateur dont le champ « Utilisateur » de la fiche désigne ce login Sage, ou null.</summary>
     Task<Collaborateur?> CollaborateurUtilisateur(string utilisateur);
+    /// <summary>Raison sociale du dossier (P_DOSSIER), pour la liste des sociétés ; null si illisible.</summary>
+    Task<string?> RaisonSociale() => Task.FromResult<string?>(null);
     /// <summary>Bons de commande avec un reste à encaisser, les plus récents d'abord.</summary>
     Task<IReadOnlyList<CommandeOuverte>> CommandesOuvertes(string? recherche, int taille);
     /// <summary>Bon de commande client et ses lignes, ou null s'il n'existe pas (ou plus : transformé en livraison).</summary>
     Task<DetailPiece?> DetailCommande(string piece);
 }
 
-public sealed class LecturesSql(IOptions<SageOptions> options) : ILecturesSage
+public sealed class LecturesSql(Dossiers dossiers) : ILecturesSage
 {
     // CT_Type = 0 : client ; CT_Sommeil / AR_Sommeil = 1 : mis en sommeil.
     const string SelectClient =
@@ -124,7 +126,7 @@ public sealed class LecturesSql(IOptions<SageOptions> options) : ILecturesSage
     const string GroupArticle = " GROUP BY a.AR_Ref, a.AR_Design, a.FA_CodeFamille, a.AR_CodeBarre, a.AR_PrixVen, a.AR_Gamme1, a.AR_Gamme2, a.AR_SuiviStock, " +
         "a.AR_UniteVen, a.AR_PrixTTC, a.AR_Condition";
 
-    SqlConnection Cnx() => new(options.Value.ChaineSql);
+    SqlConnection Cnx() => new(dossiers.ChaineSql);
 
     public async Task<IReadOnlyList<Client>> Clients(string? recherche, int page, int taille)
     {
@@ -201,6 +203,21 @@ public sealed class LecturesSql(IOptions<SageOptions> options) : ILecturesSage
         return await c.QueryFirstOrDefaultAsync<string>(
             "SELECT TOP 1 DO_Piece FROM F_DOCENTETE WHERE DO_Domaine = 0 AND DO_Type IN (1, 3, 6, 7) AND DO_RefExterne = @idExterne ORDER BY DO_Type",
             new { idExterne });
+    }
+
+    public async Task<string?> RaisonSociale()
+    {
+        try
+        {
+            using var c = Cnx();
+            var nom = await c.QueryFirstOrDefaultAsync<string>("SELECT TOP 1 NULLIF(LTRIM(RTRIM(D_RaisonSoc)), '') FROM P_DOSSIER");
+            return nom;
+        }
+        catch (SqlException)
+        {
+            // Base injoignable ou droits manquants : la liste des sociétés affiche alors le nom de la base.
+            return null;
+        }
     }
 
     public async Task<Collaborateur?> CollaborateurUtilisateur(string utilisateur)

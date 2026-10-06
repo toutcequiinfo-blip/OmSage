@@ -62,7 +62,7 @@ $modele = [ordered]@{ serveur = ""; baseCial = ""; baseCpta = ""; utilisateur = 
 [IO.File]::WriteAllText("$paquet\worker\worker.json", ($modele | ConvertTo-Json -Depth 5), $utf8)
 
 Etape "Outils de configuration du serveur"
-Copy-Item "$PSScriptRoot\serveur\configurer.ps1", "$PSScriptRoot\creer-certificats.ps1", "$PSScriptRoot\compte-lecture-seule.ps1" "$paquet\outils"
+Copy-Item "$PSScriptRoot\serveur\configurer.ps1", "$PSScriptRoot\serveur\societes.ps1", "$PSScriptRoot\creer-certificats.ps1", "$PSScriptRoot\compte-lecture-seule.ps1" "$paquet\outils"
 
 Etape "Fabrication de Setup.exe avec $iscc"
 & $iscc "/DVersion=$Version" "/DPaquet=$paquet" "/DSortie=$sortie" "$PSScriptRoot\installateur\Sage100Api.iss"

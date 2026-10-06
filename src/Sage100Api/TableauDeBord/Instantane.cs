@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using Microsoft.Extensions.Options;
 
@@ -57,14 +58,19 @@ public sealed class Instantane
 /// Chaque partie est lue séparément : une table illisible (colonne absente d'une version de Sage...) n'empêche pas les autres,
 /// elle garde sa version précédente et l'erreur est affichée dans le tableau de bord et écrite dans le journal du service.
 /// </summary>
-public sealed class ServiceTableauDeBord(ILecturesTableauDeBord lectures, IOptionsMonitor<TableauDeBordOptions> options, ILogger<ServiceTableauDeBord> log)
+public sealed class ServiceTableauDeBord(ILecturesTableauDeBord lectures, IOptionsMonitor<TableauDeBordOptions> options, ILogger<ServiceTableauDeBord> log,
+    Dossiers? dossiers = null)
     : BackgroundService
 {
     readonly SemaphoreSlim _demande = new(0, 1);
     readonly SemaphoreSlim _uneSeule = new(1, 1);
-    volatile Instantane _instantane = Instantane.Vide;
+    // Un instantané par société ; clé vide sans gestion des sociétés (tests).
+    readonly ConcurrentDictionary<string, Instantane> _instantanes = new(StringComparer.OrdinalIgnoreCase);
 
-    public Instantane Instantane => _instantane;
+    string Code => dossiers?.Code ?? "";
+
+    /// <summary>Instantané de la société en cours.</summary>
+    public Instantane Instantane => _instantanes.TryGetValue(Code, out var i) ? i : Instantane.Vide;
     public bool EnCours { get; private set; }
     public DateTime? Prochaine { get; private set; }
 
@@ -113,88 +119,99 @@ public sealed class ServiceTableauDeBord(ILecturesTableauDeBord lectures, IOptio
         return prochaines.Count > 0 ? prochaines.Min() : maintenant.Date.AddDays(1).AddHours(7);
     }
 
+    /// <summary>Relit toutes les sociétés, l'une après l'autre ; renvoie l'instantané de la société en cours.</summary>
     public async Task<Instantane> Actualiser(CancellationToken ct = default)
     {
         await _uneSeule.WaitAsync(ct);
         EnCours = true;
-        var chrono = Stopwatch.StartNew();
         try
         {
-            var avant = _instantane;
-            var erreurs = new List<string>();
-            async Task<T> Partie<T>(string nom, Func<Task<T>> lire, T precedent)
+            var codes = dossiers?.Liste.Select(d => d.Code).ToList() ?? [""];
+            foreach (var code in codes)
             {
-                ct.ThrowIfCancellationRequested();
-                try
-                {
-                    return await lire();
-                }
-                catch (Exception e) when (e is not OperationCanceledException)
-                {
-                    log.LogError(e, "Tableau de bord : lecture des {Partie} impossible", nom);
-                    erreurs.Add($"{nom} : {e.Message}");
-                    return precedent;
-                }
+                using var societe = code.Length == 0 ? null : Dossiers.Activer(code);
+                var avant = _instantanes.TryGetValue(code, out var i) ? i : Instantane.Vide;
+                _instantanes[code] = await Lire(code, avant, ct);
             }
-
-            Task<IReadOnlyList<T>?> Referentiel<T>(string nom, Func<Task<IReadOnlyList<T>>> lire) =>
-                Partie<IReadOnlyList<T>?>(nom, async () => await lire(), null);
-
-            var exercices = await Partie("exercices", lectures.Exercices, avant.Exercices);
-            var nombre = Math.Clamp(options.CurrentValue.Exercices, 1, 5);
-            var depuis = exercices.Count > 0
-                ? exercices.Take(nombre).Min(e => e.Debut)
-                : new DateTime(DateTime.Today.Year - nombre + 1, 1, 1);
-
-            var comptes = await Referentiel("comptes généraux", lectures.Comptes);
-            var journaux = await Referentiel("journaux", lectures.Journaux);
-            var tiers = await Referentiel("tiers", lectures.Tiers);
-            var plans = await Referentiel("plans analytiques", lectures.Plans);
-            var sections = await Referentiel("sections analytiques", lectures.Sections);
-            var articles = await Referentiel("articles", lectures.Articles);
-            var familles = await Referentiel("familles", lectures.Familles);
-            var depots = await Referentiel("dépôts", lectures.Depots);
-            var collaborateurs = await Referentiel("collaborateurs", lectures.Collaborateurs);
-            var modes = await Referentiel("modes de règlement", lectures.ModesReglement);
-            var categories = await Referentiel("catégories tarifaires", lectures.CategoriesTarifaires);
-
-            var nouveau = new Instantane
-            {
-                Depuis = depuis,
-                Exercices = exercices,
-                Compta = await Partie("écritures comptables", () => lectures.Compta(depuis), avant.Compta),
-                Analytique = await Partie("écritures analytiques", () => lectures.Analytique(depuis), avant.Analytique),
-                Lignes = await Partie("lignes de factures", () => lectures.Lignes(depuis), avant.Lignes),
-                Pieces = await Partie("factures", () => lectures.Pieces(depuis), avant.Pieces),
-                EnCours = await Partie("documents en cours", lectures.EnCours, avant.EnCours),
-                Stock = await Partie("stocks", lectures.Stock, avant.Stock),
-                DernieresSorties = await Partie("dernières sorties de stock", lectures.DernieresSorties, avant.DernieresSorties),
-                Echeances = await Partie("échéances clients et fournisseurs", lectures.Echeances, avant.Echeances),
-                Reglements = await Partie("règlements", () => lectures.Reglements(depuis), avant.Reglements),
-                Comptes = comptes?.GroupBy(c => c.Numero).ToDictionary(g => g.Key, g => g.First()) ?? avant.Comptes,
-                Journaux = journaux?.GroupBy(j => j.Code).ToDictionary(g => g.Key, g => g.First()) ?? avant.Journaux,
-                Tiers = tiers?.GroupBy(t => t.Numero).ToDictionary(g => g.Key, g => g.First()) ?? avant.Tiers,
-                Plans = plans?.ToDictionary(p => p.Numero, p => p.Intitule?.Trim()) ?? avant.Plans,
-                Sections = sections?.GroupBy(s => (s.Plan, s.Numero)).ToDictionary(g => g.Key, g => g.First().Intitule?.Trim()) ?? avant.Sections,
-                Articles = articles?.GroupBy(a => a.Reference).ToDictionary(g => g.Key, g => g.First()) ?? avant.Articles,
-                Familles = familles?.GroupBy(f => f.Code).ToDictionary(g => g.Key, g => g.First().Intitule?.Trim()) ?? avant.Familles,
-                Depots = depots?.ToDictionary(d => d.Numero, d => d.Intitule?.Trim()) ?? avant.Depots,
-                Collaborateurs = collaborateurs?.ToDictionary(c => c.Numero, c => c.Intitule?.Trim()) ?? avant.Collaborateurs,
-                ModesReglement = modes?.ToDictionary(m => m.Numero, m => m.Intitule?.Trim()) ?? avant.ModesReglement,
-                Categories = categories?.ToDictionary(c => c.Numero, c => c.Intitule?.Trim()) ?? avant.Categories,
-                Erreurs = erreurs,
-                Genere = DateTime.Now,
-                DureeSecondes = Math.Round(chrono.Elapsed.TotalSeconds, 1),
-            };
-            _instantane = nouveau;
-            log.LogInformation("Tableau de bord actualisé en {Duree} s : {Ecritures} lignes comptables, {Lignes} lignes de factures, {Erreurs} erreur(s)",
-                nouveau.DureeSecondes, nouveau.Compta.Count, nouveau.Lignes.Count, erreurs.Count);
-            return nouveau;
+            return Instantane;
         }
         finally
         {
             EnCours = false;
             _uneSeule.Release();
         }
+    }
+
+    async Task<Instantane> Lire(string code, Instantane avant, CancellationToken ct)
+    {
+        var chrono = Stopwatch.StartNew();
+        var erreurs = new List<string>();
+        async Task<T> Partie<T>(string nom, Func<Task<T>> lire, T precedent)
+        {
+            ct.ThrowIfCancellationRequested();
+            try
+            {
+                return await lire();
+            }
+            catch (Exception e) when (e is not OperationCanceledException)
+            {
+                log.LogError(e, "Tableau de bord : lecture des {Partie} impossible", nom);
+                erreurs.Add($"{nom} : {e.Message}");
+                return precedent;
+            }
+        }
+
+        Task<IReadOnlyList<T>?> Referentiel<T>(string nom, Func<Task<IReadOnlyList<T>>> lire) =>
+            Partie<IReadOnlyList<T>?>(nom, async () => await lire(), null);
+
+        var exercices = await Partie("exercices", lectures.Exercices, avant.Exercices);
+        var nombre = Math.Clamp(options.CurrentValue.Exercices, 1, 5);
+        var depuis = exercices.Count > 0
+            ? exercices.Take(nombre).Min(e => e.Debut)
+            : new DateTime(DateTime.Today.Year - nombre + 1, 1, 1);
+
+        var comptes = await Referentiel("comptes généraux", lectures.Comptes);
+        var journaux = await Referentiel("journaux", lectures.Journaux);
+        var tiers = await Referentiel("tiers", lectures.Tiers);
+        var plans = await Referentiel("plans analytiques", lectures.Plans);
+        var sections = await Referentiel("sections analytiques", lectures.Sections);
+        var articles = await Referentiel("articles", lectures.Articles);
+        var familles = await Referentiel("familles", lectures.Familles);
+        var depots = await Referentiel("dépôts", lectures.Depots);
+        var collaborateurs = await Referentiel("collaborateurs", lectures.Collaborateurs);
+        var modes = await Referentiel("modes de règlement", lectures.ModesReglement);
+        var categories = await Referentiel("catégories tarifaires", lectures.CategoriesTarifaires);
+
+        var nouveau = new Instantane
+        {
+            Depuis = depuis,
+            Exercices = exercices,
+            Compta = await Partie("écritures comptables", () => lectures.Compta(depuis), avant.Compta),
+            Analytique = await Partie("écritures analytiques", () => lectures.Analytique(depuis), avant.Analytique),
+            Lignes = await Partie("lignes de factures", () => lectures.Lignes(depuis), avant.Lignes),
+            Pieces = await Partie("factures", () => lectures.Pieces(depuis), avant.Pieces),
+            EnCours = await Partie("documents en cours", lectures.EnCours, avant.EnCours),
+            Stock = await Partie("stocks", lectures.Stock, avant.Stock),
+            DernieresSorties = await Partie("dernières sorties de stock", lectures.DernieresSorties, avant.DernieresSorties),
+            Echeances = await Partie("échéances clients et fournisseurs", lectures.Echeances, avant.Echeances),
+            Reglements = await Partie("règlements", () => lectures.Reglements(depuis), avant.Reglements),
+            Comptes = comptes?.GroupBy(c => c.Numero).ToDictionary(g => g.Key, g => g.First()) ?? avant.Comptes,
+            Journaux = journaux?.GroupBy(j => j.Code).ToDictionary(g => g.Key, g => g.First()) ?? avant.Journaux,
+            Tiers = tiers?.GroupBy(t => t.Numero).ToDictionary(g => g.Key, g => g.First()) ?? avant.Tiers,
+            Plans = plans?.ToDictionary(p => p.Numero, p => p.Intitule?.Trim()) ?? avant.Plans,
+            Sections = sections?.GroupBy(s => (s.Plan, s.Numero)).ToDictionary(g => g.Key, g => g.First().Intitule?.Trim()) ?? avant.Sections,
+            Articles = articles?.GroupBy(a => a.Reference).ToDictionary(g => g.Key, g => g.First()) ?? avant.Articles,
+            Familles = familles?.GroupBy(f => f.Code).ToDictionary(g => g.Key, g => g.First().Intitule?.Trim()) ?? avant.Familles,
+            Depots = depots?.ToDictionary(d => d.Numero, d => d.Intitule?.Trim()) ?? avant.Depots,
+            Collaborateurs = collaborateurs?.ToDictionary(c => c.Numero, c => c.Intitule?.Trim()) ?? avant.Collaborateurs,
+            ModesReglement = modes?.ToDictionary(m => m.Numero, m => m.Intitule?.Trim()) ?? avant.ModesReglement,
+            Categories = categories?.ToDictionary(c => c.Numero, c => c.Intitule?.Trim()) ?? avant.Categories,
+            Erreurs = erreurs,
+            Genere = DateTime.Now,
+            DureeSecondes = Math.Round(chrono.Elapsed.TotalSeconds, 1),
+        };
+        log.LogInformation("Tableau de bord {Societe} actualisé en {Duree} s : {Ecritures} lignes comptables, {Lignes} lignes de factures, {Erreurs} erreur(s)",
+            code, nouveau.DureeSecondes, nouveau.Compta.Count, nouveau.Lignes.Count, erreurs.Count);
+        return nouveau;
     }
 }

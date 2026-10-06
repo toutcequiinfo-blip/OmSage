@@ -127,5 +127,7 @@ namespace Sage100Api.Contracts
     {
         public string Utilisateur { get; set; } = "";
         public string MotDePasse { get; set; } = "";
+        /// <summary>Société choisie à la connexion (code renvoyé par GET /api/v1/dossiers). Vide : la seule ou la première société.</summary>
+        public string? Dossier { get; set; }
     }
 }

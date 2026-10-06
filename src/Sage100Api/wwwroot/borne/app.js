@@ -7,10 +7,10 @@
 import {
   lireReglages, ecrireReglages, prochainNumeroVente, nouvelIdVente,
   lireCatalogue, ajouterOperation, majOperation, supprimerOperation, lireFile, purgerFile,
-  lireSession, ecrireSession, utilisateurMemorise, lireUtilisateurs, lireAttente, ecrireAttente,
-  lireAffichage, ecrireAffichage,
+  lireSession, ecrireSession, utilisateurMemorise, loginsConnus, lireAttente, ecrireAttente,
+  lireAffichage, ecrireAffichage, lireDossiers, lireDossier, ecrireDossier, plusieursSocietes, intituleDossier,
 } from "./stockage.js";
-import { etatConnexion, rechargerCatalogue, synchroniser, envoyerMaintenant, attendreFinEnvoi, appeler, commandesOuvertes, detailCommande } from "./synchro.js";
+import { etatConnexion, rechargerCatalogue, chargerDossiers, synchroniser, envoyerMaintenant, attendreFinEnvoi, appeler, commandesOuvertes, detailCommande } from "./synchro.js";
 import { seConnecter } from "./connexion.js";
 import { prixLigne, conditionnementsDe, categorieDe, texteRemises, enHT } from "./tarifs.js";
 
@@ -77,9 +77,21 @@ const TYPES = {
   facture: { libelle: "Facture", valider: "Valider la facture", detail: "Le stock sort du dépôt dès l'enregistrement dans Sage. Facture à valider dans Sage." },
 };
 
+// Souches et dépôts diffèrent d'une société à l'autre : avec plusieurs sociétés, ces choix sont gardés par société.
+function reglagesSaisie() {
+  const r = lireReglages();
+  return lireDossier() ? r.societes?.[lireDossier()] || {} : r;
+}
+
+function ecrireReglagesSaisie(valeurs) {
+  const r = lireReglages();
+  const d = lireDossier();
+  ecrireReglages(d ? { ...r, societes: { ...r.societes, [d]: { ...r.societes?.[d], ...valeurs } } } : { ...r, ...valeurs });
+}
+
 /** { typeDocument, souche, depot } de cette tablette (souche et dépôt null : ceux que Sage choisit). */
 function parametres() {
-  const r = lireReglages();
+  const r = reglagesSaisie();
   return { typeDocument: TYPES[r.typeDocument] ? r.typeDocument : "commande", souche: r.souche ?? null, depot: r.depot ?? null };
 }
 
@@ -104,13 +116,13 @@ function dessinerSaisie() {
   $("#choix-depot").replaceChildren(
     option(choixSaisie.depot == null, "Dépôt du client", "Celui de la fiche client ou le principal", redessiner("depot", null)),
     ...depots.map((d) => option(choixSaisie.depot === d.numero, d.intitule || `Dépôt ${d.numero}`, [`N° ${d.numero}`, d.ville].filter(Boolean).join(" · "), redessiner("depot", d.numero))));
-  $("#btn-annuler-saisie").hidden = !lireReglages().saisieReglee;
+  $("#btn-annuler-saisie").hidden = !reglagesSaisie().saisieReglee;
 }
 
 function enregistrerSaisie(ev) {
   ev.preventDefault();
   const c = choixSaisie || parametres();
-  ecrireReglages({ ...lireReglages(), typeDocument: c.typeDocument, souche: c.souche, depot: c.depot, saisieReglee: true });
+  ecrireReglagesSaisie({ typeDocument: c.typeDocument, souche: c.souche, depot: c.depot, saisieReglee: true });
   choixSaisie = null;
   bandeau(`${TYPES[c.typeDocument].libelle} · ${nomSouche(c.souche)} · ${nomDepot(c.depot)}`, "ok");
   revenirALaVente();
@@ -950,7 +962,7 @@ function terminer() {
 function nouvelleVente(client = null) {
   if (connexionExigee() && !utilisateur) return afficher("connexion");
   // Première vente sur cette tablette : choisir d'abord la pièce, la souche et le dépôt.
-  if (!lireReglages().saisieReglee) return afficher("saisie");
+  if (!reglagesSaisie().saisieReglee) return afficher("saisie");
   changementClient = false;
   // Le client n'est demandé qu'à la première vente : ensuite, le ticket suivant garde le dernier client.
   const c = (client?.numero ? client : null) || dernierClient || clientDefaut();
@@ -1300,7 +1312,8 @@ function encaisserCommande(c) {
 
 // ---------- Connexion des utilisateurs (login Sage) ----------
 
-const connexionExigee = () => !!catalogue?.authentification;
+// Avec plusieurs sociétés, on se connecte toujours : c'est la connexion qui choisit la société.
+const connexionExigee = () => !!catalogue?.authentification || plusieursSocietes();
 const nomUtilisateur = (u) =>
   u?.collaborateur ? [u.collaborateur.prenom, u.collaborateur.nom].filter(Boolean).join(" ") : u?.utilisateur || "";
 /** Utilisateur à joindre à chaque opération de la file : elle partira avec sa connexion, même plus tard. */
@@ -1312,16 +1325,32 @@ function majUtilisateur() {
   b.textContent = utilisateur ? `👤 ${nomUtilisateur(utilisateur)}` : "";
 }
 
+/** Nom de la borne en tête d'écran, suivi de la société quand le serveur en sert plusieurs. */
+function majNomBorne() {
+  $("#nom-borne").textContent = [lireReglages().borne, plusieursSocietes() && lireDossier() ? intituleDossier() : null].filter(Boolean).join(" · ");
+}
+
 function dessinerConnexion() {
   const f = $("#form-connexion");
   f.elements.motDePasse.value = "";
-  // Les utilisateurs déjà connectés sur cette borne : un appui remplit le nom.
-  const connus = Object.values(lireUtilisateurs()).map((u) => u.profil.utilisateur).sort();
+  // Société : liste affichée seulement quand le serveur en sert plusieurs ; la dernière choisie est proposée.
+  const dossiers = lireDossiers();
+  $("#choix-dossier").hidden = dossiers.length < 2;
+  const choisi = f.elements.dossier.value || lireDossier() || dossiers[0]?.code || "";
+  f.elements.dossier.replaceChildren(...dossiers.map((d) => element("option", { value: d.code }, d.intitule || d.code)));
+  f.elements.dossier.value = choisi;
+  dessinerConnus();
+  (f.elements.utilisateur.value ? f.elements.motDePasse : f.elements.utilisateur).focus();
+}
+
+function dessinerConnus() {
+  const f = $("#form-connexion");
+  // Les utilisateurs déjà connectés sur cette borne (dans la société choisie) : un appui remplit le nom.
+  const connus = loginsConnus(plusieursSocietes() ? f.elements.dossier.value : "");
   $("#utilisateurs-connus").replaceChildren(...connus.map((login) => element("button", {
     type: "button", class: "puce",
     onclick: () => { f.elements.utilisateur.value = login; f.elements.motDePasse.focus(); },
   }, login)));
-  (f.elements.utilisateur.value ? f.elements.motDePasse : f.elements.utilisateur).focus();
 }
 
 async function connecter(ev) {
@@ -1330,12 +1359,38 @@ async function connecter(ev) {
   const bouton = $("#btn-connexion");
   bouton.disabled = true;
   bouton.textContent = "Connexion…";
+  const dossier = plusieursSocietes() ? f.dossier.value : "";
+  const autreSociete = dossier !== lireDossier();
+  if (autreSociete && vente && (vente.lignes.size > 0 || vente.validee)
+      && !confirm("Changer de société ? Le ticket en cours sera abandonné sur cette borne.")) {
+    bouton.disabled = false;
+    bouton.textContent = "Se connecter";
+    return;
+  }
   try {
-    utilisateur = await seConnecter(f.utilisateur.value, f.motDePasse.value);
+    const profil = await seConnecter(f.utilisateur.value, f.motDePasse.value, dossier);
+    if (autreSociete) {
+      // Nouvelle société : son catalogue, ses paramètres de saisie, ses tickets ; rien de l'ancienne n'est repris.
+      ecrireDossier(dossier);
+      vente = null;
+      catalogue = null;
+      dernierClient = null;
+      dernierTicket = null;
+      majNomBorne();
+    }
+    utilisateur = profil;
     ecrireSession(utilisateur.utilisateur);
     f.motDePasse.value = "";
     majUtilisateur();
     bandeau(utilisateur.horsLigne ? "Connecté hors ligne : les ventes partiront vers Sage au retour du serveur." : "", "info");
+    if (autreSociete) {
+      await chargerCatalogue(!utilisateur.horsLigne);
+      if (!catalogue) {
+        bandeau("Aucun catalogue de cette société sur la borne : elle doit joindre le serveur une première fois.", "erreur");
+        afficher("reglages");
+        return;
+      }
+    }
     // Après un verrouillage, on retrouve le ticket ou l'encaissement en cours.
     revenirALaVente();
     synchroniserPuisAfficher();
@@ -1377,9 +1432,10 @@ async function dessinerFile() {
   ul.replaceChildren();
   const ops = (await lireFile()).reverse();
   for (const op of ops) {
-    const titre = op.type === "commande"
+    const societe = plusieursSocietes() && op.dossier ? `[${intituleDossier(op.dossier)}] ` : "";
+    const titre = societe + (op.type === "commande"
       ? `${TYPES[op.corps.typeDocument]?.libelle || "Commande"} ${op.vente?.numero || op.idExterne} · ${op.vente?.client || op.corps.client}`
-      : `Encaissement ${op.corps.mode} ${euros.format(op.corps.montant)} · ${op.vente?.numero || op.idCommande}`;
+      : `Encaissement ${op.corps.mode} ${euros.format(op.corps.montant)} · ${op.vente?.numero || op.idCommande}`);
     const etat = op.statut === "ok"
       ? (op.type === "commande" ? `Dans Sage : ${op.resultat?.piece}, net à payer ${euros.format(op.resultat?.netAPayer ?? 0)}` : "Dans Sage")
       : op.statut === "erreur" ? `Refusé : ${op.message}` : `En attente${op.message ? " · " + op.message : ""}`;
@@ -1421,8 +1477,10 @@ async function enregistrerReglages(ev) {
     clientDefaut: f.clientDefaut.value.trim().toUpperCase(),
     demanderQuantite: f.demanderQuantite.checked,
   });
-  $("#nom-borne").textContent = lireReglages().borne;
   bandeau("Réglages enregistrés.", "ok");
+  await chargerDossiers();
+  majNomBorne();
+  if (plusieursSocietes() && !lireDossier()) return afficher("connexion");
   await chargerCatalogue(true);
   dessinerReglages();
 }
@@ -1430,6 +1488,8 @@ async function enregistrerReglages(ev) {
 // ---------- Connexion, catalogue et synchronisation ----------
 
 async function chargerCatalogue(forcer = false) {
+  // Plusieurs sociétés et aucune choisie : le catalogue viendra après la connexion.
+  if (plusieursSocietes() && !lireDossier()) return;
   try {
     if (forcer || connexion !== "hors-ligne") {
       catalogue = await rechargerCatalogue();
@@ -1530,6 +1590,7 @@ function brancher() {
   $("#etat").addEventListener("click", () => afficher("reglages"));
   $("#btn-fermer-reglages").addEventListener("click", revenirALaVente);
   $("#form-connexion").addEventListener("submit", connecter);
+  $("#form-connexion").elements.dossier.addEventListener("change", dessinerConnus);
   $("#btn-commandes").addEventListener("click", ouvrirCommandes);
   $("#btn-fermer-commandes").addEventListener("click", () => nouvelleVente());
   $("#recherche-commande").addEventListener("input", dessinerCommandes);
@@ -1544,15 +1605,19 @@ async function demarrer() {
   if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
   brancher();
   const r = lireReglages();
-  $("#nom-borne").textContent = r.borne;
   await purgerFile();
   await majEtat();
+  if (r.cle && connexion !== "hors-ligne") await chargerDossiers();
+  majNomBorne();
   await chargerCatalogue();
   // La page peut être rechargée : l'utilisateur connecté le reste.
   const session = lireSession() ? utilisateurMemorise(lireSession())?.profil : null;
   utilisateur = session && new Date(session.expiration) > new Date() ? session : null;
   majUtilisateur();
-  if (!r.cle || !catalogue) {
+  if (r.cle && plusieursSocietes() && !lireDossier()) {
+    // Serveur à plusieurs sociétés : on choisit d'abord la société en se connectant.
+    afficher("connexion");
+  } else if (!r.cle || !catalogue) {
     bandeau(r.cle ? "Aucun catalogue : la borne doit joindre le serveur une première fois." : "Première utilisation : saisissez le nom de la borne et la clé d'API.", "info");
     afficher("reglages");
   } else {

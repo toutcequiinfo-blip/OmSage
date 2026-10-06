@@ -96,8 +96,8 @@ begin
     'Connexion à la base Sage, pour les lectures SQL et pour les Objets Métiers',
     'Les Objets Métiers Sage 100 V12 doivent déjà être installés sur ce serveur. Mot de passe Sage : vide si l''utilisateur n''en a pas.');
   PageSage.Add('Serveur SQL (nom ou nom\instance) :', False);
-  PageSage.Add('Base Gestion commerciale :', False);
-  PageSage.Add('Base Comptabilité (vide = la même) :', False);
+  PageSage.Add('Base Gestion commerciale (plusieurs sociétés : séparées par des virgules) :', False);
+  PageSage.Add('Base Comptabilité (vide = la même ; plusieurs : même ordre) :', False);
   PageSage.Add('Utilisateur Sage :', False);
   PageSage.Add('Mot de passe Sage :', True);
   PageSage.Values[0] := GetComputerNameString;
@@ -164,7 +164,7 @@ begin
   if EstMiseAJour then
     Result := Result + 'Mise à jour : la configuration actuelle du serveur est gardée.' + NewLine + 'Les services sont arrêtés pendant la copie, puis redémarrés.'
   else
-    Result := Result + 'Base Sage : ' + PageSage.Values[1] + ' sur ' + PageSage.Values[0] + NewLine
+    Result := Result + 'Base(s) Sage : ' + PageSage.Values[1] + ' sur ' + PageSage.Values[0] + NewLine
       + 'Utilisateur Sage : ' + PageSage.Values[3] + NewLine
       + 'Compte des services : ' + PageCompte.Values[0] + NewLine
       + 'Ports : ' + Trim(PagePorts.Values[0]) + ' (HTTP), ' + Trim(PagePorts.Values[1]) + ' (HTTPS)';

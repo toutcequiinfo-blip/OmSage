@@ -6,7 +6,7 @@
       powershell -ExecutionPolicy Bypass -File C:\Dev\OmSage\deploy\compte-lecture-seule.ps1
 
   Ce que fait le script :
-    - lit le serveur et la base Sage dans appsettings.Local.json (chaîne Sage:ChaineSql) ;
+    - lit le serveur et la base Sage dans appsettings.Local.json (chaîne Sage:ChaineSql, et Sage:Dossiers s'il y a plusieurs sociétés) ;
     - crée la connexion SQL « sage100api_lecture » avec un mot de passe aléatoire, membre de db_datareader seulement
       (elle ne peut ni écrire, ni modifier, ni supprimer quoi que ce soit dans Sage) ;
     - écrit sa chaîne dans TableauDeBord:ChaineSql, dans appsettings.Local.json de l'API installée et du dépôt.
@@ -25,18 +25,24 @@ $depot = Split-Path -Parent $PSScriptRoot
 $fichiers = @("$Dossier\api\appsettings.Local.json", "$depot\src\Sage100Api\appsettings.Local.json") | Where-Object { Test-Path $_ }
 if (-not $fichiers) { throw "appsettings.Local.json introuvable dans $Dossier\api ni dans le dépôt : lancez d'abord deploy\installer.ps1." }
 
-# Chaîne Sage actuelle : serveur et base.
+# Chaîne Sage actuelle : serveur et base ; avec plusieurs sociétés, toutes leurs bases (Sage:Dossiers).
 $chaine = $null
+$bases = @()
 foreach ($f in $fichiers + "$Dossier\api\appsettings.json") {
     if (-not (Test-Path $f)) { continue }
     $json = Get-Content $f -Raw -Encoding UTF8 | ConvertFrom-Json
-    if ($json.Sage -and $json.Sage.ChaineSql) { $chaine = $json.Sage.ChaineSql; break }
+    if ($json.Sage -and $json.Sage.ChaineSql) {
+        $chaine = $json.Sage.ChaineSql
+        $bases = @($json.Sage.Dossiers | Where-Object { $_ -and $_.Base } | ForEach-Object { "$($_.Base)".Trim() })
+        break
+    }
 }
 if (-not $chaine) { throw "Chaîne Sage:ChaineSql introuvable dans la configuration de l'API." }
 $b = New-Object System.Data.SqlClient.SqlConnectionStringBuilder $chaine
 $serveur = $b.PSBase.DataSource
-$base = $b.PSBase.InitialCatalog
-Write-Host "Serveur SQL : $serveur   Base Sage : $base" -ForegroundColor Cyan
+if (-not $bases) { $bases = @($b.PSBase.InitialCatalog) }
+$base = $bases[0]
+Write-Host "Serveur SQL : $serveur   Base(s) Sage : $($bases -join ', ')" -ForegroundColor Cyan
 
 # Connexion d'administration avec le compte Windows qui lance le script.
 # PSBase : sans lui, PowerShell prend « $x.DataSource = ... » pour une clé du dictionnaire et SqlClient la refuse.
@@ -78,13 +84,19 @@ IF SUSER_ID(@l) IS NULL
 ELSE
     SET @sql = N'ALTER LOGIN ' + QUOTENAME(@l) + N' WITH PASSWORD = ' + QUOTENAME(@p, '''') + N'; ALTER LOGIN ' + QUOTENAME(@l) + N' ENABLE';
 EXEC (@sql);
+"@ @{ "@login" = $Login; "@mdp" = $motDePasse; "@base" = $base } | Out-Null
+    # Utilisateur en lecture seule dans chaque base servie.
+    foreach ($bd in $bases) {
+        Executer @"
+DECLARE @l sysname = @login, @sql nvarchar(max);
 SET @sql = N'USE ' + QUOTENAME(@base) + N';
 IF DATABASE_PRINCIPAL_ID(' + QUOTENAME(@l, '''') + N') IS NULL CREATE USER ' + QUOTENAME(@l) + N' FOR LOGIN ' + QUOTENAME(@l) + N';
 ALTER ROLE db_datareader ADD MEMBER ' + QUOTENAME(@l) + N';
 DENY INSERT, UPDATE, DELETE, EXECUTE, ALTER TO ' + QUOTENAME(@l) + N';';
 EXEC (@sql);
-"@ @{ "@login" = $Login; "@mdp" = $motDePasse; "@base" = $base } | Out-Null
-    Write-Host "Compte SQL $Login prêt : lecture seule sur $base." -ForegroundColor Green
+"@ @{ "@login" = $Login; "@base" = $bd } | Out-Null
+    }
+    Write-Host "Compte SQL $Login prêt : lecture seule sur $($bases -join ', ')." -ForegroundColor Green
 }
 finally { $cnx.Close() }
 
@@ -96,12 +108,17 @@ $lecture.PSBase.UserID = $Login
 $lecture.PSBase.Password = $motDePasse
 $lecture.PSBase.TrustServerCertificate = $true
 $lecture.PSBase.ApplicationName = "Sage100Api tableaux de bord"
-$test = New-Object System.Data.SqlClient.SqlConnection $lecture.PSBase.ConnectionString
-$test.Open()
-$cmd = $test.CreateCommand()
-$cmd.CommandText = "SELECT COUNT(*) FROM F_COMPTEG"
-Write-Host "  Test de lecture : $($cmd.ExecuteScalar()) comptes généraux lus."
-$test.Close()
+foreach ($bd in $bases) {
+    $lecture.PSBase.InitialCatalog = $bd
+    $test = New-Object System.Data.SqlClient.SqlConnection $lecture.PSBase.ConnectionString
+    $test.Open()
+    $cmd = $test.CreateCommand()
+    $cmd.CommandText = "SELECT COUNT(*) FROM F_COMPTEG"
+    Write-Host "  Test de lecture ($bd) : $($cmd.ExecuteScalar()) comptes généraux lus."
+    $test.Close()
+}
+# La chaîne vise la base principale ; l'API la fait pointer vers la base de chaque société.
+$lecture.PSBase.InitialCatalog = $base
 
 # Déclaration à l'API (fichiers non versionnés). Rechargés à chaud : pas de redémarrage nécessaire.
 foreach ($f in $fichiers) {

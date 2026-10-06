@@ -12,13 +12,15 @@ public interface IWorkerClient
 }
 
 /// <summary>Client du canal nommé vers le worker Objets Métiers (même machine).</summary>
-public sealed class WorkerClient(IOptions<SageOptions> options, ILogger<WorkerClient> log) : IWorkerClient
+public sealed class WorkerClient(IOptions<SageOptions> options, Dossiers dossiers, ILogger<WorkerClient> log) : IWorkerClient
 {
     public async Task<WorkerResponse> Envoyer(string operation, object? donnees, CancellationToken ct = default)
     {
         var requete = new WorkerRequest
         {
             Operation = operation,
+            // Une seule société : rien à préciser, le worker sert sa base (comme avant le multi-société).
+            Dossier = dossiers.Multiple ? dossiers.Code : null,
             Donnees = donnees == null ? null : JsonSerializer.SerializeToElement(donnees, WorkerProtocol.Json),
         };
         using var delai = CancellationTokenSource.CreateLinkedTokenSource(ct);

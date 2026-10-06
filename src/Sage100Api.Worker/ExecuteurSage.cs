@@ -21,7 +21,12 @@ namespace Sage100Api.Worker
     /// </summary>
     internal sealed class ExecuteurSage : IDisposable
     {
-        readonly WorkerConfig _config;
+        readonly WorkerConfig _racine;
+        // Société de la requête en cours (posée par Activer) : tout le code Objets Métiers lit _config, _cial et _cpta.
+        WorkerConfig _config;
+        // Sessions ouvertes des autres sociétés, gardées pour ne pas rouvrir les bases à chaque changement de société.
+        readonly Dictionary<string, (BSCIALApplication100c Cial, BSCPTAApplication100c Cpta)> _sessions =
+            new Dictionary<string, (BSCIALApplication100c, BSCPTAApplication100c)>(StringComparer.OrdinalIgnoreCase);
         readonly BlockingCollection<(WorkerRequest Requete, TaskCompletionSource<WorkerResponse> Tcs)> _file =
             new BlockingCollection<(WorkerRequest, TaskCompletionSource<WorkerResponse>)>();
         readonly Thread _thread;
@@ -32,7 +37,8 @@ namespace Sage100Api.Worker
 
         public ExecuteurSage(WorkerConfig config)
         {
-            _config = config;
+            _racine = config;
+            _config = config.Pour(null) ?? config;
             _thread = new Thread(Boucle) { IsBackground = true, Name = "Sage-COM" };
             _thread.SetApartmentState(ApartmentState.STA);
             _thread.Start();
@@ -49,13 +55,17 @@ namespace Sage100Api.Worker
         {
             foreach (var (requete, tcs) in _file.GetConsumingEnumerable())
                 tcs.SetResult(Traiter(requete));
-            Fermer();
+            FermerTout();
         }
 
         const int ViolationAcces = unchecked((int)0xC0000005);
 
         WorkerResponse Traiter(WorkerRequest requete)
         {
+            var societe = _racine.Pour(requete.Dossier);
+            if (societe == null)
+                return Erreur(CodesErreur.Introuvable, $"Société inconnue du worker : {requete.Dossier}. Ajoutez-la dans worker.json (dossiers), puis redémarrez le worker.");
+            Activer(societe);
             var reponse = TraiterUneFois(requete, out var violation);
             if (!violation) return reponse;
             // Session COM abîmée : elle vient d'être fermée, on rejoue une fois sur une session neuve.
@@ -187,11 +197,43 @@ namespace Sage100Api.Worker
             }
         }
 
+        /// <summary>Passe à la société de la requête : range la session de la précédente, reprend celle de la nouvelle si elle est ouverte.</summary>
+        void Activer(WorkerConfig societe)
+        {
+            if (ReferenceEquals(societe, _config)) return;
+            if (_cial != null && _cpta != null) _sessions[_config.BaseCial] = (_cial, _cpta);
+            else _sessions.Remove(_config.BaseCial);
+            _config = societe;
+            if (_sessions.TryGetValue(societe.BaseCial, out var s))
+            {
+                _cial = s.Cial;
+                _cpta = s.Cpta;
+            }
+            else
+            {
+                _cial = null;
+                _cpta = null;
+            }
+        }
+
+        /// <summary>Ferme la session de la société en cours (la prochaine requête la rouvre).</summary>
         void Fermer()
         {
             try { if (_cial != null && _cial.IsOpen) _cial.Close(); } catch { /* arrêt */ }
             _cial = null;
             _cpta = null;
+            _sessions.Remove(_config.BaseCial);
+        }
+
+        /// <summary>Arrêt du worker : ferme les sessions de toutes les sociétés (libère les verrous).</summary>
+        void FermerTout()
+        {
+            Fermer();
+            foreach (var s in _sessions.Values)
+            {
+                try { if (s.Cial.IsOpen) s.Cial.Close(); } catch { /* arrêt */ }
+            }
+            _sessions.Clear();
         }
 
         // ---------- Commande (processus IPMDocument, manuel OM p.110 + annexe) ----------

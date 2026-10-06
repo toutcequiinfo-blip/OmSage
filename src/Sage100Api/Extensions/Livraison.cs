@@ -95,65 +95,61 @@ public sealed partial class Livraison
     public static readonly string[] Motifs = ["absent", "refus", "adresse-introuvable", "ferme", "manque-marchandise", "endommage", "erreur-commande", "retour", "autre"];
     /// <summary>Signature en image PNG (data URL) : 300 Ko au plus.</summary>
     public const int TailleMaxSignature = 300_000;
-    readonly string _cnx;
+    readonly BaseLocale _base;
 
-    public Livraison(IOptions<SageOptions> options)
+    public Livraison(IOptions<SageOptions> options, Dossiers dossiers)
     {
-        _cnx = Geolocalisation.ChaineExtensions(options.Value);
-        using var c = Ouvrir();
-        c.Execute("""
-            CREATE TABLE IF NOT EXISTS tournees (
-              id TEXT PRIMARY KEY,
-              date TEXT NOT NULL,
-              nom TEXT NULL,
-              livreur INTEGER NULL,
-              depot INTEGER NULL,
-              utilisateur TEXT NULL,
-              cree_le TEXT NOT NULL,
-              maj_le TEXT NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS tournees_date ON tournees (date, livreur);
-            CREATE TABLE IF NOT EXISTS arrets (
-              tournee TEXT NOT NULL,
-              piece TEXT NOT NULL,
-              ordre INTEGER NOT NULL,
-              type_piece TEXT NOT NULL,
-              client TEXT NOT NULL,
-              intitule TEXT NULL,
-              reference TEXT NULL,
-              adresse_livraison INTEGER NULL,
-              adresse TEXT NULL,
-              complement TEXT NULL,
-              code_postal TEXT NULL,
-              ville TEXT NULL,
-              contact TEXT NULL,
-              telephone TEXT NULL,
-              total_ttc REAL NOT NULL,
-              net_a_payer REAL NOT NULL,
-              latitude REAL NULL,
-              longitude REAL NULL,
-              statut TEXT NOT NULL,
-              motif TEXT NULL,
-              receptionnaire TEXT NULL,
-              commentaire TEXT NULL,
-              signature TEXT NULL,
-              heure TEXT NULL,
-              latitude_livreur REAL NULL,
-              longitude_livreur REAL NULL,
-              utilisateur TEXT NULL,
-              PRIMARY KEY (tournee, piece)
-            );
-            CREATE INDEX IF NOT EXISTS arrets_piece ON arrets (piece);
-            """);
-        CreerTablesControle(c);
+        _base = new BaseLocale(dossiers, options.Value, "sage100api-extensions.db", c =>
+        {
+            c.Execute("""
+                CREATE TABLE IF NOT EXISTS tournees (
+                  id TEXT PRIMARY KEY,
+                  date TEXT NOT NULL,
+                  nom TEXT NULL,
+                  livreur INTEGER NULL,
+                  depot INTEGER NULL,
+                  utilisateur TEXT NULL,
+                  cree_le TEXT NOT NULL,
+                  maj_le TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS tournees_date ON tournees (date, livreur);
+                CREATE TABLE IF NOT EXISTS arrets (
+                  tournee TEXT NOT NULL,
+                  piece TEXT NOT NULL,
+                  ordre INTEGER NOT NULL,
+                  type_piece TEXT NOT NULL,
+                  client TEXT NOT NULL,
+                  intitule TEXT NULL,
+                  reference TEXT NULL,
+                  adresse_livraison INTEGER NULL,
+                  adresse TEXT NULL,
+                  complement TEXT NULL,
+                  code_postal TEXT NULL,
+                  ville TEXT NULL,
+                  contact TEXT NULL,
+                  telephone TEXT NULL,
+                  total_ttc REAL NOT NULL,
+                  net_a_payer REAL NOT NULL,
+                  latitude REAL NULL,
+                  longitude REAL NULL,
+                  statut TEXT NOT NULL,
+                  motif TEXT NULL,
+                  receptionnaire TEXT NULL,
+                  commentaire TEXT NULL,
+                  signature TEXT NULL,
+                  heure TEXT NULL,
+                  latitude_livreur REAL NULL,
+                  longitude_livreur REAL NULL,
+                  utilisateur TEXT NULL,
+                  PRIMARY KEY (tournee, piece)
+                );
+                CREATE INDEX IF NOT EXISTS arrets_piece ON arrets (piece);
+                """);
+            CreerTablesControle(c);
+        });
     }
 
-    SqliteConnection Ouvrir()
-    {
-        var c = new SqliteConnection(_cnx);
-        c.Open();
-        return c;
-    }
+    SqliteConnection Ouvrir() => _base.Ouvrir();
 
     public static IEnumerable<string> Verifier(string id, TourneeRequest t)
     {

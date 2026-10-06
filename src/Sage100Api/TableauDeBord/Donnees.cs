@@ -9,7 +9,8 @@ public sealed class TableauDeBordOptions
 {
     /// <summary>
     /// Connexion SQL propre au tableau de bord, idéalement un compte qui n'a que le droit de lecture
-    /// (deploy\compte-lecture-seule.ps1). Vide : la chaîne Sage:ChaineSql de l'API.
+    /// (deploy\compte-lecture-seule.ps1). Vide : la chaîne SQL de la société. Avec plusieurs sociétés, la base de la chaîne est
+    /// remplacée par celle de la société lue (le compte doit avoir le droit de lecture sur chacune).
     /// </summary>
     public string ChaineSql { get; set; } = "";
     /// <summary>
@@ -238,7 +239,7 @@ public interface ILecturesTableauDeBord
     Task<IReadOnlyList<DetailLigne>> DetailVentes(FiltreDetailVentes f);
 }
 
-public sealed class LecturesTableauDeBordSql(IOptions<SageOptions> sage, IOptionsMonitor<TableauDeBordOptions> options) : ILecturesTableauDeBord
+public sealed class LecturesTableauDeBordSql(Dossiers dossiers, IOptionsMonitor<TableauDeBordOptions> options) : ILecturesTableauDeBord
 {
     const string SansVerrou = "SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED; ";
     // Journaux de situation (JO_Type 4) exclus : ce ne sont pas des écritures réelles.
@@ -247,7 +248,7 @@ public sealed class LecturesTableauDeBordSql(IOptions<SageOptions> sage, IOption
     const string Signe = "CASE WHEN e.DO_Provenance IN (1, 2) THEN -1 ELSE 1 END";
     const string Factures = "((e.DO_Domaine = 0 AND e.DO_Type IN (6, 7)) OR (e.DO_Domaine = 1 AND e.DO_Type IN (16, 17)))";
 
-    SqlConnection Cnx() => new(string.IsNullOrWhiteSpace(options.CurrentValue.ChaineSql) ? sage.Value.ChaineSql : options.CurrentValue.ChaineSql);
+    SqlConnection Cnx() => new(dossiers.Adapter(options.CurrentValue.ChaineSql));
     int Delai => Math.Max(30, options.CurrentValue.DelaiSqlSecondes);
 
     async Task<IReadOnlyList<T>> Lire<T>(string sql, object? p = null)

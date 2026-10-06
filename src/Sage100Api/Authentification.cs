@@ -13,7 +13,8 @@ namespace Sage100Api;
 /// Utilisateur connecté, porté par le jeton. Collaborateur : fiche collaborateur Sage rattachée au login
 /// (mise sur les bons de commande) ; Caissier : case Caissier de cette fiche.
 /// </summary>
-public sealed record Utilisateur(string Login, bool Administrateur, int? Collaborateur, string? Nom, string? Prenom, bool Vendeur, bool Caissier, DateTime Expiration)
+public sealed record Utilisateur(string Login, bool Administrateur, int? Collaborateur, string? Nom, string? Prenom, bool Vendeur, bool Caissier, DateTime Expiration,
+    string? Dossier = null)
 {
     public bool PeutEncaisser => Caissier || Administrateur;
 
@@ -32,20 +33,23 @@ public sealed class ServiceAuthentification
     public const string CodeConnexionRequise = "CONNEXION_REQUISE";
     public const string CodeDroitRefuse = "DROIT_REFUSE";
     public const string CodeTropDEssais = "TROP_D_ESSAIS";
+    public const string CodeDossierRequis = "DOSSIER_REQUIS";
     const int EssaisMax = 5;
     static readonly TimeSpan Blocage = TimeSpan.FromMinutes(2);
 
     readonly IOptionsMonitor<AuthentificationOptions> _options;
     readonly IWorkerClient _worker;
     readonly ILecturesSage _lectures;
+    readonly Dossiers _dossiers;
     readonly ILogger<ServiceAuthentification> _log;
     readonly byte[] _cle;
     readonly ConcurrentDictionary<string, (int Echecs, DateTime Depuis)> _echecs = new(StringComparer.OrdinalIgnoreCase);
 
     public ServiceAuthentification(IOptionsMonitor<AuthentificationOptions> options, IOptions<SageOptions> sage, IWorkerClient worker,
-        ILecturesSage lectures, ILogger<ServiceAuthentification> log)
+        ILecturesSage lectures, Dossiers dossiers, ILogger<ServiceAuthentification> log)
     {
         _options = options;
+        _dossiers = dossiers;
         _worker = worker;
         _lectures = lectures;
         _log = log;
@@ -61,6 +65,14 @@ public sealed class ServiceAuthentification
             return new(null, null, CodesErreur.AccesRefuse, "Saisissez votre nom d'utilisateur Sage.");
         if (_echecs.TryGetValue(login, out var e) && e.Echecs >= EssaisMax && DateTime.UtcNow - e.Depuis < Blocage)
             return new(null, null, CodeTropDEssais, $"Trop d'essais pour {login}. Réessayez dans {Blocage.TotalMinutes:0} minutes.");
+
+        // Société choisie à la connexion : Sage vérifie le login sur cette base, et le jeton ne servira que pour elle.
+        if (string.IsNullOrWhiteSpace(demande.Dossier) && _dossiers.Multiple)
+            return new(null, null, CodeDossierRequis, "Choisissez la société.");
+        var dossier = _dossiers.Trouver(demande.Dossier);
+        if (dossier == null)
+            return new(null, null, CodeDossierRequis, $"Société inconnue : {demande.Dossier}.");
+        using var societe = Dossiers.Activer(dossier.Code);
 
         var reponse = await _worker.Envoyer(Operations.VerifierUtilisateur, new ConnexionRequest { Utilisateur = login, MotDePasse = demande.MotDePasse }, ct);
         if (!reponse.Ok || reponse.Resultat is null)
@@ -87,8 +99,8 @@ public sealed class ServiceAuthentification
         }
 
         var u = new Utilisateur(login, verifie.Administrateur, co?.Numero, co?.Nom?.Trim(), co?.Prenom?.Trim(), co?.Vendeur ?? false, co?.Caissier ?? false,
-            DateTime.UtcNow.AddHours(Math.Max(1, Options.DureeHeures)));
-        _log.LogInformation("Connexion de {Login} (collaborateur {Collaborateur}, caissier {Caissier})", login, co?.Numero, u.Caissier);
+            DateTime.UtcNow.AddHours(Math.Max(1, Options.DureeHeures)), dossier.Code);
+        _log.LogInformation("Connexion de {Login} sur {Dossier} (collaborateur {Collaborateur}, caissier {Caissier})", login, dossier.Code, co?.Numero, u.Caissier);
         return new(u, Signer(u), null, null);
     }
 

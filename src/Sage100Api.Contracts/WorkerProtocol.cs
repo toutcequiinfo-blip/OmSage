@@ -30,6 +30,8 @@ namespace Sage100Api.Contracts
     public sealed class WorkerRequest
     {
         public string Operation { get; set; } = "";
+        /// <summary>Société (base Gestion commerciale) visée. Vide : la première société du worker.</summary>
+        public string? Dossier { get; set; }
         /// <summary>Charge utile sérialisée (CommandeRequest, ou EncaissementCommandeRequest).</summary>
         public JsonElement? Donnees { get; set; }
     }

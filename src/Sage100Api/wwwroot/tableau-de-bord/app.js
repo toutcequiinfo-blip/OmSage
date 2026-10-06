@@ -1,6 +1,7 @@
 // Tableau de bord Sage 100 : comptable et commercial, multidimensionnels.
 // Les chiffres viennent de l'instantané de l'API (relu dans Sage aux heures prévues) ; le détail d'une cellule est lu dans Sage au clic.
 import { barres, courbes, barresH, anneau, miniCourbe, compact, nombre, COULEURS } from "./graphiques.js";
+import { preparerChoix, societeChoisie, nomSociete } from "../commun/societes.js";
 
 const $ = (s, r = document) => r.querySelector(s);
 const echapper = (t) => String(t ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
@@ -25,7 +26,8 @@ async function api(chemin, { methode = "GET", corps } = {}) {
   try {
     r = await fetch(`/api/v1${chemin}`, {
       method: methode, cache: "no-store",
-      headers: { "X-Api-Key": cleApi(), ...(session() ? { Authorization: `Bearer ${session().jeton}` } : {}), ...(corps ? { "Content-Type": "application/json" } : {}) },
+      headers: { "X-Api-Key": cleApi(), ...(session() ? { Authorization: `Bearer ${session().jeton}` } : {}),
+        ...(session()?.dossier ? { "X-Dossier": session().dossier } : {}), ...(corps ? { "Content-Type": "application/json" } : {}) },
       body: corps ? JSON.stringify(corps) : undefined,
     });
   } catch { throw new ErreurApi("Serveur injoignable. Vérifiez le réseau.", 0); }
@@ -34,6 +36,12 @@ async function api(chemin, { methode = "GET", corps } = {}) {
   if (r.status === 401) {
     ouvrirConnexion(d?.erreur ? "Clé d'API absente ou refusée." : null, !!d?.erreur);
     throw new ErreurApi(d?.message || d?.erreur || "Connexion requise.", 401, d?.code);
+  }
+  if (d?.code === "DOSSIER_REQUIS" || d?.code === "DOSSIER_DIFFERENT") {
+    // Plusieurs sociétés : la connexion choisit la société.
+    localStorage.removeItem("tdb.session");
+    ouvrirConnexion(null);
+    throw new ErreurApi(d.message, 401, d.code);
   }
   if (!r.ok) throw new ErreurApi(d?.message || d?.erreurs?.join(" ") || `Erreur ${r.status}`, r.status, d?.code);
   return d;
@@ -80,6 +88,7 @@ function ouvrirConnexion(message, demanderCle = false) {
   err.hidden = !message;
   err.textContent = message ?? "";
   if (!d.open) d.showModal();
+  if (cleApi()) preparerChoix($("#choix-dossier"), $("#form-connexion").dossier, cleApi());
 }
 
 $("#form-connexion").addEventListener("submit", async (e) => {
@@ -89,9 +98,14 @@ $("#form-connexion").addEventListener("submit", async (e) => {
   bouton.disabled = true;
   try {
     if (f.cle.value.trim()) majReglages({ cle: f.cle.value.trim() });
+    // Clé tout juste saisie : la liste des sociétés n'était pas encore connue, il faut en choisir une.
+    const choixCache = $("#choix-dossier").hidden;
+    if ((await preparerChoix($("#choix-dossier"), f.dossier, cleApi())).length > 1 && choixCache) throw new Error("Choisissez la société.");
     localStorage.removeItem("tdb.session");
-    const r = await api("/connexion", { methode: "POST", corps: { utilisateur: f.utilisateur.value.trim(), motDePasse: f.motDePasse.value } });
-    ecrire("tdb.session", { jeton: r.jeton, utilisateur: r.utilisateur, expiration: r.expiration });
+    const dossier = societeChoisie(f.dossier);
+    const r = await api("/connexion", { methode: "POST", corps: { utilisateur: f.utilisateur.value.trim(), motDePasse: f.motDePasse.value, ...(dossier ? { dossier } : {}) } });
+    ecrire("tdb.session", { jeton: r.jeton, utilisateur: r.utilisateur, expiration: r.expiration, dossier: r.dossier });
+    etat.cache.clear();
     majReglages({ utilisateur: r.utilisateur });
     f.motDePasse.value = "";
     $("#connexion").close();
@@ -162,7 +176,7 @@ function afficherEtat() {
   b.className = `etat${m.enCours || !m.genere ? " encours" : m.erreurs?.length ? " attention" : ""}`;
   $("#etat-texte").textContent = m.enCours || !m.genere ? "Lecture de Sage…" : `Actualisé à ${heure(m.genere)}`;
   $("#btn-actualiser").hidden = !m.droits.actualiser;
-  $("#btn-utilisateur").textContent = m.utilisateur ? `👤 ${m.utilisateur}` : "Se connecter";
+  $("#btn-utilisateur").textContent = m.utilisateur ? `👤 ${[m.utilisateur, nomSociete(session()?.dossier)].filter(Boolean).join(" · ")}` : "Se connecter";
   $("#btn-utilisateur").hidden = !m.utilisateur && !session();
 }
 

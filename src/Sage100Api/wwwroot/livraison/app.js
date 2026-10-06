@@ -1,6 +1,8 @@
 // Livraisons : préparation des tournées au bureau et application du livreur (ordre de passage, itinéraire, preuve de livraison).
 // Les pièces à livrer sont lues dans Sage par l'API ; tournées et preuves sont gardées par l'API dans sa propre base, jamais dans Sage.
 
+import { preparerChoix, societeChoisie, nomSociete } from "../commun/societes.js";
+
 const CLE_REGLAGES = "livraison.reglages";
 const CLE_SESSION = "livraison.session";
 const CLE_SEGMENT = "livraison.segment";
@@ -62,6 +64,7 @@ async function api(methode, chemin, corps) {
       headers: {
         "X-Api-Key": cleApi(),
         ...(s?.jeton ? { Authorization: `Bearer ${s.jeton}` } : {}),
+        ...(s?.dossier ? { "X-Dossier": s.dossier } : {}),
         ...(corps ? { "Content-Type": "application/json" } : {}),
       },
       body: corps ? JSON.stringify(corps) : undefined,
@@ -79,7 +82,7 @@ async function api(methode, chemin, corps) {
     afficher("reglages");
     throw new ErreurApi("Clé d'API refusée : vérifiez-la.", 401);
   }
-  if (r.status === 401 && donnees?.code === "CONNEXION_REQUISE") {
+  if ((r.status === 401 && donnees?.code === "CONNEXION_REQUISE") || ["DOSSIER_REQUIS", "DOSSIER_DIFFERENT"].includes(donnees?.code)) {
     ecrireJson(CLE_SESSION, null);
     afficher("connexion");
     throw new ErreurApi("Connexion expirée : reconnectez-vous.", 401);
@@ -147,7 +150,8 @@ function afficher(ecran, titre) {
   const s = session();
   $("#btn-retour").hidden = !["preparation", "tournee", "chargement"].includes(ecran) && !(ecran === "reglages" && etat.reglagesDepuisPreparation);
   $("#btn-utilisateur").hidden = !s;
-  if (s) $("#btn-utilisateur").textContent = s.collaborateur ? `${s.collaborateur.prenom ?? ""} ${s.collaborateur.nom ?? ""}`.trim() || s.utilisateur : s.utilisateur;
+  if (s) $("#btn-utilisateur").textContent = [s.collaborateur ? `${s.collaborateur.prenom ?? ""} ${s.collaborateur.nom ?? ""}`.trim() || s.utilisateur : s.utilisateur, nomSociete(s.dossier)].filter(Boolean).join(" · ");
+  if (ecran === "connexion") preparerChoix($("#choix-dossier"), $("#form-connexion").dossier, cleApi());
   $("#titre").textContent = titre ?? { reglages: "Réglages", connexion: "Livraisons", tournees: "Tournées", preparation: "Préparer une tournée", tournee: "Tournée" }[ecran];
   window.scrollTo(0, 0);
 }
@@ -204,7 +208,10 @@ $("#form-connexion").addEventListener("submit", async (e) => {
   const bouton = $("#btn-connexion");
   bouton.disabled = true;
   try {
-    const r = await api("POST", "/connexion", { utilisateur: f.get("utilisateur").trim(), motDePasse: f.get("motDePasse") });
+    const dossier = societeChoisie(e.target.dossier);
+    const r = await api("POST", "/connexion", { utilisateur: f.get("utilisateur").trim(), motDePasse: f.get("motDePasse"), ...(dossier ? { dossier } : {}) });
+    // Livreurs et dépôts diffèrent d'une société à l'autre.
+    if (r.dossier !== etat.dossier) { etat.collaborateurs = null; etat.depots = null; etat.dossier = r.dossier; }
     ecrireJson(CLE_SESSION, r);
     e.target.motDePasse.value = "";
     bandeau("");
