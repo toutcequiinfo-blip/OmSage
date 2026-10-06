@@ -243,7 +243,7 @@ L'API sert l'application sur **https://<serveur>:5443/livraison/**. Au bureau, o
 
 En production, on n'installe ni Visual Studio ni Git sur le serveur du client : on lui apporte un seul fichier, `Sage100Api-Setup-<version>.exe`.
 
-**Fabriquer le Setup, sur le PC de développement.** Il faut une seule fois [Inno Setup 6](https://jrsoftware.org/isdl.php), qui est gratuit. Ensuite :
+**Fabriquer le Setup, sur le PC de développement.** Il faut une seule fois [Inno Setup](https://jrsoftware.org/isdl.php) (version 6 ou 7), qui est gratuit. Ensuite :
 ```
 powershell -ExecutionPolicy Bypass -File C:\Dev\OmSage\deploy\fabriquer-installateur.ps1
 ```

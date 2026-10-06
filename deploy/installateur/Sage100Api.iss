@@ -1,4 +1,4 @@
-﻿; Installateur de production de l'API Sage 100 (Inno Setup 6).
+﻿; Installateur de production de l'API Sage 100 (Inno Setup 6 ou 7).
 ; Ne pas compiler à la main : lancer deploy\fabriquer-installateur.ps1, qui prépare le paquet puis appelle ISCC.exe.
 ;
 ; Setup.exe copie l'API (autonome, sans runtime .NET à installer) et le worker déjà compilés, puis lance

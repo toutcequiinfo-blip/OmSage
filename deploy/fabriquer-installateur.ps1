@@ -6,7 +6,7 @@
 
   Prérequis sur ce PC (une seule fois) :
     - Visual Studio 2022 avec le SDK .NET 8 et la référence COM Objets Métiers du worker (déjà en place pour le développement) ;
-    - Inno Setup 6, gratuit : https://jrsoftware.org/isdl.php (ou : winget install JRSoftware.InnoSetup).
+    - Inno Setup 6 ou 7, gratuit : https://jrsoftware.org/isdl.php (ou : winget install JRSoftware.InnoSetup).
 
   Résultat : deploy\sortie\Sage100Api-Setup-<version>.exe, un seul fichier à copier sur le serveur du client.
   Le serveur n'a besoin ni de Visual Studio, ni de Git, ni du runtime .NET 8 (l'API est publiée autonome) ;
@@ -25,13 +25,13 @@ $utf8 = New-Object System.Text.UTF8Encoding $false
 function Etape($texte) { Write-Host "`n==> $texte" -ForegroundColor Cyan }
 
 # Inno Setup : cherché d'abord, pour ne pas compiler pour rien s'il manque.
-$iscc = @(
-    "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
-    "$env:ProgramFiles\Inno Setup 6\ISCC.exe",
-    "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe"
-) | Where-Object { Test-Path $_ } | Select-Object -First 1
+# Inno Setup 6 ou 7, 32 ou 64 bits, installé pour tous ou pour l'utilisateur seul : la version la plus récente est prise.
+$iscc = @("${env:ProgramFiles(x86)}", "$env:ProgramFiles", "$env:LOCALAPPDATA\Programs") | Where-Object { $_ -and (Test-Path $_) } |
+    ForEach-Object { Get-ChildItem $_ -Directory -Filter "Inno Setup *" -ErrorAction SilentlyContinue } |
+    ForEach-Object { Join-Path $_.FullName "ISCC.exe" } | Where-Object { Test-Path $_ } |
+    Sort-Object { (Get-Item $_).VersionInfo.FileVersionRaw } -Descending | Select-Object -First 1
 if (-not $iscc) {
-    throw "Inno Setup 6 introuvable. Installez-le (https://jrsoftware.org/isdl.php ou « winget install JRSoftware.InnoSetup »), puis relancez ce script."
+    throw "Inno Setup introuvable. Installez-le (https://jrsoftware.org/isdl.php ou « winget install JRSoftware.InnoSetup »), puis relancez ce script."
 }
 
 Etape "Préparation du paquet $Version"
@@ -64,7 +64,7 @@ $modele = [ordered]@{ serveur = ""; baseCial = ""; baseCpta = ""; utilisateur = 
 Etape "Outils de configuration du serveur"
 Copy-Item "$PSScriptRoot\serveur\configurer.ps1", "$PSScriptRoot\creer-certificats.ps1", "$PSScriptRoot\compte-lecture-seule.ps1" "$paquet\outils"
 
-Etape "Fabrication de Setup.exe avec Inno Setup"
+Etape "Fabrication de Setup.exe avec $iscc"
 & $iscc "/DVersion=$Version" "/DPaquet=$paquet" "/DSortie=$sortie" "$PSScriptRoot\installateur\Sage100Api.iss"
 if ($LASTEXITCODE -ne 0) { throw "Inno Setup a échoué (voir les messages ci-dessus)." }
 
