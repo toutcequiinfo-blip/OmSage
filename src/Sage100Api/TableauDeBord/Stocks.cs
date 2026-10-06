@@ -83,30 +83,26 @@ public static class Stocks
 /// </summary>
 public sealed class Objectifs
 {
-    readonly string _cnx;
+    readonly BaseLocale _base;
 
-    public Objectifs(IOptions<SageOptions> options)
+    public Objectifs(IOptions<SageOptions> options, Dossiers dossiers)
     {
-        _cnx = Geolocalisation.ChaineExtensions(options.Value);
-        using var c = Ouvrir();
-        c.Execute("""
-            CREATE TABLE IF NOT EXISTS objectifs (
-              mois TEXT NOT NULL,
-              commercial INTEGER NOT NULL,
-              montant REAL NOT NULL,
-              utilisateur TEXT NULL,
-              maj_le TEXT NOT NULL,
-              PRIMARY KEY (mois, commercial)
-            );
-            """);
+        _base = new BaseLocale(dossiers, options.Value, "sage100api-extensions.db", c =>
+        {
+            c.Execute("""
+                CREATE TABLE IF NOT EXISTS objectifs (
+                  mois TEXT NOT NULL,
+                  commercial INTEGER NOT NULL,
+                  montant REAL NOT NULL,
+                  utilisateur TEXT NULL,
+                  maj_le TEXT NOT NULL,
+                  PRIMARY KEY (mois, commercial)
+                );
+                """);
+        });
     }
 
-    SqliteConnection Ouvrir()
-    {
-        var c = new SqliteConnection(_cnx);
-        c.Open();
-        return c;
-    }
+    SqliteConnection Ouvrir() => _base.Ouvrir();
 
     public sealed record Objectif(string Mois, int Commercial, decimal Montant);
 

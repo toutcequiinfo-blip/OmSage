@@ -33,13 +33,40 @@ export function nouvelIdVente(borne) {
   return `${borne}-${horodatage}-${alea}`;
 }
 
+// ---------- Société (base Sage) de la borne ----------
+// Une installation peut servir plusieurs sociétés. La liste reçue du serveur est gardée pour se connecter hors ligne.
+// Société en cours : "" quand le serveur n'en sert qu'une (tout se passe alors comme avant le multi-société).
+// On n'en change qu'en se reconnectant ; ventes, catalogue et tickets en attente restent rattachés à leur société.
+
+const CLE_DOSSIERS = "borne.dossiers";
+const CLE_DOSSIER = "borne.dossier";
+
+/** [{ code, intitule, principal }] : sociétés servies par le serveur (dernière liste reçue). */
+export function lireDossiers() {
+  try {
+    return JSON.parse(localStorage.getItem(CLE_DOSSIERS) || "[]");
+  } catch {
+    return [];
+  }
+}
+
+export const ecrireDossiers = (liste) => localStorage.setItem(CLE_DOSSIERS, JSON.stringify(liste || []));
+export const plusieursSocietes = () => lireDossiers().length > 1;
+export const lireDossier = () => (plusieursSocietes() && localStorage.getItem(CLE_DOSSIER)) || "";
+export function ecrireDossier(code) {
+  if (code) localStorage.setItem(CLE_DOSSIER, code);
+  else localStorage.removeItem(CLE_DOSSIER);
+}
+export const intituleDossier = (code = lireDossier()) => lireDossiers().find((d) => d.code === code)?.intitule || code;
+
 // ---------- Utilisateurs Sage connectés sur cette borne ----------
 // Pour chaque login : profil et dernier jeton de l'API, plus une empreinte salée (PBKDF2) du mot de passe
 // qui permet de se reconnecter hors ligne. Le mot de passe lui-même n'est jamais gardé.
 
 const CLE_UTILISATEURS = "borne.utilisateurs";
 const CLE_SESSION = "borne.session";
-const cleLogin = (login) => (login || "").trim().toUpperCase();
+// Un même login peut exister dans plusieurs sociétés : il est rangé par société.
+const cleLogin = (login, dossier) => (dossier ? `${dossier.toUpperCase()}|` : "") + (login || "").trim().toUpperCase();
 
 export function lireUtilisateurs() {
   try {
@@ -49,14 +76,18 @@ export function lireUtilisateurs() {
   }
 }
 
-export const utilisateurMemorise = (login) => lireUtilisateurs()[cleLogin(login)] || null;
+export const utilisateurMemorise = (login, dossier = lireDossier()) => lireUtilisateurs()[cleLogin(login, dossier)] || null;
 
-export function memoriserUtilisateur(u) {
-  localStorage.setItem(CLE_UTILISATEURS, JSON.stringify({ ...lireUtilisateurs(), [cleLogin(u.profil.utilisateur)]: u }));
+/** Logins déjà connectés sur cette borne dans cette société. */
+export const loginsConnus = (dossier = lireDossier()) =>
+  Object.values(lireUtilisateurs()).filter((u) => (u.dossier || "") === dossier).map((u) => u.profil.utilisateur).sort();
+
+export function memoriserUtilisateur(u, dossier = lireDossier()) {
+  localStorage.setItem(CLE_UTILISATEURS, JSON.stringify({ ...lireUtilisateurs(), [cleLogin(u.profil.utilisateur, dossier)]: { ...u, dossier } }));
 }
 
 /** Jeton le plus récent de cet utilisateur : les ventes faites hors ligne partent avec lui après une reconnexion. */
-export const jetonUtilisateur = (login) => utilisateurMemorise(login)?.profil.jeton || null;
+export const jetonUtilisateur = (login, dossier = lireDossier()) => utilisateurMemorise(login, dossier)?.profil.jeton || null;
 
 /** Login de l'utilisateur connecté sur la borne (gardé si la tablette recharge la page), ou null. */
 export const lireSession = () => localStorage.getItem(CLE_SESSION);
@@ -96,15 +127,18 @@ async function transaction(magasin, mode, action) {
   });
 }
 
-export const lireCatalogue = () => transaction("catalogue", "readonly", (s) => s.get("courant"));
-export const ecrireCatalogue = (c) => transaction("catalogue", "readwrite", (s) => s.put(c, "courant"));
+// Un catalogue par société.
+const cleCatalogue = (dossier) => (dossier ? `courant:${dossier.toUpperCase()}` : "courant");
+export const lireCatalogue = (dossier = lireDossier()) => transaction("catalogue", "readonly", (s) => s.get(cleCatalogue(dossier)));
+export const ecrireCatalogue = (c, dossier = lireDossier()) => transaction("catalogue", "readwrite", (s) => s.put(c, cleCatalogue(dossier)));
 
 /**
  * Opération de la file : { cle, type: "commande" | "encaissement", idExterne, idCommande?, corps,
- * statut: "attente" | "erreur" | "ok", essais, message, resultat, creeLe, vente?, utilisateur?, jeton? }.
+ * statut: "attente" | "erreur" | "ok", essais, message, resultat, creeLe, vente?, utilisateur?, jeton?, dossier }.
+ * dossier : société de la vente ; l'opération part toujours vers elle, avec la connexion de son utilisateur dans cette société.
  */
 export const ajouterOperation = (op) =>
-  transaction("file", "readwrite", (s) => s.add({ statut: "attente", essais: 0, creeLe: Date.now(), ...op }));
+  transaction("file", "readwrite", (s) => s.add({ statut: "attente", essais: 0, creeLe: Date.now(), dossier: lireDossier(), ...op }));
 export const majOperation = (op) => transaction("file", "readwrite", (s) => s.put(op));
 export const supprimerOperation = (cle) => transaction("file", "readwrite", (s) => s.delete(cle));
 
@@ -124,17 +158,18 @@ export async function purgerFile() {
 // ---------- Tickets en attente ----------
 // Ticket mis de côté (client qui revient plus tard) : seulement sur cette borne, rien n'est encore envoyé à Sage.
 
-const CLE_ATTENTE = "borne.attente";
+// Ceux de la société en cours seulement.
+const cleAttente = () => (lireDossier() ? `borne.attente.${lireDossier().toUpperCase()}` : "borne.attente");
 
 export function lireAttente() {
   try {
-    return JSON.parse(localStorage.getItem(CLE_ATTENTE) || "[]");
+    return JSON.parse(localStorage.getItem(cleAttente()) || "[]");
   } catch {
     return [];
   }
 }
 
-export const ecrireAttente = (tickets) => localStorage.setItem(CLE_ATTENTE, JSON.stringify(tickets));
+export const ecrireAttente = (tickets) => localStorage.setItem(cleAttente(), JSON.stringify(tickets));
 
 // ---------- Affichage en liste ou en boutons (articles, clients, commandes), propre à cette tablette ----------
 

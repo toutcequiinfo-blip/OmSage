@@ -261,7 +261,7 @@ Prérequis :
 - le .NET Framework 4.8, déjà présent sur Windows 10, 11 et Server 2019 et versions suivantes.
 
 Lance le Setup en administrateur. L'assistant demande :
-- le serveur SQL, la base Sage, l'utilisateur Sage et son mot de passe ;
+- le serveur SQL, la ou les bases Sage, l'utilisateur Sage et son mot de passe ;
 - le compte Windows des services et son mot de passe ;
 - les ports ;
 - deux options : créer le certificat HTTPS des tablettes, créer le compte SQL en lecture seule des tableaux de bord.
@@ -273,6 +273,18 @@ Il installe ensuite tout dans `C:\Sage100Api` :
 - les certificats et le compte SQL en lecture seule, si ces options sont cochées.
 
 Il vérifie enfin que l'API répond, puis affiche `LISEZMOI-installation.txt`. Ce fichier donne les adresses des applications, la clé d'API et le chemin du certificat à installer sur les tablettes. Le détail de l'installation est dans `installation.log`, sans les mots de passe.
+
+**Plusieurs sociétés (plusieurs bases Sage sur le même serveur).** Une seule installation les sert toutes. Dans l'assistant, saisis les bases Gestion commerciale séparées par des virgules (`BIJOU, MODE`) ; la première est la société principale. Si les bases Comptabilité ont un autre nom, saisis-les dans le même ordre. Sur une installation existante, sans réinstaller :
+```
+powershell -ExecutionPolicy Bypass -File C:\Sage100Api\outils\societes.ps1 -Bases "BIJOU,MODE"
+```
+(sur le PC de développement : `C:\Dev\OmSage\deploy\serveur\societes.ps1`). Le script écrit `Sage:Dossiers` dans `api\appsettings.Local.json` et `dossiers` dans `worker\worker.json`, puis redémarre les services. Ensuite :
+- à la connexion, chaque application (borne, CRM, livraisons, tableaux de bord) affiche la liste des sociétés, puis demande le login et le mot de passe Sage, vérifiés par Sage dans cette société ;
+- pour changer de société, on se déconnecte et on se reconnecte : le jeton de connexion ne vaut que pour sa société ;
+- tout est séparé par société : lectures, pièces et règlements (une session Objets Métiers par société dans le worker), tableaux de bord, tournées, activités CRM, journal des opérations (`dossiers\<base>\` à côté du journal ; la principale garde les fichiers d'avant) ;
+- sur la borne, catalogue, paramètres de saisie, tickets en attente et utilisateurs connus hors ligne sont rangés par société ; une vente faite hors ligne part toujours vers sa société, avec la connexion de son vendeur dans cette société.
+
+Options par société dans `worker.json` (`dossiers`) : `utilisateur` et `motDePasse` si l'utilisateur Sage diffère, `journauxParMode`. Dans `appsettings.Local.json` (`Sage:Dossiers`) : `Intitule` pour le nom affiché (sinon la raison sociale lue dans Sage). Pour les appels directs à l'API, la société se donne par la connexion (`dossier` dans `POST /api/v1/connexion`) ou par l'en-tête `X-Dossier` ; `GET /api/v1/dossiers` liste les sociétés. Avec une seule base, rien ne change.
 
 **Mise à jour :** lance un Setup plus récent. La configuration du serveur est gardée : les services sont arrêtés, les fichiers remplacés, puis les services redémarrés.
 

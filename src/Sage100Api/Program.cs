@@ -29,6 +29,7 @@ builder.Services.PostConfigure<SageOptions>(o =>
 
 builder.Services.Configure<SageOptions>(builder.Configuration.GetSection("Sage"));
 builder.Services.Configure<AuthentificationOptions>(builder.Configuration.GetSection("Authentification"));
+builder.Services.AddSingleton<Dossiers>();
 builder.Services.AddSingleton<ILecturesSage, LecturesSql>();
 builder.Services.AddSingleton<ILecturesErp, LecturesErpSql>();
 builder.Services.AddSingleton<ILecturesTarifs, LecturesTarifsSql>();
@@ -69,6 +70,7 @@ app.UseDefaultFiles();
 app.UseStaticFiles(new StaticFileOptions { OnPrepareResponse = f => f.Context.Response.Headers.CacheControl = "no-cache" });
 app.MapGet("/", () => Results.Redirect("/borne/")).ExcludeFromDescription();
 app.UseMiddleware<CleApi>();
+app.UseMiddleware<SocieteDeLaRequete>();
 
 var v1 = app.MapGroup("/api/v1");
 
@@ -81,6 +83,18 @@ v1.MapGet("/sante", async (IWorkerClient worker, CancellationToken ct) =>
     var ping = await worker.Envoyer(Operations.Ping, null, delai.Token);
     return Results.Ok(new { api = "ok", worker = ping.Ok ? (object?)ping.Resultat : new { erreur = ping.MessageErreur } });
 }).WithTags("Santé");
+
+// ---------- Sociétés (bases Sage) servies par l'installation, pour l'écran de connexion ----------
+v1.MapGet("/dossiers", async (Dossiers dossiers, ILecturesSage lectures) =>
+{
+    var liste = new List<object>();
+    foreach (var d in dossiers.Liste)
+    {
+        using var societe = Dossiers.Activer(d.Code);
+        liste.Add(new { code = d.Code, intitule = d.Intitule == d.Code ? await lectures.RaisonSociale() ?? d.Code : d.Intitule, principal = d.Principal });
+    }
+    return Results.Ok(liste);
+}).WithTags("Connexion").WithSummary("Sociétés servies par l'installation : code à envoyer à la connexion (champ dossier) ou dans l'en-tête X-Dossier");
 
 // ---------- Connexion des utilisateurs (login et mot de passe Sage, vérifiés par Sage via le worker) ----------
 v1.MapPost("/connexion", async (ConnexionRequest demande, ServiceAuthentification auth, CancellationToken ct) =>
@@ -97,6 +111,8 @@ v1.MapPost("/connexion", async (ConnexionRequest demande, ServiceAuthentificatio
         vendeur = u.Vendeur,
         caissier = u.Caissier,
         peutEncaisser = u.PeutEncaisser || !auth.Options.ExigerCaissier,
+        // Société de la connexion : le jeton ne sert que pour elle.
+        dossier = u.Dossier,
     });
 }).WithTags("Connexion");
 

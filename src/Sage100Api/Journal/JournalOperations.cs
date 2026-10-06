@@ -13,27 +13,28 @@ public sealed record Operation(string Cle, string Type, string Application, Stat
 /// </summary>
 public sealed class JournalOperations
 {
-    readonly string _cnx;
+    readonly BaseLocale _base;
     readonly object _verrou = new();
 
-    public JournalOperations(IOptions<SageOptions> options)
+    public JournalOperations(IOptions<SageOptions> options, Dossiers dossiers)
     {
-        _cnx = new SqliteConnectionStringBuilder { DataSource = options.Value.CheminJournal }.ToString();
-        using var c = Ouvrir();
-        using var cmd = c.CreateCommand();
-        cmd.CommandText = """
-            CREATE TABLE IF NOT EXISTS operations (
-              cle TEXT PRIMARY KEY,
-              type TEXT NOT NULL,
-              application TEXT NOT NULL,
-              statut TEXT NOT NULL,
-              piece TEXT NULL,
-              resultat TEXT NULL,
-              cree_le TEXT NOT NULL,
-              maj_le TEXT NOT NULL
-            );
-            """;
-        cmd.ExecuteNonQuery();
+        _base = new BaseLocale(dossiers, options.Value, Path.GetFileName(options.Value.CheminJournal), c =>
+        {
+            using var cmd = c.CreateCommand();
+            cmd.CommandText = """
+                CREATE TABLE IF NOT EXISTS operations (
+                  cle TEXT PRIMARY KEY,
+                  type TEXT NOT NULL,
+                  application TEXT NOT NULL,
+                  statut TEXT NOT NULL,
+                  piece TEXT NULL,
+                  resultat TEXT NULL,
+                  cree_le TEXT NOT NULL,
+                  maj_le TEXT NOT NULL
+                );
+                """;
+            cmd.ExecuteNonQuery();
+        });
     }
 
     public static string Cle(string type, string idExterne) => $"{type}:{idExterne}";
@@ -107,10 +108,5 @@ public sealed class JournalOperations
             DateTime.Parse(r.GetString(6)).ToUniversalTime(), DateTime.Parse(r.GetString(7)).ToUniversalTime());
     }
 
-    SqliteConnection Ouvrir()
-    {
-        var c = new SqliteConnection(_cnx);
-        c.Open();
-        return c;
-    }
+    SqliteConnection Ouvrir() => _base.Ouvrir();
 }

@@ -76,9 +76,9 @@ public interface ILecturesTarifs
     Task<IReadOnlyList<TauxTva>> TauxTva();
 }
 
-public sealed class LecturesTarifsSql(IOptions<SageOptions> options) : ILecturesTarifs
+public sealed class LecturesTarifsSql(Dossiers dossiers) : ILecturesTarifs
 {
-    SqlConnection Cnx() => new(options.Value.ChaineSql);
+    SqlConnection Cnx() => new(dossiers.ChaineSql);
 
     public async Task<DonneesTarifs> Tarifs(string? client = null, int? categorie = null, IReadOnlyCollection<string>? articles = null)
     {

@@ -160,7 +160,8 @@ public sealed class ApiTests : IDisposable
     [Fact]
     public void Une_operation_en_cours_depuis_longtemps_peut_repartir()
     {
-        var j = new JournalOperations(Options.Create(new SageOptions { CheminJournal = Path.Combine(_dossier, "abandon.db") }));
+        var o = new SageOptions { CheminJournal = Path.Combine(_dossier, "abandon.db") };
+        var j = new JournalOperations(Options.Create(o), new Dossiers(new OptionsFixes<SageOptions>(o)));
         Assert.Null(j.Reserver("commande:X", "commande", "borne"));
         Assert.NotNull(j.Reserver("commande:X", "commande", "borne")); // en cours : refusée
         using (var cnx = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={Path.Combine(_dossier, "abandon.db")}"))

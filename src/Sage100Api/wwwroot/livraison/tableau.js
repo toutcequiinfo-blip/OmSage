@@ -16,13 +16,16 @@ const MOTIFS = { absent: "Client absent", refus: "Refus du client", "adresse-int
 function lireJson(cle) { try { return JSON.parse(localStorage.getItem(cle)); } catch { return null; } }
 const cleApi = () => lireJson("livraison.reglages")?.cle || lireJson("crm.reglages")?.cle || lireJson("borne.reglages")?.cle || "";
 const jeton = () => lireJson("livraison.session")?.jeton;
+// Société de la connexion faite dans l'application des livraisons.
+const dossier = () => lireJson("livraison.session")?.dossier;
 
 async function api(chemin) {
   let r;
   try {
-    r = await fetch(`/api/v1${chemin}`, { headers: { "X-Api-Key": cleApi(), ...(jeton() ? { Authorization: `Bearer ${jeton()}` } : {}) }, cache: "no-store" });
+    r = await fetch(`/api/v1${chemin}`, { headers: { "X-Api-Key": cleApi(), ...(jeton() ? { Authorization: `Bearer ${jeton()}` } : {}), ...(dossier() ? { "X-Dossier": dossier() } : {}) }, cache: "no-store" });
   } catch { throw new Error("Serveur injoignable. Vérifiez le réseau."); }
   const d = await r.json().catch(() => null);
+  if (d?.code === "DOSSIER_REQUIS" || d?.code === "DOSSIER_DIFFERENT") throw new Error("Connectez-vous d'abord dans l'application des livraisons : c'est elle qui choisit la société.");
   if (r.status === 401 && d?.erreur) throw new Error("Clé d'API absente ou refusée : ouvrez d'abord l'application des livraisons pour la régler.");
   if (!r.ok) throw new Error(d?.message || d?.erreurs?.join(" ") || `Erreur ${r.status}`);
   return d;

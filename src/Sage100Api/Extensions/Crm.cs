@@ -42,42 +42,38 @@ public sealed class Crm
 {
     public static readonly string[] Types = ["visite", "appel", "rendez-vous", "email", "note", "tache"];
     public static readonly string[] Statuts = ["a-faire", "fait", "annule"];
-    readonly string _cnx;
+    readonly BaseLocale _base;
 
-    public Crm(IOptions<SageOptions> options)
+    public Crm(IOptions<SageOptions> options, Dossiers dossiers)
     {
-        _cnx = Geolocalisation.ChaineExtensions(options.Value);
-        using var c = Ouvrir();
-        c.Execute("""
-            CREATE TABLE IF NOT EXISTS activites (
-              id TEXT PRIMARY KEY,
-              client TEXT NOT NULL,
-              type TEXT NOT NULL,
-              sujet TEXT NULL,
-              compte_rendu TEXT NULL,
-              statut TEXT NOT NULL,
-              date_prevue TEXT NULL,
-              date_realisee TEXT NULL,
-              collaborateur INTEGER NULL,
-              contact INTEGER NULL,
-              document TEXT NULL,
-              latitude REAL NULL,
-              longitude REAL NULL,
-              utilisateur TEXT NULL,
-              cree_le TEXT NOT NULL,
-              maj_le TEXT NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS activites_client ON activites (client, date_realisee);
-            CREATE INDEX IF NOT EXISTS activites_collaborateur ON activites (collaborateur, statut, date_prevue);
-            """);
+        _base = new BaseLocale(dossiers, options.Value, "sage100api-extensions.db", c =>
+        {
+            c.Execute("""
+                CREATE TABLE IF NOT EXISTS activites (
+                  id TEXT PRIMARY KEY,
+                  client TEXT NOT NULL,
+                  type TEXT NOT NULL,
+                  sujet TEXT NULL,
+                  compte_rendu TEXT NULL,
+                  statut TEXT NOT NULL,
+                  date_prevue TEXT NULL,
+                  date_realisee TEXT NULL,
+                  collaborateur INTEGER NULL,
+                  contact INTEGER NULL,
+                  document TEXT NULL,
+                  latitude REAL NULL,
+                  longitude REAL NULL,
+                  utilisateur TEXT NULL,
+                  cree_le TEXT NOT NULL,
+                  maj_le TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS activites_client ON activites (client, date_realisee);
+                CREATE INDEX IF NOT EXISTS activites_collaborateur ON activites (collaborateur, statut, date_prevue);
+                """);
+        });
     }
 
-    SqliteConnection Ouvrir()
-    {
-        var c = new SqliteConnection(_cnx);
-        c.Open();
-        return c;
-    }
+    SqliteConnection Ouvrir() => _base.Ouvrir();
 
     public static IEnumerable<string> Verifier(string id, ActiviteRequest a)
     {

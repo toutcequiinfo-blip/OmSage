@@ -1,6 +1,8 @@
 // CRM des commerciaux : portefeuille, vue 360° d'un client, visites, appels et rendez-vous, agenda des actions à faire.
 // Les données Sage sont lues par l'API (SQL, lecture seule) ; les activités sont gardées par l'API dans sa propre base, jamais dans Sage.
 
+import { preparerChoix, societeChoisie, nomSociete } from "../commun/societes.js";
+
 const CLE_REGLAGES = "crm.reglages";
 const CLE_SESSION = "crm.session";
 const CLE_SEGMENT = "crm.segment";
@@ -48,6 +50,7 @@ async function api(methode, chemin, corps) {
       headers: {
         "X-Api-Key": cleApi(),
         ...(s?.jeton ? { Authorization: `Bearer ${s.jeton}` } : {}),
+        ...(s?.dossier ? { "X-Dossier": s.dossier } : {}),
         ...(corps ? { "Content-Type": "application/json" } : {}),
       },
       body: corps ? JSON.stringify(corps) : undefined,
@@ -65,7 +68,7 @@ async function api(methode, chemin, corps) {
     afficher("reglages");
     throw new ErreurApi("Clé d'API refusée : vérifiez-la.", 401);
   }
-  if (r.status === 401 && donnees?.code === "CONNEXION_REQUISE") {
+  if ((r.status === 401 && donnees?.code === "CONNEXION_REQUISE") || ["DOSSIER_REQUIS", "DOSSIER_DIFFERENT"].includes(donnees?.code)) {
     ecrireJson(CLE_SESSION, null);
     afficher("connexion");
     throw new ErreurApi("Connexion expirée : reconnectez-vous.", 401);
@@ -144,7 +147,8 @@ function afficher(ecran) {
   $("#nav-agenda").classList.toggle("actif", ecran === "agenda");
   const s = session();
   $("#btn-utilisateur").hidden = !connecte;
-  if (s) $("#btn-utilisateur").textContent = s.collaborateur ? `${s.collaborateur.prenom ?? ""} ${s.collaborateur.nom ?? ""}`.trim() || s.utilisateur : s.utilisateur;
+  if (s) $("#btn-utilisateur").textContent = [s.collaborateur ? `${s.collaborateur.prenom ?? ""} ${s.collaborateur.nom ?? ""}`.trim() || s.utilisateur : s.utilisateur, nomSociete(s.dossier)].filter(Boolean).join(" · ");
+  if (ecran === "connexion") preparerChoix($("#choix-dossier"), $("#form-connexion").dossier, cleApi());
   if (ecran !== "client") $("#titre").textContent = { reglages: "Réglages", connexion: "CRM", clients: "Clients", agenda: "Agenda" }[ecran];
   window.scrollTo(0, 0);
 }
@@ -174,7 +178,8 @@ $("#form-connexion").addEventListener("submit", async (e) => {
   const bouton = $("#btn-connexion");
   bouton.disabled = true;
   try {
-    const r = await api("POST", "/connexion", { utilisateur: f.get("utilisateur").trim(), motDePasse: f.get("motDePasse") });
+    const dossier = societeChoisie(e.target.dossier);
+    const r = await api("POST", "/connexion", { utilisateur: f.get("utilisateur").trim(), motDePasse: f.get("motDePasse"), ...(dossier ? { dossier } : {}) });
     ecrireJson(CLE_SESSION, r);
     e.target.motDePasse.value = "";
     bandeau(r.collaborateur ? "" : "Votre utilisateur Sage n'est rattaché à aucun collaborateur : le portefeuille sera vide.", r.collaborateur ? "" : "erreur");

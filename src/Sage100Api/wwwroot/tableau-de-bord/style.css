@@ -137,7 +137,7 @@ table.liste tr.cliquable { cursor: pointer; } table.liste tr.cliquable:hover td 
 .formulaire { display: grid; gap: 10px; }
 .formulaire h2 { margin: 0; font-size: 1.1rem; }
 .formulaire label { display: grid; gap: 4px; font-size: .85rem; color: var(--discret); }
-.formulaire input { min-height: 40px; }
+.formulaire input, .formulaire select { min-height: 40px; }
 .boutons { display: flex; justify-content: flex-end; gap: 8px; }
 .titre-detail { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
 .titre-detail h2 { margin: 0; font-size: 1.05rem; }

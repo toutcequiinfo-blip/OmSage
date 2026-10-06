@@ -4,6 +4,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.ServiceProcess;
 using System.Text;
 using System.Text.Json;
@@ -46,12 +47,14 @@ namespace Sage100Api.Worker
 
         internal static void AnnoncerDemarrage(ExecuteurSage executeur, WorkerConfig config)
         {
-            Console.WriteLine($"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Worker prêt sur le canal '{WorkerProtocol.NomCanal}' (base {config.BaseCial} sur {config.Serveur}).");
-            // Ouvre la session Sage dès le démarrage : la première vente n'attend pas l'ouverture des bases.
-            executeur.Soumettre(new WorkerRequest { Operation = Operations.Ping }).ContinueWith(t =>
-                Console.WriteLine(t.Status == System.Threading.Tasks.TaskStatus.RanToCompletion && t.Result.Ok
-                    ? "Session Sage ouverte."
-                    : "Ouverture de la session Sage impossible : " + (t.Exception?.GetBaseException().Message ?? t.Result.MessageErreur)));
+            var societes = config.Societes().ToList();
+            Console.WriteLine($"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Worker prêt sur le canal '{WorkerProtocol.NomCanal}' (base(s) {string.Join(", ", societes)} sur {config.Serveur}).");
+            // Ouvre la session Sage de chaque société dès le démarrage : la première vente n'attend pas l'ouverture des bases.
+            foreach (var societe in societes)
+                executeur.Soumettre(new WorkerRequest { Operation = Operations.Ping, Dossier = societe }).ContinueWith(t =>
+                    Console.WriteLine(t.Status == System.Threading.Tasks.TaskStatus.RanToCompletion && t.Result.Ok
+                        ? $"Session Sage ouverte ({societe})."
+                        : $"Ouverture de la session Sage impossible ({societe}) : " + (t.Exception?.GetBaseException().Message ?? t.Result.MessageErreur)));
         }
 
         /// <summary>En service, pas de console : tout part dans logs\worker-AAAAMMJJ.log, à côté de l'exécutable.</summary>
@@ -82,8 +85,65 @@ namespace Sage100Api.Worker
         /// <summary>Vide = sécurité intégrée Windows sur BaseCial.</summary>
         public string ChaineSql { get; set; } = "";
 
+        /// <summary>
+        /// Sociétés servies (plusieurs bases du même serveur), dans le même ordre que Sage:Dossiers de l'API.
+        /// Vide : une seule société, BaseCial. Utilisateur, mot de passe et journaux absents : ceux du haut du fichier.
+        /// </summary>
+        public List<DossierWorker> Dossiers { get; set; } = new List<DossierWorker>();
+
+        readonly Dictionary<string, WorkerConfig> _parSociete = new Dictionary<string, WorkerConfig>(StringComparer.OrdinalIgnoreCase);
+
         public string ConnexionSql() => string.IsNullOrEmpty(ChaineSql)
             ? $"Server={Serveur};Database={BaseCial};Integrated Security=true;ApplicationIntent=ReadOnly"
             : ChaineSql;
+
+        /// <summary>Bases Gestion commerciale servies, la principale d'abord.</summary>
+        public IEnumerable<string> Societes()
+        {
+            if (Dossiers.Count == 0) return new[] { BaseCial };
+            return Dossiers.Select(d => d.BaseCial).Where(b => !string.IsNullOrWhiteSpace(b));
+        }
+
+        /// <summary>
+        /// Configuration d'une société (code = base Gestion commerciale, comme dans l'API) ; null si le worker ne la connaît pas.
+        /// Sans liste de sociétés, le worker ne sert que BaseCial : une demande pour une autre base est refusée,
+        /// pour qu'une API réglée sur plusieurs sociétés n'écrive jamais dans la mauvaise base.
+        /// </summary>
+        public WorkerConfig? Pour(string? code)
+        {
+            if (Dossiers.Count == 0)
+                return string.IsNullOrWhiteSpace(code) || string.Equals(code!.Trim(), BaseCial.Trim(), StringComparison.OrdinalIgnoreCase) ? this : null;
+            var d = string.IsNullOrWhiteSpace(code)
+                ? Dossiers.FirstOrDefault()
+                : Dossiers.FirstOrDefault(x => string.Equals(x.BaseCial?.Trim(), code!.Trim(), StringComparison.OrdinalIgnoreCase));
+            if (d == null || string.IsNullOrWhiteSpace(d.BaseCial)) return null;
+            if (_parSociete.TryGetValue(d.BaseCial, out var dejaFaite)) return dejaFaite;
+            var personnalise = !string.IsNullOrEmpty(d.Utilisateur);
+            var c = new WorkerConfig
+            {
+                Serveur = Serveur,
+                BaseCial = d.BaseCial.Trim(),
+                BaseCpta = string.IsNullOrWhiteSpace(d.BaseCpta) ? d.BaseCial.Trim() : d.BaseCpta!.Trim(),
+                Utilisateur = personnalise ? d.Utilisateur! : Utilisateur,
+                MotDePasse = personnalise ? d.MotDePasse ?? "" : MotDePasse,
+                JournauxParMode = d.JournauxParMode ?? JournauxParMode,
+                ChaineSql = d.ChaineSql ?? "",
+            };
+            _parSociete[d.BaseCial] = c;
+            return c;
+        }
+    }
+
+    /// <summary>Une société de worker.json (dossiers).</summary>
+    public sealed class DossierWorker
+    {
+        public string BaseCial { get; set; } = "";
+        /// <summary>Vide : la même base que la Gestion commerciale.</summary>
+        public string? BaseCpta { get; set; }
+        public string? Utilisateur { get; set; }
+        public string? MotDePasse { get; set; }
+        /// <summary>Journaux de trésorerie propres à cette société ; absents : ceux du haut du fichier.</summary>
+        public Dictionary<string, string>? JournauxParMode { get; set; }
+        public string? ChaineSql { get; set; }
     }
 }

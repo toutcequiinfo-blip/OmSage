@@ -252,9 +252,9 @@ public static class TypesDocument
     public static string Liste => string.Join(", ", Noms);
 }
 
-public sealed class LecturesErpSql(IOptions<SageOptions> options) : ILecturesErp
+public sealed class LecturesErpSql(Dossiers dossiers) : ILecturesErp
 {
-    SqlConnection Cnx() => new(options.Value.ChaineSql);
+    SqlConnection Cnx() => new(dossiers.ChaineSql);
 
     // Sage met 1900-01-01 dans les dates non saisies.
     static string Date(string colonne) => $"NULLIF({colonne}, '1900-01-01')";

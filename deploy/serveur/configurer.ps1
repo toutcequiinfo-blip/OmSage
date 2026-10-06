@@ -11,6 +11,8 @@
   Le fichier de paramètres (écrit par l'installateur dans son dossier temporaire, effacé ensuite) contient :
   serveurSql, baseCial, baseCpta, utilisateurSage, motDePasseSage, compteService, motDePasseService,
   portHttp, portHttps, https (bool), compteLecture (bool).
+  Plusieurs sociétés : baseCial liste les bases Gestion commerciale séparées par des virgules (la première est la principale),
+  baseCpta les bases Comptabilité dans le même ordre (vide : les mêmes noms).
   Tout est consigné dans <dossier>\installation.log, sans les mots de passe.
 #>
 param(
@@ -130,7 +132,15 @@ try {
 
     if (-not $Parametres -or -not (Test-Path $Parametres)) { throw "Paramètres d'installation introuvables." }
     $p = LireJson $Parametres
-    Ecrire "==> Installation dans $Dossier (serveur SQL $($p.serveurSql), base $($p.baseCial))" Cyan
+    # Une ou plusieurs sociétés : « BIJOU, MODE » -> deux bases servies par la même installation.
+    $bases = @("$($p.baseCial)".Split(",") | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+    $comptas = @("$($p.baseCpta)".Split(",") | ForEach-Object { $_.Trim() })
+    if (-not $bases) { throw "Aucune base Gestion commerciale indiquée." }
+    $societes = for ($i = 0; $i -lt $bases.Count; $i++) {
+        [pscustomobject]@{ baseCial = $bases[$i]; baseCpta = $(if ($i -lt $comptas.Count -and $comptas[$i]) { $comptas[$i] } else { $bases[$i] }) }
+    }
+    $societes = @($societes)
+    Ecrire "==> Installation dans $Dossier (serveur SQL $($p.serveurSql), base(s) $($bases -join ', '))" Cyan
     ArreterServices
 
     # 1. Worker : connexion Objets Métiers (journaux par mode gardés s'ils existent déjà).
@@ -138,8 +148,8 @@ try {
     $w = LireJson $cheminWorker
     if (-not $w) { $w = [pscustomobject]@{} }
     Propriete $w "serveur" $p.serveurSql
-    Propriete $w "baseCial" $p.baseCial
-    Propriete $w "baseCpta" $(if ($p.baseCpta) { $p.baseCpta } else { $p.baseCial })
+    Propriete $w "baseCial" $societes[0].baseCial
+    Propriete $w "baseCpta" $societes[0].baseCpta
     Propriete $w "utilisateur" $p.utilisateurSage
     Propriete $w "motDePasse" $p.motDePasseSage
     if (-not $w.PSObject.Properties["chaineSql"]) { Propriete $w "chaineSql" "" }
@@ -154,7 +164,7 @@ try {
     if (-not $a.Sage) { Propriete $a "Sage" ([pscustomobject]@{}) }
     $b = New-Object System.Data.SqlClient.SqlConnectionStringBuilder
     $b.PSBase.DataSource = $p.serveurSql
-    $b.PSBase.InitialCatalog = $p.baseCial
+    $b.PSBase.InitialCatalog = $societes[0].baseCial
     $b.PSBase.IntegratedSecurity = $true
     $b.PSBase.TrustServerCertificate = $true
     $b.PSBase.ApplicationIntent = [System.Data.SqlClient.ApplicationIntent]::ReadOnly
@@ -163,6 +173,9 @@ try {
     if (-not $a.PSObject.Properties["Urls"]) { Propriete $a "Urls" "http://0.0.0.0:$($p.portHttp)" }
     EcrireJson $cheminApi $a
     Ecrire "appsettings.Local.json écrit"
+
+    # 2 bis. Sociétés servies (une ou plusieurs bases) : worker.json (dossiers) et Sage:Dossiers de l'API.
+    & "$PSScriptRoot\societes.ps1" -Dossier $Dossier -Bases $p.baseCial -Comptas "$($p.baseCpta)" -SansRedemarrer *>&1 | ForEach-Object { Ecrire "  $_" }
 
     # 3. Services Windows sous le compte donné (il doit accéder à SQL Server et au dossier Sage).
     $mdp = ConvertTo-SecureString $p.motDePasseService -AsPlainText -Force
@@ -219,6 +232,7 @@ try {
     $base = if ($https) { "https://$($env:COMPUTERNAME):$($p.portHttps)" } else { "http://$($env:COMPUTERNAME):$($p.portHttp)" }
     $recap = @"
 Sage 100 API installée le $(Get-Date -Format 'dd/MM/yyyy HH:mm') sur $env:COMPUTERNAME
+Société(s) Sage : $($bases -join ', ')$(if ($bases.Count -gt 1) { " (choix de la société à la connexion)" })
 
 Borne de caisse     : $base/borne/
 CRM commerciaux     : $base/crm/

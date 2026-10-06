@@ -1,7 +1,7 @@
 // Échanges avec l'API Sage 100 et envoi de la file d'attente.
 // Chaque opération porte un idExterne : la renvoyer après une coupure ne crée jamais de doublon dans Sage.
 
-import { lireReglages, lireFile, majOperation, ecrireCatalogue, jetonUtilisateur, lireSession } from "./stockage.js";
+import { lireReglages, lireFile, majOperation, ecrireCatalogue, jetonUtilisateur, lireSession, lireDossier, lireDossiers, ecrireDossiers } from "./stockage.js";
 
 // La santé doit répondre vite ; le catalogue et les écritures peuvent attendre Sage (le worker a 60 s).
 const DELAI_SANTE_MS = 10000;
@@ -9,8 +9,11 @@ const DELAI_MS = 90000;
 
 export class ErreurReseau extends Error {}
 
-/** jeton : connexion de l'utilisateur Sage (POST /connexion), exigée pour les commandes et encaissements. */
-export async function appeler(methode, chemin, corps, delaiMs = DELAI_MS, jeton = null) {
+/**
+ * jeton : connexion de l'utilisateur Sage (POST /connexion), exigée pour les commandes et encaissements.
+ * dossier : société visée (en-tête X-Dossier), par défaut celle de la borne ; "" quand le serveur n'en sert qu'une.
+ */
+export async function appeler(methode, chemin, corps, delaiMs = DELAI_MS, jeton = null, dossier = lireDossier()) {
   const { cle } = lireReglages();
   const controle = new AbortController();
   const minuteur = setTimeout(() => controle.abort(), delaiMs);
@@ -20,6 +23,7 @@ export async function appeler(methode, chemin, corps, delaiMs = DELAI_MS, jeton 
       headers: {
         "X-Api-Key": cle,
         ...(jeton ? { Authorization: `Bearer ${jeton}` } : {}),
+        ...(dossier ? { "X-Dossier": dossier } : {}),
         ...(corps ? { "Content-Type": "application/json" } : {}),
       },
       body: corps ? JSON.stringify(corps) : undefined,
@@ -45,6 +49,15 @@ export async function etatConnexion() {
   } catch {
     return "hors-ligne";
   }
+}
+
+/** Sociétés servies par le serveur ; hors ligne, la dernière liste reçue. */
+export async function chargerDossiers() {
+  try {
+    const { statut, donnees } = await appeler("GET", "/dossiers", null, DELAI_SANTE_MS, null, "");
+    if (statut === 200 && Array.isArray(donnees)) ecrireDossiers(donnees);
+  } catch { /* hors ligne */ }
+  return lireDossiers();
 }
 
 export async function rechargerCatalogue() {
@@ -110,10 +123,12 @@ async function envoyerFile(seulement = null) {
     try {
       // Le jeton le plus récent de l'utilisateur, au cas où celui de la vente a expiré pendant une coupure.
       // Une vente saisie avant l'arrivée de la connexion part avec l'utilisateur connecté.
+      // Chaque opération part vers sa société, avec la connexion de son utilisateur dans cette société.
+      const dossier = op.dossier || "";
       const jeton = op.utilisateur
-        ? jetonUtilisateur(op.utilisateur) || op.jeton || null
-        : (lireSession() && jetonUtilisateur(lireSession())) || null;
-      const { statut, donnees } = await appeler("POST", chemin, op.corps, DELAI_MS, jeton);
+        ? jetonUtilisateur(op.utilisateur, dossier) || op.jeton || null
+        : (lireSession() && dossier === lireDossier() && jetonUtilisateur(lireSession())) || null;
+      const { statut, donnees } = await appeler("POST", chemin, op.corps, DELAI_MS, jeton, dossier);
       if (statut === 200 || statut === 201) {
         op.statut = "ok";
         op.resultat = donnees;
@@ -128,10 +143,11 @@ async function envoyerFile(seulement = null) {
         // Droit refusé (utilisateur non caissier) : à régler dans Sage ou par un caissier.
         op.statut = "erreur";
         op.message = texteErreur(donnees) || "Droit refusé.";
-      } else if (statut === 401 && donnees?.code === "CONNEXION_REQUISE") {
-        // Connexion absente ou expirée : la vente attend que son utilisateur se reconnecte.
-        op.message = `Reconnexion de ${op.utilisateur || "l'utilisateur"} nécessaire pour l'envoyer.`;
-        if (op.utilisateur && !bilan.reconnexions.includes(op.utilisateur)) bilan.reconnexions.push(op.utilisateur);
+      } else if ((statut === 401 && donnees?.code === "CONNEXION_REQUISE") || (statut === 400 && donnees?.code === "DOSSIER_REQUIS")) {
+        // Connexion absente ou expirée : la vente attend que son utilisateur se reconnecte (dans la société de la vente).
+        const qui = (op.utilisateur || "l'utilisateur") + (dossier ? ` (${dossier})` : "");
+        op.message = `Reconnexion de ${qui} nécessaire pour l'envoyer.`;
+        if (op.utilisateur && !bilan.reconnexions.includes(qui)) bilan.reconnexions.push(qui);
         bilan.restantes++;
       } else if (statut === 401) {
         op.message = "Clé d'API refusée.";

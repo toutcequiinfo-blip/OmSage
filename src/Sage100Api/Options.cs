@@ -15,6 +15,11 @@ public sealed class SageOptions
     public string ControleStock { get; set; } = "Auto";
     /// <summary>Nom de l'application cliente -> clé d'API (en-tête X-Api-Key).</summary>
     public Dictionary<string, string> ClesApi { get; set; } = new();
+    /// <summary>
+    /// Sociétés servies par l'installation (bases du même serveur). Vide : une seule société, celle de <see cref="ChaineSql"/>.
+    /// La première est la société principale : elle garde les fichiers locaux existants (journal, extensions).
+    /// </summary>
+    public List<DossierOptions> Dossiers { get; set; } = new();
 }
 
 /// <summary>Section « Authentification » : connexion des utilisateurs de la borne avec leur login Sage.</summary>

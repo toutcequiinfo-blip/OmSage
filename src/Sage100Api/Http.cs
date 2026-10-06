@@ -61,6 +61,7 @@ public static class Reponses
         return code switch
         {
             CodesErreur.AccesRefuse => Results.Json(corps, statusCode: StatusCodes.Status401Unauthorized),
+            ServiceAuthentification.CodeDossierRequis => Results.Json(corps, statusCode: StatusCodes.Status400BadRequest),
             ServiceAuthentification.CodeTropDEssais => Results.Json(corps, statusCode: StatusCodes.Status429TooManyRequests),
             _ => Results.Json(corps, statusCode: StatusCodes.Status503ServiceUnavailable),
         };
