@@ -115,7 +115,7 @@ public static class Commercial
         }
         if (articles is { Count: 0 } || tiersListe is { Count: 0 } || du > au) return null;
         if (articles is { Count: > 2000 } || tiersListe is { Count: > 2000 }) return null;
-        return new FiltreDetailVentes(Domaine(r.Domaine), du, au, article, articles, tiers, tiersListe, commercial, depot, 500);
+        return new FiltreDetailVentes(Domaine(r.Domaine), du, au, article, articles, tiers, tiersListe, commercial, depot, 500, i.Documents);
     }
 
 

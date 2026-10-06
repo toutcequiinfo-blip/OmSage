@@ -18,8 +18,16 @@ public sealed class Instantane
     public IReadOnlyList<Exercice> Exercices { get; init; } = [];
     public IReadOnlyList<FaitCompta> Compta { get; init; } = [];
     public IReadOnlyList<FaitAnalytique> Analytique { get; init; } = [];
-    public IReadOnlyList<FaitLigne> Lignes { get; init; } = [];
-    public IReadOnlyList<FaitPiece> Pieces { get; init; } = [];
+    /// <summary>Lignes des pièces retenues par <see cref="Documents"/> (toutes celles lues dans Sage tant qu'aucun tri n'est fait).</summary>
+    public IReadOnlyList<FaitLigne> Lignes { get => _lignes; init => _lignes = value; }
+    public IReadOnlyList<FaitPiece> Pieces { get => _pieces; init => _pieces = value; }
+    IReadOnlyList<FaitLigne> _lignes = [];
+    IReadOnlyList<FaitPiece> _pieces = [];
+    /// <summary>Documents comptés dans le CA par cette vue (voir <see cref="Retenir"/>).</summary>
+    public DocumentsCa Documents { get; private set; } = DocumentsCa.Factures;
+    // Vues par réglage, partagées avec les vues (copies) : toujours calculées depuis l'instantané d'origine.
+    readonly ConcurrentDictionary<DocumentsCa, Instantane> _vues = new();
+    Instantane? _origine;
     public IReadOnlyList<FaitEnCours> EnCours { get; init; } = [];
     public IReadOnlyList<LigneStock> Stock { get; init; } = [];
     public IReadOnlyDictionary<string, DateTime> DernieresSorties { get; init; } = new Dictionary<string, DateTime>();
@@ -38,6 +46,21 @@ public sealed class Instantane
     public IReadOnlyDictionary<int, string?> Categories { get; init; } = new Dictionary<int, string?>();
 
     public static Instantane Vide { get; } = new();
+
+    /// <summary>
+    /// Vue de l'instantané limitée aux documents choisis dans les réglages : factures, plus bons de livraison, de retour, d'avoir financier.
+    /// Calculée une fois par réglage et par actualisation.
+    /// </summary>
+    public Instantane Retenir(DocumentsCa documents) => _vues.GetOrAdd(documents, d =>
+    {
+        var origine = _origine ?? this;
+        var v = (Instantane)origine.MemberwiseClone();
+        v._origine = origine;
+        v._lignes = origine._lignes.Where(l => d.Retient(l.Type)).ToList();
+        v._pieces = origine._pieces.Where(p => d.Retient(p.Type)).ToList();
+        v.Documents = d;
+        return v;
+    });
 
     public string? IntituleTiers(string? numero) => numero != null && Tiers.TryGetValue(numero, out var t) ? t.Intitule?.Trim() : null;
     public int? Representant(string? tiers) => tiers != null && Tiers.TryGetValue(tiers, out var t) ? t.Representant : null;
