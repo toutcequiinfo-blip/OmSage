@@ -59,6 +59,46 @@ public static class Periodes
         DateTime.TryParseExact(cle, "yyyy-MM", CultureInfo.InvariantCulture, DateTimeStyles.None, out var d) ? d : defaut;
 
     public static DateTime DebutMois(DateTime d) => new(d.Year, d.Month, 1);
+    public static DateTime FinMois(DateTime d) => DebutMois(d).AddMonths(1).AddDays(-1);
+
+    /// <summary>« 2026-03-15 » -> ce jour ; « 2026-03 » -> 1er du mois (dernier jour si <paramref name="fin"/>) ; sinon défaut.</summary>
+    public static DateTime LireJour(string? cle, DateTime defaut, bool fin = false)
+    {
+        if (DateTime.TryParseExact(cle, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var j)) return j;
+        if (DateTime.TryParseExact(cle, "yyyy-MM", CultureInfo.InvariantCulture, DateTimeStyles.None, out var m)) return fin ? FinMois(m) : m;
+        return defaut;
+    }
+
+    /// <summary>
+    /// Restreint la plage [du, au] (jours inclus) à la période d'une clé d'axe de temps (exercice, année, trimestre, mois).
+    /// False si l'axe n'est pas un axe de temps ou si la clé est illisible.
+    /// </summary>
+    public static bool Restreindre(Instantane i, string axe, string cle, ref DateTime du, ref DateTime au)
+    {
+        DateTime debut, fin;
+        switch (axe)
+        {
+            case "exercice":
+                var e = i.Exercices.FirstOrDefault(x => CleExercice(x) == cle);
+                if (e == null) return false;
+                (debut, fin) = (e.Debut, e.Fin);
+                break;
+            case "annee" when int.TryParse(cle, out var an):
+                (debut, fin) = (new DateTime(an, 1, 1), new DateTime(an, 12, 31));
+                break;
+            case "trimestre" when cle.Length == 7 && int.TryParse(cle[..4], out var at) && int.TryParse(cle[6..], out var t) && t is >= 1 and <= 4:
+                (debut, fin) = (new DateTime(at, t * 3 - 2, 1), FinMois(new DateTime(at, t * 3, 1)));
+                break;
+            case "mois" when DateTime.TryParseExact(cle, "yyyy-MM", CultureInfo.InvariantCulture, DateTimeStyles.None, out var m):
+                (debut, fin) = (m, FinMois(m));
+                break;
+            default:
+                return false;
+        }
+        if (debut > du) du = debut;
+        if (fin < au) au = fin;
+        return true;
+    }
 
     public static string CleExercice(Exercice e) => e.Debut.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
     public static string IntituleExercice(Exercice e) => e.Debut.Year == e.Fin.Year ? $"{e.Debut.Year}" : $"{e.Debut.Year}-{e.Fin.Year}";

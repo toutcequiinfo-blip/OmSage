@@ -67,7 +67,7 @@ public static class Comptabilite
         var comptes = Periodes.Liste(r.Comptes);
         var journaux = Periodes.Liste(r.Journaux)?.ToHashSet(StringComparer.OrdinalIgnoreCase);
         var aNouveaux = r.ANouveaux ?? false;
-        return i.Compta.Where(f => f.Mois >= du && f.Mois <= au
+        return i.Compta.Where(f => f.Date >= du && f.Date <= au
             && (aNouveaux || !f.ANouveau)
             && (comptes == null || comptes.Any(c => f.Compte.StartsWith(c, StringComparison.OrdinalIgnoreCase)))
             && (journaux == null || journaux.Contains(f.Journal))
@@ -75,11 +75,11 @@ public static class Comptabilite
             && (r.Tiers == null || string.Equals(f.Tiers, r.Tiers, StringComparison.OrdinalIgnoreCase)));
     }
 
-    /// <summary>Mois de début et de fin (premiers jours) ; par défaut l'exercice du jour.</summary>
+    /// <summary>Premier et dernier jour inclus (« 2026-03-15 », ou un mois entier « 2026-03 ») ; par défaut l'exercice du jour.</summary>
     public static (DateTime Du, DateTime Au) Bornes(Instantane i, string? du, string? au, DateTime aujourdhui)
     {
         var e = i.ExerciceDe(aujourdhui);
-        return (Periodes.LireMois(du, Periodes.DebutMois(e.Debut)), Periodes.LireMois(au, Periodes.DebutMois(e.Fin)));
+        return (Periodes.LireJour(du, e.Debut), Periodes.LireJour(au, e.Fin, fin: true));
     }
 
     public static ResultatCube Croiser(Instantane i, RequeteCompta r, DateTime aujourdhui)
@@ -93,7 +93,7 @@ public static class Comptabilite
             var comptes = Periodes.Liste(r.Comptes);
             var sections = Periodes.Liste(r.Sections)?.ToHashSet(StringComparer.OrdinalIgnoreCase);
             var journaux = Periodes.Liste(r.Journaux)?.ToHashSet(StringComparer.OrdinalIgnoreCase);
-            var faits = i.Analytique.Where(f => f.Plan == plan && f.Mois >= du && f.Mois <= au
+            var faits = i.Analytique.Where(f => f.Plan == plan && f.Date >= du && f.Date <= au
                 && (comptes == null || comptes.Any(c => f.Compte.StartsWith(c, StringComparison.OrdinalIgnoreCase)))
                 && (sections == null || sections.Contains(f.Section))
                 && (journaux == null || journaux.Contains(f.Journal)));
@@ -123,23 +123,13 @@ public static class Comptabilite
         {
             if (axe == null || cle == null) continue;
             if (cle == Cube.CleAutres) return null;
+            if (axe is "exercice" or "annee" or "trimestre" or "mois")
+            {
+                if (!Periodes.Restreindre(i, axe, cle, ref du, ref au)) return null;
+                continue;
+            }
             switch (axe)
             {
-                case "exercice":
-                    var e = i.Exercices.FirstOrDefault(x => Periodes.CleExercice(x) == cle);
-                    if (e == null) return null;
-                    (du, au) = (Max(du, Periodes.DebutMois(e.Debut)), Min(au, Periodes.DebutMois(e.Fin)));
-                    break;
-                case "annee" when int.TryParse(cle, out var an):
-                    (du, au) = (Max(du, new DateTime(an, 1, 1)), Min(au, new DateTime(an, 12, 1)));
-                    break;
-                case "trimestre" when cle.Length == 7 && int.TryParse(cle[..4], out var at) && int.TryParse(cle[6..], out var t):
-                    (du, au) = (Max(du, new DateTime(at, t * 3 - 2, 1)), Min(au, new DateTime(at, t * 3, 1)));
-                    break;
-                case "mois":
-                    var m = Periodes.LireMois(cle, du);
-                    (du, au) = (Max(du, m), Min(au, m));
-                    break;
                 case "classe" or "radical" or "compte":
                     comptes = comptes == null ? [cle] : comptes.Where(c => cle.StartsWith(c) || c.StartsWith(cle)).Select(c => c.Length > cle.Length ? c : cle).ToList();
                     break;
@@ -163,8 +153,6 @@ public static class Comptabilite
 
     static List<string> Intersection(List<string>? actuels, IEnumerable<string> autres) =>
         actuels == null ? autres.ToList() : actuels.Intersect(autres, StringComparer.OrdinalIgnoreCase).ToList();
-    static DateTime Max(DateTime a, DateTime b) => a > b ? a : b;
-    static DateTime Min(DateTime a, DateTime b) => a < b ? a : b;
 
     /// <summary>
     /// Solde des comptes commençant par ce préfixe à la fin d'un mois (débit - crédit). Si l'exercice a ses à-nouveaux,

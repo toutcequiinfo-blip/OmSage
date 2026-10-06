@@ -77,6 +77,9 @@ async function lireCache(chemin) {
 }
 const exercice = () => etat.meta.exercices.find((e) => e.cle === etat.exercice) ?? etat.meta.exercices[0];
 const moisDe = (d) => String(d).slice(0, 7);
+const jourDe = (d) => String(d).slice(0, 10);
+// Dernier jour du mois « 2026-02 » -> « 2026-02-28 ».
+const finDuMois = (m) => { const [a, n] = m.split("-").map(Number); return `${m}-${String(new Date(a, n, 0).getDate()).padStart(2, "0")}`; };
 const qs = (o) => Object.entries(o).filter(([, v]) => v !== undefined && v !== null && v !== "").map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join("&");
 
 // ---------- Démarrage, connexion ----------
@@ -530,7 +533,7 @@ const ZOOM = {
 
 function presetExplorateur(nom, sens) {
   const e = exercice();
-  const base = { du: moisDe(e.debut), au: moisDe(e.fin), pile: [], vue: "table" };
+  const base = { du: jourDe(e.debut), au: jourDe(e.fin), pile: [], vue: "table" };
   const P = {
     "compta-explorateur": { type: "compta", source: "general", lignes: "classe", colonnes: "mois", mesure: "solde" },
     balance: { type: "compta", source: "general", lignes: "compte", colonnes: "", mesure: "solde", aNouveaux: true, titre: "Balance générale (à-nouveaux compris)" },
@@ -594,8 +597,8 @@ async function explorateur(c, nom, sens) {
         <label>Colonnes <select id="x-colonnes">${optAxes(cfg.colonnes, "Toutes les mesures")}</select></label>
         ${cfg.colonnes ? `<label>Mesure <select id="x-mesure">${mesures.map((m) => `<option value="${m}" ${m === cfg.mesure ? "selected" : ""}>${MESURES[m]}</option>`).join("")}</select></label>`
           : `<label>Trier par <select id="x-mesure">${mesures.map((m) => `<option value="${m}" ${m === cfg.mesure ? "selected" : ""}>${MESURES[m]}</option>`).join("")}</select></label>`}
-        <label>Du <input id="x-du" type="month" value="${cfg.du}"></label>
-        <label>Au <input id="x-au" type="month" value="${cfg.au}"></label>
+        <label>Du <input id="x-du" type="date" value="${cfg.du}"></label>
+        <label>Au <input id="x-au" type="date" value="${cfg.au}"></label>
         ${filtresTexte}
         <span class="espace"></span>
         <div class="segments"><button type="button" data-vue="table" class="${cfg.vue !== "graphique" ? "actif" : ""}">Tableau</button><button type="button" data-vue="graphique" class="${cfg.vue === "graphique" ? "actif" : ""}">Graphique</button></div>
@@ -615,7 +618,7 @@ async function explorateur(c, nom, sens) {
       categorie: v("#x-categorie"), qualite: v("#x-qualite") });
     return m;
   };
-  c.querySelectorAll(".commandes select, .commandes input[type=month], .commandes input[type=checkbox]").forEach((x) => x.addEventListener("change", () => changer(lireChamps())));
+  c.querySelectorAll(".commandes select, .commandes input[type=date], .commandes input[type=checkbox]").forEach((x) => x.addEventListener("change", () => changer(lireChamps())));
   c.querySelectorAll(".commandes input[type=text], .commandes input:not([type])").forEach((x) => x.addEventListener("keydown", (e) => { if (e.key === "Enter") changer(lireChamps()); }));
   c.querySelectorAll(".commandes input:not([type])").forEach((x) => x.addEventListener("change", () => changer(lireChamps())));
   c.querySelectorAll("[data-vue]").forEach((b) => b.addEventListener("click", () => { cfg.vue = b.dataset.vue; dessiner(); c.querySelectorAll("[data-vue]").forEach((x) => x.classList.toggle("actif", x === b)); }));
@@ -680,10 +683,10 @@ async function explorateur(c, nom, sens) {
     const avant = { lignes: cfg.lignes, colonnes: cfg.colonnes, du: cfg.du, au: cfg.au, comptes: cfg.comptes, journaux: cfg.journaux, typeJournal: cfg.typeJournal, tiers: cfg.tiers,
       sections: cfg.sections, famille: cfg.famille, article: cfg.article, commercial: cfg.commercial, depot: cfg.depot, categorie: cfg.categorie, qualite: cfg.qualite };
     const m = {};
-    if (axe === "mois") Object.assign(m, { du: cle, au: cle });
-    else if (axe === "annee") Object.assign(m, { du: `${cle}-01`, au: `${cle}-12` });
-    else if (axe === "trimestre") { const t = Number(cle.slice(6)); Object.assign(m, { du: `${cle.slice(0, 4)}-${String(t * 3 - 2).padStart(2, "0")}`, au: `${cle.slice(0, 4)}-${String(t * 3).padStart(2, "0")}` }); }
-    else if (axe === "exercice") { const e = etat.meta.exercices.find((x) => x.cle === cle); if (e) Object.assign(m, { du: moisDe(e.debut), au: moisDe(e.fin) }); }
+    if (axe === "mois") Object.assign(m, { du: `${cle}-01`, au: finDuMois(cle) });
+    else if (axe === "annee") Object.assign(m, { du: `${cle}-01-01`, au: `${cle}-12-31` });
+    else if (axe === "trimestre") { const t = Number(cle.slice(6)); Object.assign(m, { du: `${cle.slice(0, 4)}-${String(t * 3 - 2).padStart(2, "0")}-01`, au: finDuMois(`${cle.slice(0, 4)}-${String(t * 3).padStart(2, "0")}`) }); }
+    else if (axe === "exercice") { const e = etat.meta.exercices.find((x) => x.cle === cle); if (e) Object.assign(m, { du: jourDe(e.debut), au: jourDe(e.fin) }); }
     else if (["classe", "radical", "compte"].includes(axe)) m.comptes = cle;
     else if (axe === "journal") m.journaux = cle;
     else if (axe === "typeJournal") m.typeJournal = cle;

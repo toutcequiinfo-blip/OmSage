@@ -144,6 +144,32 @@ public sealed class TableauDeBordTests : IDisposable
     }
 
     [Fact]
+    public void La_plage_Du_Au_se_choisit_au_jour_pres()
+    {
+        var i = new Instantane
+        {
+            Exercices = [new Exercice(1, new DateTime(2026, 1, 1), new DateTime(2026, 12, 31))],
+            Lignes =
+            [
+                new FaitLigne { Mois = new(2026, 3, 1), Date = new(2026, 3, 9), Article = "A", Tiers = "C", MontantHT = 100 },
+                new FaitLigne { Mois = new(2026, 3, 1), Date = new(2026, 3, 10), Article = "A", Tiers = "C", MontantHT = 20 },
+                new FaitLigne { Mois = new(2026, 3, 1), Date = new(2026, 3, 31), Article = "A", Tiers = "C", MontantHT = 3 },
+            ],
+        };
+        decimal Ca(string? du, string? au) =>
+            Commercial.Croiser(i, new RequeteVentes(null, "article", null, du, au, null, null, null, null, null, null, null, null), Direction, new DateTime(2026, 6, 1)).Total.Total["ca"];
+        Assert.Equal(20, Ca("2026-03-10", "2026-03-10"));
+        Assert.Equal(23, Ca("2026-03-10", "2026-03-31"));
+        Assert.Equal(123, Ca("2026-03", "2026-03"));
+        Assert.Equal(123, Ca(null, null));
+
+        var au = new DateTime(2026, 12, 31);
+        var du = new DateTime(2026, 3, 10);
+        Assert.True(Periodes.Restreindre(i, "mois", "2026-03", ref du, ref au));
+        Assert.Equal((new DateTime(2026, 3, 10), new DateTime(2026, 3, 31)), (du, au));
+    }
+
+    [Fact]
     public async Task Au_dela_de_la_limite_les_lignes_sont_regroupees_dans_Autres()
     {
         var i = await Instantane();
@@ -190,7 +216,7 @@ public sealed class TableauDeBordTests : IDisposable
         var f = Comptabilite.Detail(i, r, "701000", Periodes.Mois(Aujourdhui), Aujourdhui)!;
         Assert.Equal(["701000"], f.Comptes);
         Assert.Equal(Periodes.DebutMois(Aujourdhui), f.Du);
-        Assert.Equal(Periodes.DebutMois(Aujourdhui), f.Au);
+        Assert.Equal(Periodes.FinMois(Aujourdhui), f.Au);
 
         var parType = Comptabilite.Detail(i, r with { Lignes = "typeJournal", Colonnes = null }, "2", null, Aujourdhui)!;
         Assert.Equal(["BQ"], parType.Journaux);
