@@ -240,13 +240,13 @@ public static class Comptabilite
 
         var alertes = new List<Alerte>();
         if (tresoreriePresente && tresorerie < seuils.Tresorerie)
-            alertes.Add(new("critique", "tresorerie", Periodes.Texte($"Trésorerie sous le seuil : {tresorerie:N0} (seuil {seuils.Tresorerie:N0}).")));
+            alertes.Add(new("critique", "tresorerie", Periodes.Texte($"Trésorerie sous le seuil : {tresorerie:N2} (seuil {seuils.Tresorerie:N2}).")));
         if (produits - charges < 0)
-            alertes.Add(new("attention", "resultat", Periodes.Texte($"Résultat négatif sur la période : {produits - charges:N0}.")));
+            alertes.Add(new("attention", "resultat", Periodes.Texte($"Résultat négatif sur la période : {produits - charges:N2}.")));
         if (clients.Plus90 > 0)
-            alertes.Add(new("attention", "creances90", Periodes.Texte($"Créances clients de plus de 90 jours : {clients.Plus90:N0}.")));
+            alertes.Add(new("attention", "creances90", Periodes.Texte($"Créances clients de plus de 90 jours : {clients.Plus90:N2}.")));
         if (fournisseurs is { Echu: > 0 })
-            alertes.Add(new("info", "dettesEchues", Periodes.Texte($"Dettes fournisseurs échues : {fournisseurs.Echu:N0}.")));
+            alertes.Add(new("info", "dettesEchues", Periodes.Texte($"Dettes fournisseurs échues : {fournisseurs.Echu:N2}.")));
 
         return new
         {

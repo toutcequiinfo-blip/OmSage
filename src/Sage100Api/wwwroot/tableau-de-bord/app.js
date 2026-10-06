@@ -1,11 +1,12 @@
 // Tableau de bord Sage 100 : comptable et commercial, multidimensionnels.
 // Les chiffres viennent de l'instantané de l'API (relu dans Sage aux heures prévues) ; le détail d'une cellule est lu dans Sage au clic.
-import { barres, courbes, barresH, anneau, miniCourbe, compact, nombre, COULEURS } from "./graphiques.js";
+import { barres, courbes, barresH, anneau, miniCourbe, nombre, COULEURS } from "./graphiques.js";
 import { preparerChoix, societeChoisie, nomSociete } from "../commun/societes.js";
 
 const $ = (s, r = document) => r.querySelector(s);
 const echapper = (t) => String(t ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
-const montant = (n) => nombre(n, 0);
+// Montants : 1 234 567,00 partout (tuiles, tableaux, détails, infobulles) ; seuls les axes des graphiques restent abrégés.
+const montant = (n) => nombre(n, 2);
 const date = (d) => (d ? new Date(d).toLocaleDateString("fr-FR") : "");
 const heure = (d) => (d ? new Date(d).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" }) : "");
 const MOIS = ["janv.", "févr.", "mars", "avr.", "mai", "juin", "juil.", "août", "sept.", "oct.", "nov.", "déc."];
@@ -302,6 +303,13 @@ function exporterCsv(nom, entetes, lignes) {
   a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
+/** Filtres clients : catégorie tarifaire et qualité (CT_Qualite) ; une liste n'apparaît que si la base en contient. */
+const selectsClients = (prefixe, f) => [
+  etat.meta.categories.length ? `<label>Catégorie <select id="${prefixe}-categorie"><option value="">Toutes</option>${etat.meta.categories.map((x) =>
+    `<option value="${x.numero}" ${String(f.categorie ?? "") === String(x.numero) ? "selected" : ""}>${echapper(x.intitule)}</option>`).join("")}</select></label>` : "",
+  (etat.meta.qualites ?? []).length ? `<label>Qualité <select id="${prefixe}-qualite"><option value="">Toutes</option>${etat.meta.qualites.map((q) =>
+    `<option value="${echapper(q)}" ${(f.qualite ?? "") === q ? "selected" : ""}>${echapper(q)}</option>`).join("")}</select></label>` : "",
+].join("");
 const selectCollaborateurs = (id, valeur, libelleTous = "Tous les commerciaux") =>
   `<select id="${id}"><option value="">${libelleTous}</option>${etat.meta.collaborateurs.map((c) => `<option value="${c.numero}" ${String(valeur) === String(c.numero) ? "selected" : ""}>${echapper(c.intitule)}</option>`).join("")}</select>`;
 
@@ -312,15 +320,15 @@ async function syntheseCompta(c) {
   c.innerHTML = `
     ${alertes(s.alertes)}
     <section class="tuiles">
-      ${tuile({ libelle: "Produits", valeur: compact(s.produits), pied: `${variation(s.variationProduits)} N-1 ${compact(s.produitsN1)}`, vers: "compta/charges", mini: miniCourbe(s.mois.map((m) => m.produits)) })}
-      ${tuile({ libelle: "Charges", valeur: compact(s.charges), pied: `${variation(s.variationCharges, true)} N-1 ${compact(s.chargesN1)}`, vers: "compta/charges", mini: miniCourbe(s.mois.map((m) => m.charges), "var(--c4)") })}
-      ${tuile({ libelle: "Résultat", valeur: `<span class="${s.resultat < 0 ? "neg" : ""}">${compact(s.resultat)}</span>`, pied: `N-1 ${compact(s.resultatN1)}`, niveau: s.resultat < 0 ? "attention" : "" })}
-      ${tuile({ libelle: "Trésorerie", valeur: compact(s.tresorerie), pied: `${variation(s.variationTresorerie)} N-1 ${compact(s.tresorerieN1)}`, vers: "compta/tresorerie",
+      ${tuile({ libelle: "Produits", valeur: montant(s.produits), pied: `${variation(s.variationProduits)} N-1 ${montant(s.produitsN1)}`, vers: "compta/charges", mini: miniCourbe(s.mois.map((m) => m.produits)) })}
+      ${tuile({ libelle: "Charges", valeur: montant(s.charges), pied: `${variation(s.variationCharges, true)} N-1 ${montant(s.chargesN1)}`, vers: "compta/charges", mini: miniCourbe(s.mois.map((m) => m.charges), "var(--c4)") })}
+      ${tuile({ libelle: "Résultat", valeur: `<span class="${s.resultat < 0 ? "neg" : ""}">${montant(s.resultat)}</span>`, pied: `N-1 ${montant(s.resultatN1)}`, niveau: s.resultat < 0 ? "attention" : "" })}
+      ${tuile({ libelle: "Trésorerie", valeur: montant(s.tresorerie), pied: `${variation(s.variationTresorerie)} N-1 ${montant(s.tresorerieN1)}`, vers: "compta/tresorerie",
         niveau: s.alertes.some((a) => a.code === "tresorerie") ? "critique" : "", mini: miniCourbe(s.mois.filter((m) => m.mois <= moisDe(s.au)).map((m) => m.tresorerie), "var(--c3)") })}
-      ${tuile({ libelle: "Encaissements", valeur: compact(s.encaissements), pied: "banques et caisses" })}
-      ${tuile({ libelle: "Décaissements", valeur: compact(s.decaissements), pied: "banques et caisses" })}
-      ${tuile({ libelle: "Créances clients", valeur: compact(cr.total), pied: `échu ${compact(cr.echu)} · +90 j ${compact(cr.plus90)}`, vers: "compta/recouvrement", niveau: cr.plus90 > 0 ? "attention" : "" })}
-      ${de ? tuile({ libelle: "Dettes fournisseurs", valeur: compact(de.total), pied: `échu ${compact(de.echu)}`, vers: "compta/fournisseurs" }) : ""}
+      ${tuile({ libelle: "Encaissements", valeur: montant(s.encaissements), pied: "banques et caisses" })}
+      ${tuile({ libelle: "Décaissements", valeur: montant(s.decaissements), pied: "banques et caisses" })}
+      ${tuile({ libelle: "Créances clients", valeur: montant(cr.total), pied: `échu ${montant(cr.echu)} · +90 j ${montant(cr.plus90)}`, vers: "compta/recouvrement", niveau: cr.plus90 > 0 ? "attention" : "" })}
+      ${de ? tuile({ libelle: "Dettes fournisseurs", valeur: montant(de.total), pied: `échu ${montant(de.echu)}`, vers: "compta/fournisseurs" }) : ""}
     </section>
     <section class="grille">
       ${carte("l8", "Produits, charges et résultat cumulé", "g-resultat", `<span class="discret">${date(s.du)} – ${date(s.au)}</span>`)}
@@ -354,9 +362,9 @@ async function chargesProduits(c) {
   const haut = document.createElement("div");
   haut.style.display = "contents";
   haut.innerHTML = `<section class="tuiles">
-      ${tuile({ libelle: "Produits", valeur: compact(s.produits), pied: variation(s.variationProduits) })}
-      ${tuile({ libelle: "Charges", valeur: compact(s.charges), pied: variation(s.variationCharges, true) })}
-      ${tuile({ libelle: "Résultat", valeur: compact(s.resultat), pied: `N-1 ${compact(s.resultatN1)}` })}
+      ${tuile({ libelle: "Produits", valeur: montant(s.produits), pied: variation(s.variationProduits) })}
+      ${tuile({ libelle: "Charges", valeur: montant(s.charges), pied: variation(s.variationCharges, true) })}
+      ${tuile({ libelle: "Résultat", valeur: montant(s.resultat), pied: `N-1 ${montant(s.resultatN1)}` })}
       ${tuile({ libelle: "Marge sur charges", valeur: s.produits ? `${nombre((s.resultat / s.produits) * 100, 1)} %` : "–", pied: "résultat / produits" })}
     </section>
     <section class="grille">${carte("l12", "Produits et charges par mois, N et N-1", "g-cp")}</section>`;
@@ -387,10 +395,10 @@ async function tresorerie(c) {
   haut.innerHTML = `
     ${alertes(s.alertes.filter((a) => a.code === "tresorerie"))}
     <section class="tuiles">
-      ${tuile({ libelle: "Trésorerie", valeur: compact(s.tresorerie), pied: `${variation(s.variationTresorerie)} N-1 ${compact(s.tresorerieN1)}` })}
-      ${tuile({ libelle: "Encaissements", valeur: compact(s.encaissements), pied: "sur la période" })}
-      ${tuile({ libelle: "Décaissements", valeur: compact(s.decaissements), pied: "sur la période" })}
-      ${tuile({ libelle: "Flux net", valeur: `<span class="${s.encaissements - s.decaissements < 0 ? "neg" : "pos"}">${compact(s.encaissements - s.decaissements)}</span>`, pied: "encaissements − décaissements" })}
+      ${tuile({ libelle: "Trésorerie", valeur: montant(s.tresorerie), pied: `${variation(s.variationTresorerie)} N-1 ${montant(s.tresorerieN1)}` })}
+      ${tuile({ libelle: "Encaissements", valeur: montant(s.encaissements), pied: "sur la période" })}
+      ${tuile({ libelle: "Décaissements", valeur: montant(s.decaissements), pied: "sur la période" })}
+      ${tuile({ libelle: "Flux net", valeur: `<span class="${s.encaissements - s.decaissements < 0 ? "neg" : "pos"}">${montant(s.encaissements - s.decaissements)}</span>`, pied: "encaissements − décaissements" })}
     </section>
     <section class="grille">
       ${carte("l8", "Trésorerie fin de mois, N et N-1", "g-treso2")}
@@ -421,9 +429,9 @@ async function rapprochement(c) {
   const ecart = (v, base) => `<td class="num ${Math.abs(v) > 0.5 ? (Math.abs(v) > Math.abs(base) * 0.02 ? "neg" : "") : "pos"}">${montant(v)}</td>`;
   c.innerHTML = `
     <section class="tuiles">
-      ${tuile({ libelle: "Écart CA", valeur: compact(tot("ecartCa")), pied: `gestion ${compact(tot("caGestion"))} · compta ${compact(tot("caComptable"))}`, niveau: Math.abs(tot("ecartCa")) > 1 ? "attention" : "" })}
-      ${tuile({ libelle: "Écart règlements clients", valeur: compact(tot("ecartReglements")), pied: `gestion ${compact(tot("reglementsGestion"))} · compta ${compact(tot("reglementsComptables"))}` })}
-      ${etat.meta.droits.achats ? tuile({ libelle: "Écart achats", valeur: compact(tot("ecartAchats")), pied: `gestion ${compact(tot("achatsGestion"))} · compta ${compact(tot("achatsComptables"))}` }) : ""}
+      ${tuile({ libelle: "Écart CA", valeur: montant(tot("ecartCa")), pied: `gestion ${montant(tot("caGestion"))} · compta ${montant(tot("caComptable"))}`, niveau: Math.abs(tot("ecartCa")) > 1 ? "attention" : "" })}
+      ${tuile({ libelle: "Écart règlements clients", valeur: montant(tot("ecartReglements")), pied: `gestion ${montant(tot("reglementsGestion"))} · compta ${montant(tot("reglementsComptables"))}` })}
+      ${etat.meta.droits.achats ? tuile({ libelle: "Écart achats", valeur: montant(tot("ecartAchats")), pied: `gestion ${montant(tot("achatsGestion"))} · compta ${montant(tot("achatsComptables"))}` }) : ""}
     </section>
     <section class="grille">
       ${carte("l12", "Chiffre d'affaires : gestion commerciale et comptabilité", "g-rappro")}
@@ -447,18 +455,18 @@ async function rapprochement(c) {
 
 // ==================== Recouvrement (clients ou fournisseurs) ====================
 async function recouvrement(c, type) {
-  const f = etat.explorateurs[`rec-${type}`] ??= { commercial: "", categorie: "" };
-  const r = await lireCache(`/tableau-de-bord/recouvrement/${type}?${qs({ commercial: f.commercial, categorie: f.categorie })}`);
+  const f = etat.explorateurs[`rec-${type}`] ??= { commercial: "", categorie: "", qualite: "" };
+  const r = await lireCache(`/tableau-de-bord/recouvrement/${type}?${qs({ commercial: f.commercial, categorie: f.categorie, qualite: f.qualite })}`);
   const t = r.total;
   const clients = type === "clients";
   const TR = [["nonEchu", "Non échu", "var(--c3)"], ["r1a30", "1 à 30 j", "var(--c7)"], ["r31a60", "31 à 60 j", "var(--c4)"], ["r61a90", "61 à 90 j", "var(--c6)"], ["plus90", "Plus de 90 j", "var(--c5)"]];
   c.innerHTML = `
     ${clients ? `<div class="commandes">${etat.meta.collaborateurs.length > 1 ? `<label>Commercial ${selectCollaborateurs("f-rec-co", f.commercial)}</label>` : ""}
-      <label>Catégorie <select id="f-rec-cat"><option value="">Toutes</option>${etat.meta.categories.map((x) => `<option value="${x.numero}" ${String(f.categorie) === String(x.numero) ? "selected" : ""}>${echapper(x.intitule)}</option>`).join("")}</select></label></div>` : ""}
+      ${selectsClients("f-rec", f)}</div>` : ""}
     <section class="tuiles">
-      ${tuile({ libelle: clients ? "Total dû par les clients" : "Total dû aux fournisseurs", valeur: compact(t.total), pied: t.credits ? `dont crédits non affectés ${compact(t.credits)}` : "" })}
-      ${tuile({ libelle: "Échu", valeur: compact(r.echu), pied: t.total > 0 ? `${nombre((r.echu / (t.total - t.credits)) * 100, 0)} % du dû` : "", niveau: r.echu > 0 ? "attention" : "" })}
-      ${tuile({ libelle: "Plus de 90 jours", valeur: compact(t.plus90), niveau: t.plus90 > 0 ? "critique" : "" })}
+      ${tuile({ libelle: clients ? "Total dû par les clients" : "Total dû aux fournisseurs", valeur: montant(t.total), pied: t.credits ? `dont crédits non affectés ${montant(t.credits)}` : "" })}
+      ${tuile({ libelle: "Échu", valeur: montant(r.echu), pied: t.total > 0 ? `${nombre((r.echu / (t.total - t.credits)) * 100, 0)} % du dû` : "", niveau: r.echu > 0 ? "attention" : "" })}
+      ${tuile({ libelle: "Plus de 90 jours", valeur: montant(t.plus90), niveau: t.plus90 > 0 ? "critique" : "" })}
       ${tuile({ libelle: "Retard moyen", valeur: `${nombre(r.retardMoyenJours)} j`, pied: "pondéré par les montants échus" })}
       ${tuile({ libelle: clients ? "Clients en retard" : "Fournisseurs en retard", valeur: nombre(r.tiersEnRetard), pied: `sur ${nombre(r.tiers.length)} avec un solde` })}
     </section>
@@ -497,9 +505,10 @@ async function recouvrement(c, type) {
   });
   $("#csv-rec", c).addEventListener("click", () => exporterCsv(`balance-agee-${type}`, ["Tiers", "Intitulé", "Représentant", ...TR.map(([, n]) => n), "Crédits", "Total", "Retard max (j)", "Dernière relance"],
     r.tiers.map((l) => [l.tiers, l.intitule, l.representant, ...TR.map(([k]) => l.tranches[k]), l.tranches.credits, l.tranches.total, l.retardMaxJours, date(l.derniereRelance)])));
-  const recharger = () => { etat.explorateurs[`rec-${type}`] = { commercial: $("#f-rec-co", c)?.value ?? "", categorie: $("#f-rec-cat", c)?.value ?? "" }; afficherOnglet(); };
+  const recharger = () => { etat.explorateurs[`rec-${type}`] = { commercial: $("#f-rec-co", c)?.value ?? "", categorie: $("#f-rec-categorie", c)?.value ?? "", qualite: $("#f-rec-qualite", c)?.value ?? "" }; afficherOnglet(); };
   $("#f-rec-co", c)?.addEventListener("change", recharger);
-  $("#f-rec-cat", c)?.addEventListener("change", recharger);
+  $("#f-rec-categorie", c)?.addEventListener("change", recharger);
+  $("#f-rec-qualite", c)?.addEventListener("change", recharger);
   c.addEventListener("affiche", () => {
     barresH($("#g-tranches"), TR.map(([k, n, couleur]) => ({ libelle: n, valeur: t[k], couleur })));
     if ($("#g-rec-co")) barresH($("#g-rec-co"), r.parCommercial.slice(0, 10).map((x) => ({ libelle: x.intitule, valeur: x.tranches.r1a30 + x.tranches.r31a60 + x.tranches.r61a90 + x.tranches.plus90, reference: x.tranches.total, couleur: "var(--c4)" })));
@@ -516,7 +525,7 @@ const TEMPS = ["exercice", "annee", "trimestre", "mois"];
 // Axe proposé quand on zoome sur une ligne.
 const ZOOM = {
   compta: { exercice: "mois", annee: "trimestre", trimestre: "mois", mois: "compte", classe: "radical", radical: "compte", compte: "mois", typeJournal: "journal", journal: "compte", tiers: "compte", section: "compte" },
-  ventes: { exercice: "mois", annee: "trimestre", trimestre: "mois", mois: "article", famille: "article", article: "mois", tiers: "article", categorie: "tiers", commercial: "tiers", depot: "article" },
+  ventes: { exercice: "mois", annee: "trimestre", trimestre: "mois", mois: "article", famille: "article", article: "mois", tiers: "article", categorie: "tiers", qualite: "tiers", commercial: "tiers", depot: "article" },
 };
 
 function presetExplorateur(nom, sens) {
@@ -547,7 +556,7 @@ function paramsCube(cfg) {
   if (cfg.type === "compta")
     return { ...commun, source: cfg.source === "analytique" ? "analytique" : "", comptes: cfg.comptes, journaux: cfg.journaux, typeJournal: cfg.typeJournal, tiers: cfg.tiers,
       aNouveaux: cfg.aNouveaux ? "true" : "", plan: cfg.source === "analytique" ? cfg.plan : "", sections: cfg.sections };
-  return { ...commun, domaine: cfg.domaine, article: cfg.article, famille: cfg.famille, tiers: cfg.tiers, commercial: cfg.commercial, depot: cfg.depot, categorie: cfg.categorie };
+  return { ...commun, domaine: cfg.domaine, article: cfg.article, famille: cfg.famille, tiers: cfg.tiers, commercial: cfg.commercial, depot: cfg.depot, categorie: cfg.categorie, qualite: cfg.qualite };
 }
 
 async function explorateur(c, nom, sens) {
@@ -569,6 +578,7 @@ async function explorateur(c, nom, sens) {
         : `<label>Plan <select id="x-plan">${etat.meta.plans.map((p) => `<option value="${p.numero}" ${String(cfg.plan) === String(p.numero) ? "selected" : ""}>${echapper(p.intitule)}</option>`).join("")}</select></label>`}`
     : `<label>Famille <select id="x-famille"><option value="">Toutes</option>${etat.meta.familles.map((f) => `<option value="${echapper(f.code)}" ${cfg.famille === f.code ? "selected" : ""}>${echapper(f.intitule ?? f.code)}</option>`).join("")}</select></label>
        ${cfg.domaine !== "achats" && etat.meta.collaborateurs.length > 1 ? `<label>Commercial ${selectCollaborateurs("x-commercial", cfg.commercial, "Tous")}</label>` : ""}
+       ${cfg.domaine !== "achats" ? selectsClients("x", cfg) : ""}
        ${etat.meta.depots.length > 1 ? `<label>Dépôt <select id="x-depot"><option value="">Tous</option>${etat.meta.depots.map((d) => `<option value="${d.numero}" ${String(cfg.depot) === String(d.numero) ? "selected" : ""}>${echapper(d.intitule)}</option>`).join("")}</select></label>` : ""}
        <label class="court">${cfg.domaine === "achats" ? "Fournisseur" : "Client"} <input id="x-tiers" value="${echapper(cfg.tiers ?? "")}" placeholder="code"></label>
        <label class="court">Article <input id="x-article" value="${echapper(cfg.article ?? "")}" placeholder="référence"></label>`;
@@ -601,7 +611,8 @@ async function explorateur(c, nom, sens) {
     const v = (id) => $(id, c)?.value?.trim() ?? undefined;
     const m = { lignes: v("#x-lignes"), colonnes: v("#x-colonnes"), mesure: v("#x-mesure"), du: v("#x-du") || cfg.du, au: v("#x-au") || cfg.au };
     if (compta) Object.assign(m, { comptes: v("#x-comptes"), journaux: v("#x-journal"), tiers: v("#x-tiers"), aNouveaux: $("#x-an", c)?.checked ?? cfg.aNouveaux, plan: v("#x-plan") ?? cfg.plan });
-    else Object.assign(m, { famille: v("#x-famille"), commercial: v("#x-commercial"), depot: v("#x-depot"), tiers: v("#x-tiers"), article: v("#x-article") });
+    else Object.assign(m, { famille: v("#x-famille"), commercial: v("#x-commercial"), depot: v("#x-depot"), tiers: v("#x-tiers"), article: v("#x-article"),
+      categorie: v("#x-categorie"), qualite: v("#x-qualite") });
     return m;
   };
   c.querySelectorAll(".commandes select, .commandes input[type=month], .commandes input[type=checkbox]").forEach((x) => x.addEventListener("change", () => changer(lireChamps())));
@@ -667,7 +678,7 @@ async function explorateur(c, nom, sens) {
     if (!ligne || ligne.cle === "*autres*") return;
     const axe = cube.axeLignes, cle = ligne.cle;
     const avant = { lignes: cfg.lignes, colonnes: cfg.colonnes, du: cfg.du, au: cfg.au, comptes: cfg.comptes, journaux: cfg.journaux, typeJournal: cfg.typeJournal, tiers: cfg.tiers,
-      sections: cfg.sections, famille: cfg.famille, article: cfg.article, commercial: cfg.commercial, depot: cfg.depot, categorie: cfg.categorie };
+      sections: cfg.sections, famille: cfg.famille, article: cfg.article, commercial: cfg.commercial, depot: cfg.depot, categorie: cfg.categorie, qualite: cfg.qualite };
     const m = {};
     if (axe === "mois") Object.assign(m, { du: cle, au: cle });
     else if (axe === "annee") Object.assign(m, { du: `${cle}-01`, au: `${cle}-12` });
@@ -677,7 +688,7 @@ async function explorateur(c, nom, sens) {
     else if (axe === "journal") m.journaux = cle;
     else if (axe === "typeJournal") m.typeJournal = cle;
     else if (axe === "section") m.sections = cle;
-    else if (["tiers", "famille", "article", "commercial", "depot", "categorie"].includes(axe)) m[axe] = cle;
+    else if (["tiers", "famille", "article", "commercial", "depot", "categorie", "qualite"].includes(axe)) m[axe] = cle;
     if (cle === "" && !TEMPS.includes(axe)) return;
     let suivant = (compta ? ZOOM.compta : ZOOM.ventes)[axe];
     if (suivant === cfg.colonnes) cfg.colonnes = "";
@@ -726,17 +737,17 @@ async function direction(c) {
     ${etat.meta.collaborateurs.length > 1 && etat.meta.profil !== "Vendeur" ? `<div class="commandes"><label>Commercial ${selectCollaborateurs("f-dir-co", f.commercial)}</label></div>` : ""}
     ${alertes(s.alertes)}
     <section class="tuiles">
-      ${tuile({ libelle: "CA du jour", valeur: compact(s.caJour), pied: new Date().toLocaleDateString("fr-FR") })}
-      ${tuile({ libelle: "CA du mois", valeur: compact(s.caMois), pied: `${variation(s.variationMois)} N-1 ${compact(s.caMoisN1)}`, niveau: s.alertes.some((a) => a.code === "baisseCa") ? "critique" : "" })}
-      ${tuile({ libelle: "CA de l'exercice", valeur: compact(s.caExercice), pied: `${variation(s.variation)} N-1 ${compact(s.caN1)}`, mini: miniCourbe(s.mois.filter(fini).map((m) => m.ca)), vers: "commercial/ventes" })}
-      ${tuile({ libelle: "Marge brute", valeur: compact(s.marge), pied: `taux ${s.taux == null ? "–" : nombre(s.taux, 1) + " %"} · N-1 ${compact(s.margeN1)}`, niveau: s.alertes.some((a) => a.code === "marge") ? "attention" : "", vers: "commercial/articles", titre: "Taux de marge = marge / coût de revient" })}
-      ${tuile({ libelle: "Panier moyen", valeur: compact(s.panierMoyen), pied: `${nombre(s.factures)} factures` })}
+      ${tuile({ libelle: "CA du jour", valeur: montant(s.caJour), pied: new Date().toLocaleDateString("fr-FR") })}
+      ${tuile({ libelle: "CA du mois", valeur: montant(s.caMois), pied: `${variation(s.variationMois)} N-1 ${montant(s.caMoisN1)}`, niveau: s.alertes.some((a) => a.code === "baisseCa") ? "critique" : "" })}
+      ${tuile({ libelle: "CA de l'exercice", valeur: montant(s.caExercice), pied: `${variation(s.variation)} N-1 ${montant(s.caN1)}`, mini: miniCourbe(s.mois.filter(fini).map((m) => m.ca)), vers: "commercial/ventes" })}
+      ${tuile({ libelle: "Marge brute", valeur: montant(s.marge), pied: `taux ${s.taux == null ? "–" : nombre(s.taux, 1) + " %"} · N-1 ${montant(s.margeN1)}`, niveau: s.alertes.some((a) => a.code === "marge") ? "attention" : "", vers: "commercial/articles", titre: "Taux de marge = marge / coût de revient" })}
+      ${tuile({ libelle: "Panier moyen", valeur: montant(s.panierMoyen), pied: `${nombre(s.factures)} factures` })}
       ${tuile({ libelle: "Clients actifs", valeur: nombre(s.clientsActifs), pied: `dont ${nombre(s.nouveauxClients)} nouveaux`, vers: "commercial/clients" })}
-      ${s.objectifMois ? tuile({ libelle: "Objectif du mois", valeur: `${nombre(s.atteinteMois, 0)} %`, pied: `${compact(s.caMois)} / ${compact(s.objectifMois)}`, niveau: s.alertes.some((a) => a.code === "objectif") ? "attention" : "", vers: "commercial/objectifs" })
+      ${s.objectifMois ? tuile({ libelle: "Objectif du mois", valeur: `${nombre(s.atteinteMois, 0)} %`, pied: `${montant(s.caMois)} / ${montant(s.objectifMois)}`, niveau: s.alertes.some((a) => a.code === "objectif") ? "attention" : "", vers: "commercial/objectifs" })
         : etat.meta.droits.objectifs ? tuile({ libelle: "Objectifs", valeur: "–", pied: "à saisir", vers: "commercial/objectifs" }) : ""}
-      ${tuile({ libelle: "Valeur du stock", valeur: compact(s.stock.valeur), pied: `${nombre(s.stock.ruptures)} ruptures · ${nombre(s.stock.dormants)} dormants`, vers: "commercial/stock", niveau: s.stock.ruptures ? "attention" : "" })}
-      ${tuile({ libelle: "Créances clients", valeur: compact(s.creancesClients.total), pied: `échu ${compact(s.creancesClients.echu)}`, vers: "commercial/recouvrement", niveau: s.creancesClients.plus90 > 0 ? "attention" : "" })}
-      ${tuile({ libelle: "Commandes en cours", valeur: compact(s.commandes.montant), pied: `${nombre(s.commandes.nombre)} BC · ${nombre(s.commandesEnRetard.nombre)} en retard · devis ${compact(s.devis.montant)}`, vers: "commercial/commandes" })}
+      ${tuile({ libelle: "Valeur du stock", valeur: montant(s.stock.valeur), pied: `${nombre(s.stock.ruptures)} ruptures · ${nombre(s.stock.dormants)} dormants`, vers: "commercial/stock", niveau: s.stock.ruptures ? "attention" : "" })}
+      ${tuile({ libelle: "Créances clients", valeur: montant(s.creancesClients.total), pied: `échu ${montant(s.creancesClients.echu)}`, vers: "commercial/recouvrement", niveau: s.creancesClients.plus90 > 0 ? "attention" : "" })}
+      ${tuile({ libelle: "Commandes en cours", valeur: montant(s.commandes.montant), pied: `${nombre(s.commandes.nombre)} BC · ${nombre(s.commandesEnRetard.nombre)} en retard · devis ${montant(s.devis.montant)}`, vers: "commercial/commandes" })}
     </section>
     <section class="grille">
       ${carte("l8", "Chiffre d'affaires par mois", "g-ca", `<span class="discret">${date(s.du)} – ${date(s.au)}</span>`)}
@@ -781,7 +792,7 @@ async function clients(c) {
   haut.innerHTML = `<section class="tuiles">
       ${tuile({ libelle: "Clients actifs", valeur: nombre(s.clientsActifs), pied: "facturés sur l'exercice" })}
       ${tuile({ libelle: "Nouveaux clients", valeur: nombre(s.nouveauxClients), pied: "première facture sur l'exercice" })}
-      ${tuile({ libelle: "Panier moyen", valeur: compact(s.panierMoyen), pied: `${nombre(s.factures)} factures` })}
+      ${tuile({ libelle: "Panier moyen", valeur: montant(s.panierMoyen), pied: `${nombre(s.factures)} factures` })}
       ${tuile({ libelle: "À relancer", valeur: nombre(s.aRelancer.length), pied: "habituels sans facture récente", niveau: s.aRelancer.length ? "attention" : "" })}
     </section>`;
   c.appendChild(haut);
@@ -797,7 +808,7 @@ async function commandes(c) {
   const r = await lireCache("/tableau-de-bord/commercial/commandes");
   const liste = r.pieces.filter((p) => f.type === "" || String(p.type) === f.type);
   c.innerHTML = `
-    <section class="tuiles">${r.types.map((t) => tuile({ libelle: t.intitule, valeur: compact(t.montant), pied: `${nombre(t.nombre)} pièce(s)` })).join("")}
+    <section class="tuiles">${r.types.map((t) => tuile({ libelle: t.intitule, valeur: montant(t.montant), pied: `${nombre(t.nombre)} pièce(s)` })).join("")}
       ${tuile({ libelle: "Commandes en retard", valeur: nombre(r.pieces.filter((p) => p.enRetard).length), pied: "date de livraison dépassée", niveau: r.pieces.some((p) => p.enRetard) ? "attention" : "" })}</section>
     <article class="carte l12" style="grid-column:1/-1"><h3><span>Documents en cours</span>
       <span><select id="f-cmd-type"><option value="">Tous</option>${r.types.map((t) => `<option value="${t.type}" ${String(t.type) === f.type ? "selected" : ""}>${t.intitule}</option>`).join("")}</select>
@@ -822,11 +833,11 @@ async function stock(c) {
       <label>Statut <select id="f-st-statut"><option value="">Tous</option>${Object.entries(STATUTS).map(([k, n]) => `<option value="${k}" ${f.statut === k ? "selected" : ""}>${n}</option>`).join("")}</select></label>
     </div>
     <section class="tuiles">
-      ${tuile({ libelle: "Valeur du stock", valeur: compact(t.valeur), pied: `${nombre(t.articles)} articles` })}
+      ${tuile({ libelle: "Valeur du stock", valeur: montant(t.valeur), pied: `${nombre(t.articles)} articles` })}
       ${tuile({ libelle: "Ruptures", valeur: nombre(t.ruptures), niveau: t.ruptures ? "critique" : "", pied: "stock nul avec minimum ou réservé" })}
       ${tuile({ libelle: "Sous le minimum", valeur: nombre(t.sousMini), niveau: t.sousMini ? "attention" : "" })}
       ${tuile({ libelle: "Surstocks", valeur: nombre(t.surstocks), pied: "au-dessus du maximum" })}
-      ${tuile({ libelle: "Stock dormant", valeur: compact(t.valeurDormante), pied: `${nombre(t.dormants)} articles sans sortie récente` })}
+      ${tuile({ libelle: "Stock dormant", valeur: montant(t.valeurDormante), pied: `${nombre(t.dormants)} articles sans sortie récente` })}
       ${tuile({ libelle: "Rotation", valeur: s.rotation == null ? "–" : `${nombre(s.rotation, 1)}×`, pied: s.couvertureJours == null ? "" : `couverture ${nombre(s.couvertureJours)} jours` })}
     </section>
     <section class="grille">

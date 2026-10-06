@@ -2,7 +2,7 @@ namespace Sage100Api.TableauDeBord;
 
 /// <summary>Paramètres du tableau commercial croisé. Domaine : ventes (défaut) ou achats.</summary>
 public sealed record RequeteVentes(string? Domaine, string? Lignes, string? Colonnes, string? Du, string? Au, string? Article, string? Famille,
-    string? Tiers, int? Commercial, int? Depot, int? Categorie, string? Tri, int? Limite);
+    string? Tiers, int? Commercial, int? Depot, int? Categorie, string? Tri, int? Limite, string? Qualite = null);
 
 public static class Commercial
 {
@@ -22,6 +22,7 @@ public static class Commercial
         new("tiers", "Client / fournisseur", f => f.Tiers, k => i.IntituleTiers(k) is { } t ? $"{k} {t}" : k),
         new("categorie", "Catégorie tarifaire", f => i.Tiers.TryGetValue(f.Tiers, out var t) ? t.Categorie?.ToString() : null,
             k => int.TryParse(k, out var c) ? i.Categories.GetValueOrDefault(c) ?? k : k),
+        new("qualite", "Qualité client", f => i.Tiers.TryGetValue(f.Tiers, out var t) ? t.Qualite : null, null),
         new("commercial", "Commercial", f => (f.Commercial ?? i.Representant(f.Tiers))?.ToString(),
             k => int.TryParse(k, out var c) ? i.Collaborateurs.GetValueOrDefault(c) ?? k : k),
         new("depot", "Dépôt", f => f.Depot?.ToString(), k => int.TryParse(k, out var d) ? i.Depots.GetValueOrDefault(d) ?? k : k),
@@ -48,7 +49,8 @@ public static class Commercial
             && (r.Tiers == null || string.Equals(f.Tiers, r.Tiers, StringComparison.OrdinalIgnoreCase))
             && (r.Commercial == null || (f.Commercial ?? i.Representant(f.Tiers)) == r.Commercial)
             && (r.Depot == null || f.Depot == r.Depot)
-            && (r.Categorie == null || (i.Tiers.TryGetValue(f.Tiers, out var t) && t.Categorie == r.Categorie)));
+            && (r.Categorie == null || (i.Tiers.TryGetValue(f.Tiers, out var t) && t.Categorie == r.Categorie))
+            && (r.Qualite == null || (i.Tiers.TryGetValue(f.Tiers, out var q) && string.Equals(q.Qualite, r.Qualite, StringComparison.OrdinalIgnoreCase))));
     }
 
     public static ResultatCube Croiser(Instantane i, RequeteVentes r, Perimetre p, DateTime aujourdhui)
@@ -68,6 +70,11 @@ public static class Commercial
         int? commercial = r.Commercial, depot = r.Depot;
         List<string>? articles = r.Famille == null ? null : i.Articles.Values.Where(a => a.Famille == r.Famille).Select(a => a.Reference).ToList();
         List<string>? tiersListe = r.Categorie == null ? null : i.Tiers.Values.Where(t => t.Categorie == r.Categorie).Select(t => t.Numero).ToList();
+        if (r.Qualite != null)
+        {
+            var deQualite = i.Tiers.Values.Where(t => string.Equals(t.Qualite, r.Qualite, StringComparison.OrdinalIgnoreCase)).Select(t => t.Numero);
+            tiersListe = tiersListe == null ? deQualite.ToList() : tiersListe.Intersect(deQualite).ToList();
+        }
         foreach (var (axe, cle) in new[] { (r.Lignes ?? "famille", cleLigne), (r.Colonnes, cleColonne) })
         {
             if (axe == null || cle == null) continue;
@@ -99,6 +106,10 @@ public static class Commercial
                     var cat = int.TryParse(cle, out var c) ? c : (int?)null;
                     var dansCat = i.Tiers.Values.Where(x => x.Categorie == cat).Select(x => x.Numero);
                     tiersListe = tiersListe == null ? dansCat.ToList() : tiersListe.Intersect(dansCat).ToList();
+                    break;
+                case "qualite":
+                    var deQ = i.Tiers.Values.Where(x => string.Equals(x.Qualite ?? "", cle, StringComparison.OrdinalIgnoreCase)).Select(x => x.Numero);
+                    tiersListe = tiersListe == null ? deQ.ToList() : tiersListe.Intersect(deQ).ToList();
                     break;
                 case "commercial" when int.TryParse(cle, out var co): commercial = co; break;
                 case "depot" when int.TryParse(cle, out var d): depot = d; break;
@@ -199,13 +210,13 @@ public static class Commercial
             alertes.Add(new("attention", "marge", Periodes.Texte($"Taux de marge de {t:N1} %, sous le seuil de {seuils.TauxMargeMini:N0} %.")));
         if (objectifMois is > 0 && caMois < objectifMois * (decimal)aujourdhui.Day / DateTime.DaysInMonth(aujourdhui.Year, aujourdhui.Month)
             && Periodes.Mois(au) == Periodes.Mois(aujourdhui))
-            alertes.Add(new("attention", "objectif", Periodes.Texte($"Objectif du mois en retard : {caMois:N0} réalisés sur {objectifMois:N0}.")));
+            alertes.Add(new("attention", "objectif", Periodes.Texte($"Objectif du mois en retard : {caMois:N2} réalisés sur {objectifMois:N2}.")));
         if (aRelancer.Count > 0)
             alertes.Add(new("info", "relance", Periodes.Texte($"{aRelancer.Count} client(s) habituel(s) sans facture depuis {seuils.JoursSansCommande} jours.")));
         if (stock.Ruptures > 0)
             alertes.Add(new("attention", "rupture", Periodes.Texte($"{stock.Ruptures} article(s) en rupture, {stock.SousMini} sous le stock minimum.")));
         if (creances.Plus90 > 0)
-            alertes.Add(new("attention", "creances90", Periodes.Texte($"Créances clients de plus de 90 jours : {creances.Plus90:N0}.")));
+            alertes.Add(new("attention", "creances90", Periodes.Texte($"Créances clients de plus de 90 jours : {creances.Plus90:N2}.")));
         if (bcEnRetard.Count > 0)
             alertes.Add(new("info", "bcRetard", Periodes.Texte($"{bcEnRetard.Count} commande(s) client dont la date de livraison est dépassée.")));
 

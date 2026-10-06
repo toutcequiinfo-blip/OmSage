@@ -40,16 +40,17 @@ public static class Creances
         return new Tranches(ne, r1, r31, r61, r90, cr, ne + r1 + r31 + r61 + r90 + cr);
     }
 
-    /// <summary>Échéances retenues : type de tiers, périmètre du vendeur, filtres commercial (représentant du tiers) et catégorie tarifaire.</summary>
-    public static IEnumerable<EcheanceTiers> Filtrer(Instantane i, int type, Perimetre p, int? commercial, int? categorie) =>
+    /// <summary>Échéances retenues : type de tiers, périmètre du vendeur, filtres commercial (représentant du tiers), catégorie tarifaire et qualité.</summary>
+    public static IEnumerable<EcheanceTiers> Filtrer(Instantane i, int type, Perimetre p, int? commercial, int? categorie, string? qualite = null) =>
         i.Echeances.Where(e => e.Type == type
             && (type != 0 || p.Autorise(i, e.Tiers))
             && (commercial == null || i.Representant(e.Tiers) == commercial)
-            && (categorie == null || (i.Tiers.TryGetValue(e.Tiers, out var t) && t.Categorie == categorie)));
+            && (categorie == null || (i.Tiers.TryGetValue(e.Tiers, out var t) && t.Categorie == categorie))
+            && (qualite == null || (i.Tiers.TryGetValue(e.Tiers, out var q) && string.Equals(q.Qualite, qualite, StringComparison.OrdinalIgnoreCase))));
 
-    public static object Analyse(Instantane i, int type, Perimetre p, int? commercial, int? categorie, DateTime aujourdhui)
+    public static object Analyse(Instantane i, int type, Perimetre p, int? commercial, int? categorie, DateTime aujourdhui, string? qualite = null)
     {
-        var echeances = Filtrer(i, type, p, commercial, categorie).ToList();
+        var echeances = Filtrer(i, type, p, commercial, categorie, qualite).ToList();
         var total = Ventiler(echeances, aujourdhui);
         var derniereFacture = i.Pieces.Where(x => x.Domaine == type && !x.Avoir).GroupBy(x => x.Tiers)
             .ToDictionary(g => g.Key, g => g.Max(x => x.Date), StringComparer.OrdinalIgnoreCase);
@@ -77,7 +78,9 @@ public static class Creances
         // Encaissements (clients) ou décaissements (fournisseurs) des 12 derniers mois, par mode de règlement et par mois.
         var depuis = Periodes.DebutMois(aujourdhui).AddMonths(-11);
         var reglements = i.Reglements.Where(r => r.Type == type && r.Mois >= depuis && (type != 0 || p.Autorise(i, r.Tiers))
-            && (commercial == null || i.Representant(r.Tiers) == commercial)).ToList();
+            && (commercial == null || i.Representant(r.Tiers) == commercial)
+            && (categorie == null || (i.Tiers.TryGetValue(r.Tiers, out var t) && t.Categorie == categorie))
+            && (qualite == null || (i.Tiers.TryGetValue(r.Tiers, out var q) && string.Equals(q.Qualite, qualite, StringComparison.OrdinalIgnoreCase)))).ToList();
 
         return new
         {
@@ -89,6 +92,9 @@ public static class Creances
             tiers = parTiers.Take(1000).ToList(),
             parCommercial = type == 0 ? Grouper(e => i.Representant(e.Tiers), k => i.Collaborateurs.GetValueOrDefault(k)) : [],
             parCategorie = type == 0 ? Grouper(e => i.Tiers.TryGetValue(e.Tiers, out var t) ? t.Categorie : null, k => i.Categories.GetValueOrDefault(k)) : [],
+            parQualite = type == 0 ? echeances.GroupBy(e => i.Tiers.TryGetValue(e.Tiers, out var t) ? t.Qualite ?? "" : "")
+                .Select(g => new LigneGroupe(g.Key, g.Key.Length > 0 ? g.Key : "(non renseignée)", Ventiler(g, aujourdhui), g.Select(e => e.Tiers).Distinct().Count()))
+                .Where(l => l.Tranches.Total != 0).OrderByDescending(l => l.Tranches.Echu).ToList() : [],
             reglementsParMode = reglements.GroupBy(r => r.Mode)
                 .Select(g => new { mode = g.Key, intitule = i.ModesReglement.GetValueOrDefault(g.Key) ?? $"Mode {g.Key}", montant = g.Sum(r => r.Montant), nombre = g.Sum(r => r.Nombre) })
                 .OrderByDescending(x => x.montant).ToList(),

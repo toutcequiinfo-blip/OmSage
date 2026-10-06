@@ -6,7 +6,9 @@ export const COULEURS = ["var(--c1)", "var(--c2)", "var(--c3)", "var(--c4)", "va
 const echapper = (t) => String(t ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 
 export const nombre = (n, d = 0) => (Number(n) || 0).toLocaleString("fr-FR", { maximumFractionDigits: d, minimumFractionDigits: d });
-/** 1 234 567 -> « 1,23 M » : valeurs des tuiles et des axes. */
+/** Montant complet pour les infobulles et légendes : 1 234 567,00. */
+export const montant = (n) => nombre(n, 2);
+/** 1 234 567 -> « 1,23 M » : graduations des axes (place comptée). */
 export function compact(n) {
   const v = Number(n) || 0, a = Math.abs(v);
   if (a >= 1e9) return nombre(v / 1e9, a >= 1e10 ? 1 : 2) + " Md";
@@ -78,7 +80,7 @@ function legende(conteneur, series) {
  * Barres verticales (groupées ou empilées) avec courbes éventuelles par-dessus.
  * series : [{ nom, valeurs, couleur, type: "barre" | "ligne", pointille }]
  */
-export function barres(conteneur, { categories, series, empile = false, hauteur = 220, format = compact, surClic }) {
+export function barres(conteneur, { categories, series, empile = false, hauteur = 220, format = montant, surClic }) {
   conteneur.innerHTML = "";
   if (!categories.length) { conteneur.innerHTML = '<p class="vide">Aucune donnée.</p>'; return; }
   legende(conteneur, series);
@@ -143,7 +145,7 @@ export function barres(conteneur, { categories, series, empile = false, hauteur 
 }
 
 /** Courbes (avec aire sous la première), pour la trésorerie ou un CA cumulé. */
-export function courbes(conteneur, { categories, series, hauteur = 220, format = compact }) {
+export function courbes(conteneur, { categories, series, hauteur = 220, format = montant }) {
   conteneur.innerHTML = "";
   if (!categories.length) { conteneur.innerHTML = '<p class="vide">Aucune donnée.</p>'; return; }
   legende(conteneur, series);
@@ -184,7 +186,7 @@ export function courbes(conteneur, { categories, series, hauteur = 220, format =
 }
 
 /** Barres horizontales classées (Top 10). items : [{ libelle, valeur, reference, detail, couleur }] */
-export function barresH(conteneur, items, { format = compact, surClic, couleur = "var(--c1)", max } = {}) {
+export function barresH(conteneur, items, { format = montant, surClic, couleur = "var(--c1)", max } = {}) {
   if (!items.length) { conteneur.innerHTML = '<p class="vide">Aucune donnée.</p>'; return; }
   const m = max ?? Math.max(...items.map((i) => Math.max(Math.abs(i.valeur), Math.abs(i.reference ?? 0))), 1);
   conteneur.innerHTML = `<div class="barresh">${items.map((it, k) => `
@@ -198,7 +200,7 @@ export function barresH(conteneur, items, { format = compact, surClic, couleur =
 }
 
 /** Anneau de répartition avec légende chiffrée. parts : [{ libelle, valeur }] */
-export function anneau(conteneur, parts, { format = compact, surClic, max = 7 } = {}) {
+export function anneau(conteneur, parts, { format = montant, surClic, max = 7 } = {}) {
   const positives = parts.filter((p) => p.valeur > 0).sort((a, b) => b.valeur - a.valeur);
   if (!positives.length) { conteneur.innerHTML = '<p class="vide">Aucune donnée.</p>'; return; }
   const gardees = positives.slice(0, max);

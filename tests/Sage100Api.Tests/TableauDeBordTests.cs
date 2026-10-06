@@ -130,6 +130,20 @@ public sealed class TableauDeBordTests : IDisposable
     }
 
     [Fact]
+    public async Task Le_cube_des_ventes_analyse_et_filtre_par_qualite_client()
+    {
+        var i = await Instantane();
+        var parQualite = Commercial.Croiser(i, new RequeteVentes(null, "qualite", null, null, null, null, null, null, null, null, null, null, null), Direction, Aujourdhui);
+        var tout = Commercial.Croiser(i, new RequeteVentes(null, "tiers", null, null, null, null, null, null, null, null, null, null, null), Direction, Aujourdhui);
+        Assert.Contains(parQualite.Lignes, l => l.Cle == "Grossiste");
+        Assert.Equal(tout.Total.Total["ca"], parQualite.Total.Total["ca"]);
+
+        var grossistes = Commercial.Croiser(i, new RequeteVentes(null, "tiers", null, null, null, null, null, null, null, null, null, null, null, "grossiste"), Direction, Aujourdhui);
+        Assert.All(grossistes.Lignes, l => Assert.Equal("CISEL", l.Cle));
+        Assert.Equal(parQualite.Lignes.Single(l => l.Cle == "Grossiste").Total["ca"], grossistes.Total.Total["ca"]);
+    }
+
+    [Fact]
     public async Task Au_dela_de_la_limite_les_lignes_sont_regroupees_dans_Autres()
     {
         var i = await Instantane();
@@ -364,8 +378,8 @@ sealed class FaussesLecturesTableauDeBord : ILecturesTableauDeBord
     public Task<IReadOnlyList<RefJournal>> Journaux() => L(new RefJournal { Code = "VTE", Intitule = "Ventes", Type = 1 },
         new RefJournal { Code = "ACH", Intitule = "Achats", Type = 0 }, new RefJournal { Code = "BQ", Intitule = "Banque", Type = 2 },
         new RefJournal { Code = "RAN", Intitule = "Reports", Type = 3 });
-    public Task<IReadOnlyList<RefTiers>> Tiers() => L(new RefTiers { Numero = "CISEL", Intitule = "Ciselure", Type = 0, Representant = 3, Categorie = 1 },
-        new RefTiers { Numero = "BAGUES", Intitule = "Bagues & Co", Type = 0, Representant = 4, Categorie = 2 },
+    public Task<IReadOnlyList<RefTiers>> Tiers() => L(new RefTiers { Numero = "CISEL", Intitule = "Ciselure", Type = 0, Representant = 3, Categorie = 1, Qualite = "Grossiste" },
+        new RefTiers { Numero = "BAGUES", Intitule = "Bagues & Co", Type = 0, Representant = 4, Categorie = 2, Qualite = "Détaillant" },
         new RefTiers { Numero = "FOUR", Intitule = "Fournisseur Or", Type = 1 });
     public Task<IReadOnlyList<RefCode>> Plans() => L(new RefCode { Numero = 1, Intitule = "Activité" }, new RefCode { Numero = 2, Intitule = "Région" });
     public Task<IReadOnlyList<RefSection>> Sections() => L(new RefSection { Plan = 1, Numero = "COMMERCE", Intitule = "Commerce" });

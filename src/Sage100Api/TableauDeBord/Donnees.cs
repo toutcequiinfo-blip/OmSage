@@ -168,6 +168,8 @@ public sealed class RefTiers
     /// <summary>Représentant (CO_No de la fiche).</summary>
     public int? Representant { get; init; }
     public int? Categorie { get; init; }
+    /// <summary>Qualité de la fiche (CT_Qualite, texte libre : Grossiste, Détaillant...).</summary>
+    public string? Qualite { get; init; }
     public DateTime? Creation { get; init; }
 }
 public sealed class RefSection { public int Plan { get; init; } public string Numero { get; init; } = ""; public string? Intitule { get; init; } }
@@ -348,7 +350,8 @@ public sealed class LecturesTableauDeBordSql(Dossiers dossiers, IOptionsMonitor<
 
     public Task<IReadOnlyList<RefTiers>> Tiers() => Lire<RefTiers>(
         "SELECT CT_Num AS Numero, CT_Intitule AS Intitule, CAST(CT_Type AS int) AS Type, NULLIF(CO_No, 0) AS Representant, " +
-        "NULLIF(CAST(N_CatTarif AS int), 0) AS Categorie, NULLIF(CT_DateCreate, '1900-01-01') AS Creation FROM F_COMPTET");
+        "NULLIF(CAST(N_CatTarif AS int), 0) AS Categorie, NULLIF(LTRIM(RTRIM(CT_Qualite)), '') AS Qualite, " +
+        "NULLIF(CT_DateCreate, '1900-01-01') AS Creation FROM F_COMPTET");
 
     public Task<IReadOnlyList<RefCode>> Plans() =>
         Lire<RefCode>("SELECT CAST(cbIndice AS int) AS Numero, A_Intitule AS Intitule FROM P_ANALYTIQUE WHERE A_Intitule <> ''");
