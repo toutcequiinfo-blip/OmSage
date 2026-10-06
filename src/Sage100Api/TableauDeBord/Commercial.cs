@@ -42,7 +42,7 @@ public static class Commercial
     {
         var domaine = Domaine(r.Domaine);
         var (du, au) = Comptabilite.Bornes(i, r.Du, r.Au, aujourdhui);
-        return i.Lignes.Where(f => f.Domaine == domaine && f.Mois >= du && f.Mois <= au
+        return i.Lignes.Where(f => f.Domaine == domaine && f.Date >= du && f.Date <= au
             && (domaine == 1 || p.Autorise(i, f.Tiers, f.Commercial))
             && (r.Article == null || string.Equals(f.Article, r.Article, StringComparison.OrdinalIgnoreCase))
             && (r.Famille == null || string.Equals(i.Famille(f.Article), r.Famille, StringComparison.OrdinalIgnoreCase))
@@ -79,23 +79,13 @@ public static class Commercial
         {
             if (axe == null || cle == null) continue;
             if (cle == Cube.CleAutres) return null;
+            if (axe is "exercice" or "annee" or "trimestre" or "mois")
+            {
+                if (!Periodes.Restreindre(i, axe, cle, ref du, ref au)) return null;
+                continue;
+            }
             switch (axe)
             {
-                case "exercice":
-                    var e = i.Exercices.FirstOrDefault(x => Periodes.CleExercice(x) == cle);
-                    if (e == null) return null;
-                    (du, au) = (Max(du, Periodes.DebutMois(e.Debut)), Min(au, Periodes.DebutMois(e.Fin)));
-                    break;
-                case "annee" when int.TryParse(cle, out var an):
-                    (du, au) = (Max(du, new DateTime(an, 1, 1)), Min(au, new DateTime(an, 12, 1)));
-                    break;
-                case "trimestre" when cle.Length == 7 && int.TryParse(cle[..4], out var at) && int.TryParse(cle[6..], out var t):
-                    (du, au) = (Max(du, new DateTime(at, t * 3 - 2, 1)), Min(au, new DateTime(at, t * 3, 1)));
-                    break;
-                case "mois":
-                    var m = Periodes.LireMois(cle, du);
-                    (du, au) = (Max(du, m), Min(au, m));
-                    break;
                 case "article": article = cle; break;
                 case "famille":
                     var membres = i.Articles.Values.Where(a => (a.Famille ?? "") == cle).Select(a => a.Reference);
@@ -128,8 +118,6 @@ public static class Commercial
         return new FiltreDetailVentes(Domaine(r.Domaine), du, au, article, articles, tiers, tiersListe, commercial, depot, 500);
     }
 
-    static DateTime Max(DateTime a, DateTime b) => a > b ? a : b;
-    static DateTime Min(DateTime a, DateTime b) => a < b ? a : b;
 
     public sealed record PointMensuel(string Mois, decimal Ca, decimal Marge, decimal? CaN1, decimal? MargeN1, decimal? Objectif);
     public sealed record Classement(string Cle, string? Intitule, decimal Ca, decimal Marge, decimal? Taux, decimal Quantite, decimal? CaN1);

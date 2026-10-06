@@ -24,7 +24,7 @@ button:hover { border-color: var(--accent); }
 button.principal { background: var(--accent); border-color: var(--accent); color: #06121c; font-weight: 600; }
 button.lien { border: 0; background: none; color: var(--accent); padding: 0 4px; min-height: 0; }
 input, select { background: var(--panneau2); border: 1px solid var(--bord); border-radius: 8px; min-height: 34px; padding: 0 8px; }
-input[type="month"] { padding: 0 6px; }
+input[type="month"], input[type="date"] { padding: 0 6px; }
 .discret { color: var(--discret); font-size: .85rem; }
 .erreur { color: var(--erreur); }
 .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }

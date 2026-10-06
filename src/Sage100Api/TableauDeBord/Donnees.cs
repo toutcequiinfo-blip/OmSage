@@ -53,6 +53,9 @@ public sealed record Exercice(int Numero, DateTime Debut, DateTime Fin);
 public sealed class FaitCompta
 {
     public DateTime Mois { get; init; }
+    /// <summary>Jour des écritures (les filtres Du / Au sont au jour près) ; à défaut, le mois.</summary>
+    public DateTime Date { get => _date == default ? Mois : _date; init => _date = value; }
+    DateTime _date;
     public string Compte { get; init; } = "";
     public string Journal { get; init; } = "";
     public string? Tiers { get; init; }
@@ -63,10 +66,13 @@ public sealed class FaitCompta
     public int Nombre { get; init; }
 }
 
-/// <summary>Ventilation analytique (F_ECRITUREA) par mois, plan, section, compte et journal. Montant positif = débit.</summary>
+/// <summary>Ventilation analytique (F_ECRITUREA) par jour, plan, section, compte et journal. Montant positif = débit.</summary>
 public sealed class FaitAnalytique
 {
     public DateTime Mois { get; init; }
+    /// <summary>Jour des écritures (les filtres Du / Au sont au jour près) ; à défaut, le mois.</summary>
+    public DateTime Date { get => _date == default ? Mois : _date; init => _date = value; }
+    DateTime _date;
     public int Plan { get; init; }
     public string Section { get; init; } = "";
     public string Compte { get; init; } = "";
@@ -75,7 +81,7 @@ public sealed class FaitAnalytique
 }
 
 /// <summary>
-/// Lignes de factures (ventes : DO_Type 6, 7 ; achats : 16, 17) regroupées par mois, article, tiers, commercial et dépôt.
+/// Lignes de factures (ventes : DO_Type 6, 7 ; achats : 16, 17) regroupées par jour, article, tiers, commercial et dépôt.
 /// Les factures de retour et d'avoir (DO_Provenance 1, 2) sont en négatif.
 /// </summary>
 public sealed class FaitLigne
@@ -83,6 +89,9 @@ public sealed class FaitLigne
     /// <summary>0 = vente, 1 = achat.</summary>
     public int Domaine { get; init; }
     public DateTime Mois { get; init; }
+    /// <summary>Jour des factures (les filtres Du / Au sont au jour près) ; à défaut, le mois.</summary>
+    public DateTime Date { get => _date == default ? Mois : _date; init => _date = value; }
+    DateTime _date;
     public string Article { get; init; } = "";
     public string Tiers { get; init; } = "";
     public int? Commercial { get; init; }
@@ -275,30 +284,30 @@ public sealed class LecturesTableauDeBordSql(Dossiers dossiers, IOptionsMonitor<
     }
 
     public Task<IReadOnlyList<FaitCompta>> Compta(DateTime depuis) => Lire<FaitCompta>(
-        "SELECT e.JM_Date AS Mois, e.CG_Num AS Compte, e.JO_Num AS Journal, NULLIF(e.CT_Num, '') AS Tiers, " +
+        "SELECT e.JM_Date AS Mois, DATEADD(day, e.EC_Jour - 1, e.JM_Date) AS Date, e.CG_Num AS Compte, e.JO_Num AS Journal, NULLIF(e.CT_Num, '') AS Tiers, " +
         "CAST(CASE WHEN e.EC_ANType <> 0 THEN 1 ELSE 0 END AS bit) AS ANouveau, " +
         "CAST(SUM(CASE WHEN e.EC_Sens = 0 THEN e.EC_Montant ELSE 0 END) AS decimal(18,2)) AS Debit, " +
         "CAST(SUM(CASE WHEN e.EC_Sens = 1 THEN e.EC_Montant ELSE 0 END) AS decimal(18,2)) AS Credit, COUNT(*) AS Nombre " +
         "FROM F_ECRITUREC e " + JournauxReels +
         "WHERE e.JM_Date >= @depuis " +
-        "GROUP BY e.JM_Date, e.CG_Num, e.JO_Num, NULLIF(e.CT_Num, ''), CASE WHEN e.EC_ANType <> 0 THEN 1 ELSE 0 END", new { depuis });
+        "GROUP BY e.JM_Date, e.EC_Jour, e.CG_Num, e.JO_Num, NULLIF(e.CT_Num, ''), CASE WHEN e.EC_ANType <> 0 THEN 1 ELSE 0 END", new { depuis });
 
     public Task<IReadOnlyList<FaitAnalytique>> Analytique(DateTime depuis) => Lire<FaitAnalytique>(
-        "SELECT e.JM_Date AS Mois, CAST(a.N_Analytique AS int) AS [Plan], a.CA_Num AS Section, e.CG_Num AS Compte, e.JO_Num AS Journal, " +
+        "SELECT e.JM_Date AS Mois, DATEADD(day, e.EC_Jour - 1, e.JM_Date) AS Date, CAST(a.N_Analytique AS int) AS [Plan], a.CA_Num AS Section, e.CG_Num AS Compte, e.JO_Num AS Journal, " +
         "CAST(SUM(CASE WHEN e.EC_Sens = 0 THEN a.EA_Montant ELSE -a.EA_Montant END) AS decimal(18,2)) AS Montant " +
         "FROM F_ECRITUREA a JOIN F_ECRITUREC e ON e.EC_No = a.EC_No " + JournauxReels +
         "WHERE e.JM_Date >= @depuis AND e.EC_ANType = 0 " +
-        "GROUP BY e.JM_Date, a.N_Analytique, a.CA_Num, e.CG_Num, e.JO_Num", new { depuis });
+        "GROUP BY e.JM_Date, e.EC_Jour, a.N_Analytique, a.CA_Num, e.CG_Num, e.JO_Num", new { depuis });
 
     public Task<IReadOnlyList<FaitLigne>> Lignes(DateTime depuis) => Lire<FaitLigne>(
-        "SELECT CAST(e.DO_Domaine AS int) AS Domaine, DATEFROMPARTS(YEAR(e.DO_Date), MONTH(e.DO_Date), 1) AS Mois, l.AR_Ref AS Article, " +
+        "SELECT CAST(e.DO_Domaine AS int) AS Domaine, DATEFROMPARTS(YEAR(e.DO_Date), MONTH(e.DO_Date), 1) AS Mois, e.DO_Date AS Date, l.AR_Ref AS Article, " +
         "e.DO_Tiers AS Tiers, NULLIF(e.CO_No, 0) AS Commercial, NULLIF(l.DE_No, 0) AS Depot, " +
         $"CAST(SUM({Signe} * l.DL_MontantHT) AS decimal(18,2)) AS MontantHT, " +
         $"CAST(SUM({Signe} * ABS(l.DL_Qte)) AS decimal(18,4)) AS Quantite, " +
         $"CAST(SUM({Signe} * ABS(l.DL_Qte) * l.DL_PrixRU) AS decimal(18,2)) AS Cout " +
         "FROM F_DOCLIGNE l JOIN F_DOCENTETE e ON e.DO_Domaine = l.DO_Domaine AND e.DO_Type = l.DO_Type AND e.DO_Piece = l.DO_Piece " +
         $"WHERE {Factures} AND e.DO_Date >= @depuis AND l.AR_Ref <> '' " +
-        "GROUP BY e.DO_Domaine, DATEFROMPARTS(YEAR(e.DO_Date), MONTH(e.DO_Date), 1), l.AR_Ref, e.DO_Tiers, NULLIF(e.CO_No, 0), NULLIF(l.DE_No, 0)",
+        "GROUP BY e.DO_Domaine, e.DO_Date, l.AR_Ref, e.DO_Tiers, NULLIF(e.CO_No, 0), NULLIF(l.DE_No, 0)",
         new { depuis });
 
     public Task<IReadOnlyList<FaitPiece>> Pieces(DateTime depuis) => Lire<FaitPiece>(
@@ -377,13 +386,13 @@ public sealed class LecturesTableauDeBordSql(Dossiers dossiers, IOptionsMonitor<
 
     public Task<IReadOnlyList<DetailEcriture>> DetailCompta(FiltreDetailCompta f)
     {
-        var p = new DynamicParameters(new { du = f.Du, au = f.Au, tiers = f.Tiers, taille = f.Taille });
+        var p = new DynamicParameters(new { du = f.Du, au = f.Au, duMois = Periodes.DebutMois(f.Du), tiers = f.Tiers, taille = f.Taille });
         var sql = "SELECT TOP (@taille) DATEADD(day, e.EC_Jour - 1, e.JM_Date) AS Date, e.JO_Num AS Journal, NULLIF(e.EC_Piece, '') AS Piece, " +
             "e.CG_Num AS Compte, NULLIF(e.CT_Num, '') AS Tiers, NULLIF(e.EC_Intitule, '') AS Libelle, NULLIF(e.EC_Echeance, '1900-01-01') AS Echeance, " +
             "CAST(CASE WHEN e.EC_Sens = 0 THEN e.EC_Montant ELSE 0 END AS decimal(18,2)) AS Debit, " +
             "CAST(CASE WHEN e.EC_Sens = 1 THEN e.EC_Montant ELSE 0 END AS decimal(18,2)) AS Credit, NULLIF(e.EC_Lettrage, '') AS Lettrage " +
             "FROM F_ECRITUREC e " + JournauxReels +
-            "WHERE e.JM_Date >= @du AND e.JM_Date <= @au AND (@tiers IS NULL OR e.CT_Num = @tiers) " +
+            "WHERE e.JM_Date >= @duMois AND e.JM_Date <= @au AND DATEADD(day, e.EC_Jour - 1, e.JM_Date) BETWEEN @du AND @au AND (@tiers IS NULL OR e.CT_Num = @tiers) " +
             (f.ANouveaux ? "" : "AND e.EC_ANType = 0 ");
         sql += Prefixes("e.CG_Num", f.Comptes, p, "cpt") + Liste("e.JO_Num", f.Journaux, p, "jo");
         return Lire<DetailEcriture>(sql + " ORDER BY e.JM_Date, e.EC_Jour, e.EC_No", p);
@@ -391,7 +400,7 @@ public sealed class LecturesTableauDeBordSql(Dossiers dossiers, IOptionsMonitor<
 
     public Task<IReadOnlyList<DetailLigne>> DetailVentes(FiltreDetailVentes f)
     {
-        var p = new DynamicParameters(new { domaine = f.Domaine, du = f.Du, au = f.Au.AddMonths(1), article = f.Article, tiers = f.Tiers,
+        var p = new DynamicParameters(new { domaine = f.Domaine, du = f.Du, au = f.Au.AddDays(1), article = f.Article, tiers = f.Tiers,
             commercial = f.Commercial, depot = f.Depot, taille = f.Taille });
         var sql = "SELECT TOP (@taille) e.DO_Date AS Date, e.DO_Piece AS Piece, e.DO_Tiers AS Tiers, l.AR_Ref AS Article, l.DL_Design AS Designation, " +
             $"CAST({Signe} * ABS(l.DL_Qte) AS decimal(18,4)) AS Quantite, CAST({Signe} * l.DL_MontantHT AS decimal(18,2)) AS MontantHT, " +
