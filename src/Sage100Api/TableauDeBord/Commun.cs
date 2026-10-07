@@ -28,13 +28,21 @@ public sealed record Perimetre(string Profil, int? Collaborateur, string? Utilis
     public bool Autorise(Instantane i, string? tiers, int? commercial = null) =>
         !Restreint || (Collaborateur is { } co && (commercial == co || i.Representant(tiers) == co));
 
-    /// <summary>Profil d'un utilisateur : ligne de la configuration, sinon administrateur = Direction, vendeur = Vendeur, sinon le profil par défaut.</summary>
+    /// <summary>
+    /// Profil d'un utilisateur : ligne de la configuration, sinon administrateur = Direction, sinon d'après l'onglet Profil de sa fiche
+    /// collaborateur Sage (chef des ventes et responsable financier = Direction, responsable financier ou chargé de recouvrement = Comptable,
+    /// chef des ventes = Commercial, vendeur = Vendeur), sinon le profil par défaut.
+    /// </summary>
     public static Perimetre De(Utilisateur? u, TableauDeBordOptions o, bool authentificationActive)
     {
         if (u == null) return new(authentificationActive ? Aucun : Direction, null, null);
         var profil = o.Profils.TryGetValue(u.Login, out var p) ? p
             : u.Administrateur ? Direction
-            : u.Vendeur && u.Collaborateur != null ? Vendeur
+            : u.Collaborateur == null ? o.ProfilParDefaut
+            : u.ChefVentes && u.Financier ? Direction
+            : u.Financier || u.Recouvrement ? Comptable
+            : u.ChefVentes ? Commercial
+            : u.Vendeur ? Vendeur
             : o.ProfilParDefaut;
         profil = Profils.FirstOrDefault(x => x.Equals(profil?.Trim(), StringComparison.OrdinalIgnoreCase)) ?? Aucun;
         return new(profil, u.Collaborateur, u.Login);

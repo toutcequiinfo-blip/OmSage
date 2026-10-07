@@ -74,8 +74,12 @@ public sealed record LignePiece(string? Article, string? Designation, string? Ga
 /// <summary>Bon de commande et ses lignes, pour le consulter depuis la borne (loupe).</summary>
 public sealed record DetailPiece(CommandeOuverte Entete, decimal TotalHT, IReadOnlyList<LignePiece> Lignes);
 
-/// <summary>Collaborateur Sage (F_COLLABORATEUR) rattaché à un utilisateur Sage, avec ses cases Vendeur et Caissier.</summary>
-public sealed record Collaborateur(int Numero, string Nom, string? Prenom, bool Vendeur, bool Caissier);
+/// <summary>
+/// Collaborateur Sage (F_COLLABORATEUR) rattaché à un utilisateur Sage, avec les cases de son onglet Profil :
+/// Vendeur, Caissier, Chef des ventes, Responsable financier, Chargé de recouvrement.
+/// </summary>
+public sealed record Collaborateur(int Numero, string Nom, string? Prenom, bool Vendeur, bool Caissier,
+    bool ChefVentes = false, bool Financier = false, bool Recouvrement = false);
 
 /// <summary>Lectures directes en SQL. Codes et champs : « Structure des bases Sage 100 ».</summary>
 public interface ILecturesSage
@@ -227,7 +231,8 @@ public sealed class LecturesSql(Dossiers dossiers) : ILecturesSage
         using var c = Cnx();
         return await c.QueryFirstOrDefaultAsync<Collaborateur>(
             "SELECT TOP 1 co.CO_No AS Numero, co.CO_Nom AS Nom, NULLIF(co.CO_Prenom, '') AS Prenom, " +
-            "CAST(co.CO_Vendeur AS bit) AS Vendeur, CAST(co.CO_Caissier AS bit) AS Caissier " +
+            "CAST(co.CO_Vendeur AS bit) AS Vendeur, CAST(co.CO_Caissier AS bit) AS Caissier, " +
+            "CAST(co.CO_ChefVentes AS bit) AS ChefVentes, CAST(co.CO_Financier AS bit) AS Financier, CAST(co.CO_ChargeRecouvr AS bit) AS Recouvrement " +
             "FROM F_COLLABORATEUR co WHERE co.PROT_No > 0 AND co.PROT_No IN (" +
             "SELECT PROT_No FROM F_PROTECTIONCIAL WHERE PROT_User = @utilisateur " +
             "UNION SELECT PROT_No FROM F_PROTECTIONCPTA WHERE PROT_User = @utilisateur) " +

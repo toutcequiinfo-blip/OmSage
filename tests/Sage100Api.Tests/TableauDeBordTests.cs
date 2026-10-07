@@ -364,6 +364,24 @@ public sealed class TableauDeBordTests : IDisposable
         Assert.NotEmpty(i.Compta);
         Assert.Contains(i.Erreurs, e => e.StartsWith("stocks"));
     }
+    [Fact]
+    public void Le_profil_suit_les_cases_de_la_fiche_collaborateur_Sage()
+    {
+        var o = new TableauDeBordOptions();
+        string P(bool vendeur = false, bool chef = false, bool financier = false, bool recouvrement = false, int? co = 5, bool admin = false) =>
+            Perimetre.De(new Utilisateur("USER", admin, co, "USER", null, vendeur, false, DateTime.UtcNow.AddHours(1), null, chef, financier, recouvrement), o, true).Profil;
+
+        Assert.Equal(Perimetre.Direction, P(vendeur: true, chef: true, financier: true, recouvrement: true));
+        Assert.Equal(Perimetre.Comptable, P(financier: true));
+        Assert.Equal(Perimetre.Comptable, P(vendeur: true, recouvrement: true));
+        Assert.Equal(Perimetre.Commercial, P(vendeur: true, chef: true));
+        Assert.Equal(Perimetre.Vendeur, P(vendeur: true));
+        Assert.Equal(Perimetre.Aucun, P());
+        Assert.Equal(Perimetre.Aucun, P(chef: true, co: null));
+        Assert.Equal(Perimetre.Direction, P(admin: true, co: null));
+        o.Profils["USER"] = "Vendeur";
+        Assert.Equal(Perimetre.Vendeur, P(chef: true, financier: true));
+    }
 }
 
 sealed class OptionsFixes<T>(T valeur) : Microsoft.Extensions.Options.IOptionsMonitor<T>

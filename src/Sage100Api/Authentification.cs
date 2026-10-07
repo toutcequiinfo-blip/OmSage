@@ -11,10 +11,10 @@ namespace Sage100Api;
 
 /// <summary>
 /// Utilisateur connecté, porté par le jeton. Collaborateur : fiche collaborateur Sage rattachée au login
-/// (mise sur les bons de commande) ; Caissier : case Caissier de cette fiche.
+/// (mise sur les bons de commande) ; Vendeur, Caissier, ChefVentes, Financier, Recouvrement : cases de l'onglet Profil de cette fiche.
 /// </summary>
 public sealed record Utilisateur(string Login, bool Administrateur, int? Collaborateur, string? Nom, string? Prenom, bool Vendeur, bool Caissier, DateTime Expiration,
-    string? Dossier = null)
+    string? Dossier = null, bool ChefVentes = false, bool Financier = false, bool Recouvrement = false)
 {
     public bool PeutEncaisser => Caissier || Administrateur;
 
@@ -99,7 +99,8 @@ public sealed class ServiceAuthentification
         }
 
         var u = new Utilisateur(login, verifie.Administrateur, co?.Numero, co?.Nom?.Trim(), co?.Prenom?.Trim(), co?.Vendeur ?? false, co?.Caissier ?? false,
-            DateTime.UtcNow.AddHours(Math.Max(1, Options.DureeHeures)), dossier.Code);
+            DateTime.UtcNow.AddHours(Math.Max(1, Options.DureeHeures)), dossier.Code,
+            co?.ChefVentes ?? false, co?.Financier ?? false, co?.Recouvrement ?? false);
         _log.LogInformation("Connexion de {Login} sur {Dossier} (collaborateur {Collaborateur}, caissier {Caissier})", login, dossier.Code, co?.Numero, u.Caissier);
         return new(u, Signer(u), null, null);
     }
