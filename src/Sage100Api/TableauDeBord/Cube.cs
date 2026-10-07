@@ -31,6 +31,8 @@ public static class Cube
     public static ResultatCube Pivoter<T>(IEnumerable<T> faits, Axe<T>? lignes, Axe<T>? colonnes, int nombreSommes, Func<T, decimal[]> sommes,
         IReadOnlyList<string> mesures, Func<decimal[], string, decimal> mesure, string triMesure, int limiteLignes = 200, int limiteColonnes = 24)
     {
+        // Les 52 semaines d'une année tiennent en colonnes.
+        if (colonnes?.Code == "semaine") limiteColonnes = Math.Max(limiteColonnes, 60);
         var cellules = new Dictionary<string, Dictionary<string, decimal[]>>();
         var parLigne = new Dictionary<string, decimal[]>();
         var parColonne = new Dictionary<string, decimal[]>();

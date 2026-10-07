@@ -57,7 +57,7 @@ const ONGLETS = {
   ],
   commercial: [
     ["direction", "Direction", "commercial"], ["ventes", "Explorateur", "commercial"], ["clients", "Clients", "commercial"], ["articles", "Articles & marges", "commercial"],
-    ["commandes", "Commandes", "commercial"], ["stock", "Stock", "commercial"], ["recouvrement", "Recouvrement", "clients"], ["achats", "Achats", "achats"],
+    ["commandes", "Commandes", "commercial"], ["transformation", "Transformation", "commercial"], ["stock", "Stock", "commercial"], ["recouvrement", "Recouvrement", "clients"], ["achats", "Achats", "achats"],
     ["objectifs", "Objectifs", "commercial"],
   ],
 };
@@ -79,6 +79,10 @@ const exercice = () => etat.meta.exercices.find((e) => e.cle === etat.exercice) 
 const moisDe = (d) => String(d).slice(0, 7);
 const jourDe = (d) => String(d).slice(0, 10);
 // Dernier jour du mois « 2026-02 » -> « 2026-02-28 ».
+// Semaine ISO « 2026-S41 » : du lundi au dimanche.
+const lundiSemaine = (cle) => { const a = Number(cle.slice(0, 4)), n = Number(cle.slice(6)); const j4 = new Date(Date.UTC(a, 0, 4));
+  return new Date(j4.getTime() + ((n - 1) * 7 - ((j4.getUTCDay() + 6) % 7)) * 86400000); };
+const isoJour = (d) => d.toISOString().slice(0, 10);
 const finDuMois = (m) => { const [a, n] = m.split("-").map(Number); return `${m}-${String(new Date(a, n, 0).getDate()).padStart(2, "0")}`; };
 const qs = (o) => Object.entries(o).filter(([, v]) => v !== undefined && v !== null && v !== "").map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join("&");
 
@@ -280,7 +284,7 @@ const ECRANS = {
   "compta/charges": chargesProduits, "compta/tresorerie": tresorerie, "compta/recouvrement": (c) => recouvrement(c, "clients"),
   "compta/fournisseurs": (c) => recouvrement(c, "fournisseurs"), "compta/rapprochement": rapprochement,
   "commercial/direction": direction, "commercial/ventes": (c) => explorateur(c, "ventes"), "commercial/clients": clients,
-  "commercial/articles": (c) => explorateur(c, "articles"), "commercial/commandes": commandes, "commercial/stock": stock,
+  "commercial/articles": (c) => explorateur(c, "articles"), "commercial/commandes": commandes, "commercial/transformation": (c) => explorateur(c, "transformation"), "commercial/stock": stock,
   "commercial/recouvrement": (c) => recouvrement(c, "clients"), "commercial/achats": (c) => explorateur(c, "achats"), "commercial/objectifs": objectifs,
 };
 
@@ -663,12 +667,20 @@ async function recouvrement(c, type) {
 const MESURES = {
   debit: "Débit", credit: "Crédit", solde: "Solde (D − C)", soldeCrediteur: "Solde (C − D)", nombre: "Écritures",
   ca: "CA HT", quantite: "Quantité", cout: "Coût de revient", marge: "Marge", taux: "Taux de marge %",
+  commande: "Commandé HT", livre: "Livré HT", encours: "Reste à livrer", nonservi: "Non servi (soldé)", transfo: "Taux de transformation %",
+  qteCommandee: "Qté commandée", qteLivree: "Qté livrée", transfoQte: "Taux en quantité %",
 };
-const TEMPS = ["exercice", "annee", "trimestre", "mois"];
+const MESURES_TYPE = {
+  compta: ["debit", "credit", "solde", "soldeCrediteur", "nombre"], analytique: ["solde", "soldeCrediteur"], ventes: ["ca", "quantite", "cout", "marge", "taux"],
+  transformation: ["transfo", "commande", "livre", "encours", "nonservi", "transfoQte", "qteCommandee", "qteLivree"],
+};
+const TEMPS = ["exercice", "annee", "trimestre", "mois", "semaine"];
+// Intitulé court d'une période (mois « oct. 26 », semaine « S41 ») ; sinon l'intitulé du serveur.
+const etiquetteAxe = (axe, cle, intitule, court) => (axe === "mois" ? moisCourt(cle) : axe === "semaine" && /^\d{4}-S\d{2}$/.test(cle) ? (court ? cle.slice(5) : intitule ?? cle) : intitule ?? cle);
 // Axe proposé quand on zoome sur une ligne.
 const ZOOM = {
-  compta: { exercice: "mois", annee: "trimestre", trimestre: "mois", mois: "compte", classe: "radical", radical: "compte", compte: "mois", typeJournal: "journal", journal: "compte", tiers: "compte", section: "compte" },
-  ventes: { exercice: "mois", annee: "trimestre", trimestre: "mois", mois: "article", famille: "article", article: "mois", tiers: "article", categorie: "tiers", qualite: "tiers", commercial: "tiers", depot: "article" },
+  compta: { exercice: "mois", annee: "trimestre", trimestre: "mois", mois: "compte", semaine: "compte", classe: "radical", radical: "compte", compte: "mois", typeJournal: "journal", journal: "compte", tiers: "compte", section: "compte" },
+  ventes: { exercice: "mois", annee: "trimestre", trimestre: "mois", mois: "article", semaine: "article", famille: "article", article: "mois", tiers: "article", categorie: "tiers", qualite: "tiers", commercial: "tiers", depot: "article" },
 };
 
 function presetExplorateur(nom, sens) {
@@ -685,6 +697,8 @@ function presetExplorateur(nom, sens) {
     clients: { type: "ventes", domaine: "ventes", lignes: "tiers", colonnes: "", mesure: "ca", titre: "Clients : CA, marge et quantités" },
     articles: { type: "ventes", domaine: "ventes", lignes: "article", colonnes: "", mesure: "marge", titre: "Articles : CA, coût, marge et taux" },
     achats: { type: "ventes", domaine: "achats", lignes: "tiers", colonnes: "mois", mesure: "ca", titre: "Achats par fournisseur" },
+    transformation: { type: "transformation", domaine: "ventes", lignes: "mois", colonnes: "", mesure: "transfo",
+      titre: "Transformation des commandes en livraisons (par date de commande)" },
   };
   return { ...base, ...P[nom] };
 }
@@ -708,9 +722,10 @@ async function explorateur(c, nom, sens) {
   const compta = cfg.type === "compta";
   const axes = compta ? (cfg.source === "analytique" ? etat.meta.axesAnalytiques : etat.meta.axesCompta) : etat.meta.axesVentes;
   if (!axes.some((a) => a.code === cfg.lignes)) cfg.lignes = axes[0].code;
-  const mesures = compta ? (cfg.source === "analytique" ? ["solde", "soldeCrediteur"] : ["debit", "credit", "solde", "soldeCrediteur", "nombre"]) : ["ca", "quantite", "cout", "marge", "taux"];
+  const transfo = cfg.type === "transformation";
+  const mesures = MESURES_TYPE[compta && cfg.source === "analytique" ? "analytique" : cfg.type];
   if (!mesures.includes(cfg.mesure)) cfg.mesure = mesures[0];
-  const base = compta ? "/tableau-de-bord/compta" : "/tableau-de-bord/commercial";
+  const base = compta ? "/tableau-de-bord/compta" : transfo ? "/tableau-de-bord/commercial/transformation" : "/tableau-de-bord/commercial";
   const cube = await api(`${base}/cube?${qs(paramsCube(cfg))}`);
   const optAxes = (val, vide) => (vide ? `<option value="">${vide}</option>` : "") + axes.map((a) => `<option value="${a.code}" ${a.code === val ? "selected" : ""}>${echapper(a.libelle)}</option>`).join("");
   const filtresTexte = compta
@@ -746,7 +761,8 @@ async function explorateur(c, nom, sens) {
       </div>
       ${cfg.pile.length ? `<div class="fil" style="margin-top:8px"><span class="discret">Zoom :</span>${cfg.pile.map((p, i) => `<span class="puce">${echapper(p.libelle)} <button type="button" data-retour="${i}" title="Retirer">✕</button></span>`).join("")}</div>` : ""}
       <div style="margin-top:8px" id="x-sortie"></div>
-      <p class="discret" style="margin:6px 0 0">Cliquez un intitulé pour zoomer dessus, une valeur pour voir ${compta ? "les écritures" : "les lignes de factures"} qui la composent.</p>
+      <p class="discret" style="margin:6px 0 0">Cliquez un intitulé pour zoomer dessus, une valeur pour voir ${compta ? "les écritures" : transfo ? "les commandes" : "les lignes de factures"} qui la composent.${transfo
+        ? " Taux de transformation = livré / commandé : part des commandes clients déjà livrée (BL ou facture). Reste à livrer : bons de commande et préparations non clôturés ; non servi : reliquat des bons soldés." : ""}</p>
     </article>`;
 
   const changer = (modifs) => { Object.assign(cfg, modifs); afficherOnglet(); };
@@ -774,8 +790,8 @@ async function explorateur(c, nom, sens) {
 
   const colonnes = cube.axeColonnes ? cube.colonnes : null;
   const libMesure = (m) => MESURES[m] ?? m;
-  const fmt = (m, v) => (m === "taux" ? nombre(v, 1) : m === "quantite" ? nombre(v, 2) : montant(v));
-  const valeursColonnes = colonnes ? colonnes.map((k) => ({ cle: k.cle, entete: cube.axeColonnes === "mois" ? moisCourt(k.cle) : k.intitule ?? k.cle })) : cube.mesures.map((m) => ({ mesure: m, entete: libMesure(m) }));
+  const fmt = (m, v) => (["taux", "transfo", "transfoQte"].includes(m) ? nombre(v, 1) : ["quantite", "qteCommandee", "qteLivree"].includes(m) ? nombre(v, 2) : montant(v));
+  const valeursColonnes = colonnes ? colonnes.map((k) => ({ cle: k.cle, entete: etiquetteAxe(cube.axeColonnes, k.cle, k.intitule, true), titre: k.intitule })) : cube.mesures.map((m) => ({ mesure: m, entete: libMesure(m) }));
   const valeur = (ligne, col) => (colonnes ? ligne.cellules[col.cle]?.[cfg.mesure] : ligne.total[col.mesure]);
   const maxCol = valeursColonnes.map((col) => Math.max(1, ...cube.lignes.map((l) => Math.abs(valeur(l, col) ?? 0))));
   const maxTotal = Math.max(1, ...cube.lignes.map((l) => Math.abs(l.total[cfg.mesure] ?? 0)));
@@ -786,8 +802,8 @@ async function explorateur(c, nom, sens) {
     if (!cube.lignes.length) { sortie.innerHTML = '<p class="vide">Aucune donnée pour ces filtres.</p>'; return; }
     if (cfg.vue === "graphique") return dessinerGraphique(sortie);
     sortie.innerHTML = `<div class="table-defile"><table class="cube"><thead><tr><th>${echapper(axes.find((a) => a.code === cube.axeLignes)?.libelle ?? "")}</th>
-      ${valeursColonnes.map((v) => `<th>${echapper(v.entete)}</th>`).join("")}${colonnes ? `<th>Total ${echapper(libMesure(cfg.mesure))}</th>` : ""}</tr></thead>
-      <tbody>${cube.lignes.map((l, i) => `<tr><th class="${peutZoomer && l.cle !== "*autres*" ? "zoom" : ""}" data-i="${i}" title="${echapper(l.intitule)}">${echapper(cube.axeLignes === "mois" ? moisCourt(l.cle) : l.intitule)}</th>
+      ${valeursColonnes.map((v) => `<th title="${echapper(v.titre ?? "")}">${echapper(v.entete)}</th>`).join("")}${colonnes ? `<th>Total ${echapper(libMesure(cfg.mesure))}</th>` : ""}</tr></thead>
+      <tbody>${cube.lignes.map((l, i) => `<tr><th class="${peutZoomer && l.cle !== "*autres*" ? "zoom" : ""}" data-i="${i}" title="${echapper(l.intitule)}">${echapper(etiquetteAxe(cube.axeLignes, l.cle, l.intitule))}</th>
         ${valeursColonnes.map((col, k) => { const v = valeur(l, col); const m = colonnes ? cfg.mesure : col.mesure;
           return `<td class="num clic ${v < 0 ? "neg" : ""}" data-i="${i}" data-k="${k}">${v == null || v === 0 ? "" : fmt(m, v)}${!colonnes && m === cfg.mesure && v ? `<span class="barre" style="width:${(Math.abs(v) / maxCol[k]) * 100}%"></span>` : ""}</td>`; }).join("")}
         ${colonnes ? `<td class="num clic" data-i="${i}"><b>${fmt(cfg.mesure, l.total[cfg.mesure])}</b><span class="barre" style="width:${(Math.abs(l.total[cfg.mesure]) / maxTotal) * 100}%"></span></td>` : ""}</tr>`).join("")}
@@ -804,9 +820,9 @@ async function explorateur(c, nom, sens) {
   function dessinerGraphique(sortie) {
     sortie.innerHTML = '<div id="x-graphe"></div>';
     const zone = $("#x-graphe", c);
-    const etiquette = (l) => (cube.axeLignes === "mois" ? moisCourt(l.cle) : l.intitule);
+    const etiquette = (l) => etiquetteAxe(cube.axeLignes, l.cle, l.intitule, true);
     if (colonnes && TEMPS.includes(cube.axeColonnes) && cube.lignes.length <= 8) {
-      barres(zone, { categories: colonnes.map((k) => (cube.axeColonnes === "mois" ? moisCourt(k.cle) : k.intitule)), empile: cfg.mesure !== "taux",
+      barres(zone, { categories: colonnes.map((k) => etiquetteAxe(cube.axeColonnes, k.cle, k.intitule, true)), empile: !["taux", "transfo", "transfoQte"].includes(cfg.mesure),
         series: cube.lignes.map((l, i) => ({ nom: etiquette(l), valeurs: colonnes.map((k) => l.cellules[k.cle]?.[cfg.mesure] ?? 0), couleur: COULEURS[i % 8] })),
         format: (v) => fmt(cfg.mesure, v) });
     } else if (TEMPS.includes(cube.axeLignes)) {
@@ -824,6 +840,7 @@ async function explorateur(c, nom, sens) {
       sections: cfg.sections, famille: cfg.famille, article: cfg.article, commercial: cfg.commercial, depot: cfg.depot, categorie: cfg.categorie, qualite: cfg.qualite };
     const m = {};
     if (axe === "mois") Object.assign(m, { du: `${cle}-01`, au: finDuMois(cle) });
+    else if (axe === "semaine") { const l = lundiSemaine(cle); Object.assign(m, { du: isoJour(l), au: isoJour(new Date(l.getTime() + 6 * 86400000)) }); }
     else if (axe === "annee") Object.assign(m, { du: `${cle}-01-01`, au: `${cle}-12-31` });
     else if (axe === "trimestre") { const t = Number(cle.slice(6)); Object.assign(m, { du: `${cle.slice(0, 4)}-${String(t * 3 - 2).padStart(2, "0")}-01`, au: finDuMois(`${cle.slice(0, 4)}-${String(t * 3).padStart(2, "0")}`) }); }
     else if (axe === "exercice") { const e = etat.meta.exercices.find((x) => x.cle === cle); if (e) Object.assign(m, { du: jourDe(e.debut), au: jourDe(e.fin) }); }
@@ -835,7 +852,7 @@ async function explorateur(c, nom, sens) {
     if (cle === "" && !TEMPS.includes(axe)) return;
     let suivant = (compta ? ZOOM.compta : ZOOM.ventes)[axe];
     if (suivant === cfg.colonnes) cfg.colonnes = "";
-    cfg.pile = [...cfg.pile, { libelle: `${axes.find((a) => a.code === axe)?.libelle} : ${axe === "mois" ? moisCourt(cle) : ligne.intitule}`, avant }];
+    cfg.pile = [...cfg.pile, { libelle: `${axes.find((a) => a.code === axe)?.libelle} : ${etiquetteAxe(axe, cle, ligne.intitule)}`, avant }];
     changer({ ...m, lignes: suivant });
   }
 
@@ -845,9 +862,19 @@ async function explorateur(c, nom, sens) {
       const p = { ...paramsCube(cfg), cleLigne: ligne.cle, cleColonne: colonne?.cle };
       if (cfg.source === "analytique") return bandeau("Le détail est disponible sur la comptabilité générale.");
       const r = await api(`${base}/detail?${qs(p)}`);
-      const titre = `${ligne.intitule ?? ligne.cle}${colonne ? ` · ${cube.axeColonnes === "mois" ? moisCourt(colonne.cle) : colonne.intitule}` : ""}`;
+      const titre = `${etiquetteAxe(cube.axeLignes, ligne.cle, ligne.intitule)}${colonne ? ` · ${etiquetteAxe(cube.axeColonnes, colonne.cle, colonne.intitule)}` : ""}`;
       const plein = r.length >= 500 ? " (500 premières)" : "";
-      if (compta) {
+      if (transfo) {
+        const co = r.reduce((t, x) => t + x.commande, 0), li = r.reduce((t, x) => t + x.livre, 0);
+        const classe = { "Livrée": "ok", "Partielle": "sousMini", "En attente": "sousMini", "En préparation": "sousMini", "Non servie": "retard", "Partielle, soldée": "retard" };
+        ouvrirDetail(titre, `${r.length} commande(s)${plein} · commandé ${montant(co)} · livré ${montant(li)} · taux ${co ? nombre((li / co) * 100, 1) + " %" : "–"}`,
+          `<table class="liste"><thead><tr><th>Commande</th><th>Date</th><th>Client</th><th>Commercial</th><th class="num">Commandé</th><th class="num">Livré</th><th class="num">Reste</th><th class="num">Non servi</th>
+            <th class="num">Taux</th><th>Livraison</th><th class="num">Délai (j)</th><th>Statut</th></tr></thead>
+          <tbody>${r.map((x) => `<tr><td>${echapper(x.piece)}</td><td>${date(x.date)}</td><td title="${echapper(x.intitule ?? "")}">${echapper(x.tiers)} ${echapper(x.intitule ?? "")}</td><td>${echapper(x.commercial ?? "")}</td>
+            <td class="num">${montant(x.commande)}</td><td class="num">${x.livre ? montant(x.livre) : ""}</td><td class="num">${x.enCours ? montant(x.enCours) : ""}</td><td class="num">${x.nonServi ? montant(x.nonServi) : ""}</td>
+            <td class="num">${x.taux == null ? "" : nombre(x.taux, 1) + " %"}</td><td>${date(x.derniereLivraison)}</td><td class="num">${x.delai ?? ""}</td>
+            <td><span class="statut ${classe[x.statut] ?? ""}">${echapper(x.statut)}</span></td></tr>`).join("")}</tbody></table>`);
+      } else if (compta) {
         const d = r.reduce((t, x) => t + x.debit, 0), cr = r.reduce((t, x) => t + x.credit, 0);
         ouvrirDetail(titre, `${r.length} écriture(s)${plein} · débit ${montant(d)} · crédit ${montant(cr)} · solde ${montant(d - cr)}`,
           `<table class="liste"><thead><tr><th>Date</th><th>Journal</th><th>Pièce</th><th>Compte</th><th>Tiers</th><th>Libellé</th><th>Échéance</th><th class="num">Débit</th><th class="num">Crédit</th><th>Lettrage</th></tr></thead>
@@ -890,6 +917,10 @@ async function direction(c) {
         : etat.meta.droits.objectifs ? tuile({ libelle: "Objectifs", valeur: "–", pied: "à saisir", vers: "commercial/objectifs" }) : ""}
       ${tuile({ libelle: "Valeur du stock", valeur: montant(s.stock.valeur), pied: `${nombre(s.stock.ruptures)} ruptures · ${nombre(s.stock.dormants)} dormants`, vers: "commercial/stock", niveau: s.stock.ruptures ? "attention" : "" })}
       ${tuile({ libelle: "Créances clients", valeur: montant(s.creancesClients.total), pied: `échu ${montant(s.creancesClients.echu)}`, vers: "commercial/recouvrement", niveau: s.creancesClients.plus90 > 0 ? "attention" : "" })}
+      ${s.transformation ? tuile({ libelle: "Taux de transformation", valeur: s.transformation.taux == null ? "–" : `${nombre(s.transformation.taux, 1)} %`,
+        pied: `${nombre(s.transformation.completes)} / ${nombre(s.transformation.nombre)} BC livrés en entier`,
+        titre: `Part des commandes clients de la période déjà livrée (BL ou facture) : ${montant(s.transformation.livre)} sur ${montant(s.transformation.commande)}${s.transformation.delaiMoyen != null ? ` · délai moyen de livraison ${nombre(s.transformation.delaiMoyen, 1)} j` : ""}`,
+        vers: "commercial/transformation", niveau: s.transformation.taux != null && s.transformation.taux < 80 ? "attention" : "" }) : ""}
       ${tuile({ libelle: "Commandes en cours", valeur: montant(s.commandes.montant), pied: `${nombre(s.commandes.nombre)} BC · ${nombre(s.commandesEnRetard.nombre)} en retard · devis ${montant(s.devis.montant)}`, vers: "commercial/commandes" })}
     </section>
     <section class="grille">

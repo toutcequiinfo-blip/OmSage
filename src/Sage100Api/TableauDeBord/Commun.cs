@@ -58,6 +58,14 @@ public static class Periodes
 
     public static string Mois(DateTime d) => d.ToString("yyyy-MM", CultureInfo.InvariantCulture);
     public static string Trimestre(DateTime d) => $"{d.Year}-T{(d.Month - 1) / 3 + 1}";
+    /// <summary>Semaine ISO (lundi à dimanche) : « 2026-S41 ». La semaine 1 contient le premier jeudi de l'année.</summary>
+    public static string Semaine(DateTime d) => $"{ISOWeek.GetYear(d)}-S{ISOWeek.GetWeekOfYear(d):00}";
+    /// <summary>« 2026-S41 » -> lundi 5 octobre 2026 ; null si illisible.</summary>
+    public static DateTime? DebutSemaine(string cle) =>
+        cle.Length == 8 && cle[4..6] == "-S" && int.TryParse(cle[..4], out var an) && int.TryParse(cle[6..], out var n) && n is >= 1 and <= 53
+            && n <= ISOWeek.GetWeeksInYear(an) ? ISOWeek.ToDateTime(an, n, DayOfWeek.Monday) : null;
+    /// <summary>« S41 2026 (05/10) » : numéro de semaine et date du lundi.</summary>
+    public static string IntituleSemaine(string cle) => DebutSemaine(cle) is { } d ? $"S{cle[6..]} {cle[..4]} ({d:dd/MM})" : cle;
     public static string Annee(DateTime d) => d.Year.ToString(CultureInfo.InvariantCulture);
     public static string IntituleMois(string cle) =>
         DateTime.TryParseExact(cle, "yyyy-MM", CultureInfo.InvariantCulture, DateTimeStyles.None, out var d) ? d.ToString("MMM yyyy", Fr) : cle;
@@ -99,6 +107,9 @@ public static class Periodes
                 break;
             case "mois" when DateTime.TryParseExact(cle, "yyyy-MM", CultureInfo.InvariantCulture, DateTimeStyles.None, out var m):
                 (debut, fin) = (m, FinMois(m));
+                break;
+            case "semaine" when DebutSemaine(cle) is { } lundi:
+                (debut, fin) = (lundi, lundi.AddDays(6));
                 break;
             default:
                 return false;

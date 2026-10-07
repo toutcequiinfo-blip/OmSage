@@ -29,6 +29,8 @@ public sealed class Instantane
     readonly ConcurrentDictionary<DocumentsCa, Instantane> _vues = new();
     Instantane? _origine;
     public IReadOnlyList<FaitEnCours> EnCours { get; init; } = [];
+    /// <summary>Commandes clients et leurs transformations (taux de transformation commande → livraison).</summary>
+    public IReadOnlyList<FaitCommande> Commandes { get; init; } = [];
     public IReadOnlyList<LigneStock> Stock { get; init; } = [];
     public IReadOnlyDictionary<string, DateTime> DernieresSorties { get; init; } = new Dictionary<string, DateTime>();
     public IReadOnlyList<EcheanceTiers> Echeances { get; init; } = [];
@@ -214,6 +216,7 @@ public sealed class ServiceTableauDeBord(ILecturesTableauDeBord lectures, IOptio
             Lignes = await Partie("lignes de factures", () => lectures.Lignes(depuis), avant.Lignes),
             Pieces = await Partie("factures", () => lectures.Pieces(depuis), avant.Pieces),
             EnCours = await Partie("documents en cours", lectures.EnCours, avant.EnCours),
+            Commandes = await Partie("commandes clients", () => lectures.Commandes(depuis), avant.Commandes),
             Stock = await Partie("stocks", lectures.Stock, avant.Stock),
             DernieresSorties = await Partie("dernières sorties de stock", lectures.DernieresSorties, avant.DernieresSorties),
             Echeances = await Partie("échéances clients et fournisseurs", lectures.Echeances, avant.Echeances),
