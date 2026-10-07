@@ -1,8 +1,38 @@
 namespace Sage100Api.TableauDeBord;
 
-/// <summary>Paramètres du tableau commercial croisé. Domaine : ventes (défaut) ou achats.</summary>
+/// <summary>
+/// Paramètres du tableau commercial croisé. Domaine : ventes (défaut) ou achats.
+/// Article, famille, tiers, commercial, dépôt, catégorie et qualité sont des choix multiples (<see cref="Selection"/>) :
+/// « A,B » garde ces valeurs, « !A,B » les exclut.
+/// </summary>
 public sealed record RequeteVentes(string? Domaine, string? Lignes, string? Colonnes, string? Du, string? Au, string? Article, string? Famille,
-    string? Tiers, int? Commercial, int? Depot, int? Categorie, string? Tri, int? Limite, string? Qualite = null);
+    string? Tiers, string? Commercial, string? Depot, string? Categorie, string? Tri, int? Limite, string? Qualite = null);
+
+/// <summary>Filtres à choix multiple d'une requête du tableau commercial, lus une fois.</summary>
+sealed class SelectionsVentes(RequeteVentes r)
+{
+    public Selection? Article { get; } = Selection.Lire(r.Article);
+    public Selection? Famille { get; } = Selection.Lire(r.Famille);
+    public Selection? Tiers { get; } = Selection.Lire(r.Tiers);
+    public Selection? Commercial { get; } = Selection.Lire(r.Commercial);
+    public Selection? Depot { get; } = Selection.Lire(r.Depot);
+    public Selection? Categorie { get; } = Selection.Lire(r.Categorie);
+    public Selection? Qualite { get; } = Selection.Lire(r.Qualite);
+
+    public bool RetientArticle(Instantane i, string article) =>
+        (Article?.Retient(article) ?? true) && (Famille?.Retient(i.Famille(article)) ?? true);
+
+    public bool RetientTiers(Instantane i, string? tiers)
+    {
+        if (!(Tiers?.Retient(tiers) ?? true)) return false;
+        if (Categorie == null && Qualite == null) return true;
+        var t = tiers != null && i.Tiers.TryGetValue(tiers, out var x) ? x : null;
+        return (Categorie?.Retient(t?.Categorie) ?? true) && (Qualite?.Retient(t?.Qualite) ?? true);
+    }
+
+    public bool FiltreArticles => Article != null || Famille != null;
+    public bool FiltreTiers => Tiers != null || Categorie != null || Qualite != null;
+}
 
 public static class Commercial
 {
@@ -42,15 +72,13 @@ public static class Commercial
     {
         var domaine = Domaine(r.Domaine);
         var (du, au) = Comptabilite.Bornes(i, r.Du, r.Au, aujourdhui);
+        var s = new SelectionsVentes(r);
         return i.Lignes.Where(f => f.Domaine == domaine && f.Date >= du && f.Date <= au
             && (domaine == 1 || p.Autorise(i, f.Tiers, f.Commercial))
-            && (r.Article == null || string.Equals(f.Article, r.Article, StringComparison.OrdinalIgnoreCase))
-            && (r.Famille == null || string.Equals(i.Famille(f.Article), r.Famille, StringComparison.OrdinalIgnoreCase))
-            && (r.Tiers == null || string.Equals(f.Tiers, r.Tiers, StringComparison.OrdinalIgnoreCase))
-            && (r.Commercial == null || (f.Commercial ?? i.Representant(f.Tiers)) == r.Commercial)
-            && (r.Depot == null || f.Depot == r.Depot)
-            && (r.Categorie == null || (i.Tiers.TryGetValue(f.Tiers, out var t) && t.Categorie == r.Categorie))
-            && (r.Qualite == null || (i.Tiers.TryGetValue(f.Tiers, out var q) && string.Equals(q.Qualite, r.Qualite, StringComparison.OrdinalIgnoreCase))));
+            && (!s.FiltreArticles || s.RetientArticle(i, f.Article))
+            && (!s.FiltreTiers || s.RetientTiers(i, f.Tiers))
+            && (s.Commercial?.Retient(f.Commercial ?? i.Representant(f.Tiers)) ?? true)
+            && (s.Depot?.Retient(f.Depot) ?? true));
     }
 
     public static ResultatCube Croiser(Instantane i, RequeteVentes r, Perimetre p, DateTime aujourdhui)
@@ -66,14 +94,27 @@ public static class Commercial
     public static FiltreDetailVentes? Detail(Instantane i, RequeteVentes r, Perimetre p, string? cleLigne, string? cleColonne, DateTime aujourdhui)
     {
         var (du, au) = Comptabilite.Bornes(i, r.Du, r.Au, aujourdhui);
-        string? article = r.Article, tiers = r.Tiers;
-        int? commercial = r.Commercial, depot = r.Depot;
-        List<string>? articles = r.Famille == null ? null : i.Articles.Values.Where(a => a.Famille == r.Famille).Select(a => a.Reference).ToList();
-        List<string>? tiersListe = r.Categorie == null ? null : i.Tiers.Values.Where(t => t.Categorie == r.Categorie).Select(t => t.Numero).ToList();
-        if (r.Qualite != null)
+        var s = new SelectionsVentes(r);
+        var domaine = Domaine(r.Domaine);
+        string? article = null, tiers = null;
+        int? commercial = null, depot = null;
+        // Choix multiples traduits en listes SQL : ce qui est gardé (IN) quand une valeur est cochée en « garder »,
+        // sinon ce qui est exclu (NOT IN). Les membres d'une famille, d'une catégorie ou d'une qualité viennent de l'instantané.
+        List<string>? articles = null, articlesExclus = null, tiersListe = null, tiersExclus = null;
+        if (s.FiltreArticles)
         {
-            var deQualite = i.Tiers.Values.Where(t => string.Equals(t.Qualite, r.Qualite, StringComparison.OrdinalIgnoreCase)).Select(t => t.Numero);
-            tiersListe = tiersListe == null ? deQualite.ToList() : tiersListe.Intersect(deQualite).ToList();
+            var connus = i.Articles.Keys.Concat(s.Article?.Valeurs ?? Enumerable.Empty<string>()).Where(a => a != "").Distinct(StringComparer.OrdinalIgnoreCase);
+            if (s.Article is { Exclure: false } || s.Famille is { Exclure: false })
+                articles = (s.Article is { Exclure: false } av ? av.Valeurs.Where(v => v != "") : connus).Where(x => s.RetientArticle(i, x)).ToList();
+            else articlesExclus = connus.Where(x => !s.RetientArticle(i, x)).ToList();
+        }
+        if (s.FiltreTiers)
+        {
+            var connus = i.Tiers.Values.Where(t => t.Type == domaine).Select(t => t.Numero)
+                .Concat(s.Tiers?.Valeurs ?? Enumerable.Empty<string>()).Where(t => t != "").Distinct(StringComparer.OrdinalIgnoreCase);
+            if (s.Tiers is { Exclure: false } || s.Categorie is { Exclure: false } || s.Qualite is { Exclure: false })
+                tiersListe = (s.Tiers is { Exclure: false } tv ? tv.Valeurs.Where(v => v != "") : connus).Where(x => s.RetientTiers(i, x)).ToList();
+            else tiersExclus = connus.Where(x => !s.RetientTiers(i, x)).ToList();
         }
         foreach (var (axe, cle) in new[] { (r.Lignes ?? "famille", cleLigne), (r.Colonnes, cleColonne) })
         {
@@ -114,8 +155,16 @@ public static class Commercial
             if (tiers != null && !tiersListe.Contains(tiers)) return null;
         }
         if (articles is { Count: 0 } || tiersListe is { Count: 0 } || du > au) return null;
-        if (articles is { Count: > 2000 } || tiersListe is { Count: > 2000 }) return null;
-        return new FiltreDetailVentes(Domaine(r.Domaine), du, au, article, articles, tiers, tiersListe, commercial, depot, 500, i.Documents);
+        if (new[] { articles, articlesExclus, tiersListe, tiersExclus }.Any(x => x is { Count: > 2000 })) return null;
+        return new FiltreDetailVentes(domaine, du, au, article, articles, tiers, tiersListe, commercial, depot, 500, i.Documents)
+        {
+            ArticlesExclus = articlesExclus,
+            TiersExclus = tiersExclus,
+            Commerciaux = s.Commercial is { Exclure: false } cg ? cg.Entiers() : null,
+            CommerciauxExclus = s.Commercial is { Exclure: true } cx ? cx.Entiers() : null,
+            Depots = s.Depot is { Exclure: false } de ? de.Entiers() : null,
+            DepotsExclus = s.Depot is { Exclure: true } dx ? dx.Entiers() : null,
+        };
     }
 
 

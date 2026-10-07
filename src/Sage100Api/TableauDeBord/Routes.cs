@@ -94,12 +94,34 @@ public static class Routes
             c.Refus(p => p.VoitCompta) ?? Results.Ok(Comptabilite.Rapprochement(c.Instantane, Periodes.Choisir(c.Instantane, exercice, DateTime.Today), DateTime.Today)))
             .WithSummary("Contrôle par mois : CA, règlements et achats de la gestion commerciale face à la comptabilité");
 
+        g.MapGet("/valeurs/{liste}", (Contexte c, string liste, string? q, int? limite) =>
+        {
+            var i = c.Instantane;
+            var n = Math.Clamp(limite ?? 200, 1, 1000);
+            bool Trouve(string code, string? intitule) => string.IsNullOrWhiteSpace(q)
+                || code.Contains(q.Trim(), StringComparison.OrdinalIgnoreCase) || (intitule?.Contains(q.Trim(), StringComparison.OrdinalIgnoreCase) ?? false);
+            IEnumerable<(string Code, string? Intitule)> Tiers(int? type) => i.Tiers.Values
+                .Where(t => (type == null || t.Type == type) && (t.Type != 0 || c.Perimetre.Autorise(i, t.Numero)))
+                .Select(t => (t.Numero, t.Intitule?.Trim()));
+            IResult Liste(IEnumerable<(string Code, string? Intitule)> v) =>
+                Results.Ok(v.Where(x => Trouve(x.Code, x.Intitule)).OrderBy(x => x.Code, StringComparer.OrdinalIgnoreCase).Take(n)
+                    .Select(x => new { valeur = x.Code, intitule = x.Intitule }));
+            return liste switch
+            {
+                "articles" => c.Refus(p => p.VoitCommercial || p.VoitAchats) ?? Liste(i.Articles.Values.Select(a => (a.Reference, a.Designation?.Trim()))),
+                "clients" => c.Refus(p => p.VoitClients) ?? Liste(Tiers(0)),
+                "fournisseurs" => c.Refus(p => p.VoitFournisseurs) ?? Liste(Tiers(1)),
+                "tiers" => c.Refus(p => p.VoitCompta) ?? Liste(Tiers(null)),
+                _ => Results.NotFound(),
+            };
+        }).WithSummary("Valeurs d'un filtre à choix multiple (articles, clients, fournisseurs, tiers), cherchées par code ou intitulé");
+
         // ---------- Recouvrement ----------
-        g.MapGet("/recouvrement/{type}", (Contexte c, string type, int? commercial, int? categorie, string? qualite) =>
+        g.MapGet("/recouvrement/{type}", (Contexte c, string type, string? commercial, string? categorie, string? qualite) =>
         {
             var t = type == "fournisseurs" ? 1 : 0;
             return c.Refus(p => t == 0 ? p.VoitClients : p.VoitFournisseurs)
-                ?? Results.Ok(Creances.Analyse(c.Instantane, t, c.Perimetre, commercial, categorie, DateTime.Today, string.IsNullOrWhiteSpace(qualite) ? null : qualite));
+                ?? Results.Ok(Creances.Analyse(c.Instantane, t, c.Perimetre, commercial, categorie, DateTime.Today, qualite));
         }).WithSummary("Balance âgée (clients ou fournisseurs) : tranches, par tiers, par commercial, par catégorie, par qualité, règlements par mode");
 
         g.MapGet("/recouvrement/{type}/{tiers}", (Contexte c, string type, string tiers) =>

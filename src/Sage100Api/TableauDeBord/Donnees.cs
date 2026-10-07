@@ -223,9 +223,26 @@ public sealed class DetailLigne
     public decimal Cout { get; init; }
 }
 
-public sealed record FiltreDetailCompta(DateTime Du, DateTime Au, IReadOnlyList<string>? Comptes, IReadOnlyList<string>? Journaux, string? Tiers, bool ANouveaux, int Taille);
+public sealed record FiltreDetailCompta(DateTime Du, DateTime Au, IReadOnlyList<string>? Comptes, IReadOnlyList<string>? Journaux, string? Tiers, bool ANouveaux, int Taille)
+{
+    /// <summary>Exclusions des filtres à choix multiple (NOT IN), et tiers gardés quand plusieurs sont cochés.</summary>
+    public IReadOnlyList<string>? ComptesExclus { get; init; }
+    public IReadOnlyList<string>? JournauxExclus { get; init; }
+    public IReadOnlyList<string>? TiersListe { get; init; }
+    public IReadOnlyList<string>? TiersExclus { get; init; }
+}
+
 public sealed record FiltreDetailVentes(int Domaine, DateTime Du, DateTime Au, string? Article, IReadOnlyList<string>? Articles, string? Tiers,
-    IReadOnlyList<string>? TiersListe, int? Commercial, int? Depot, int Taille, DocumentsCa? Documents = null);
+    IReadOnlyList<string>? TiersListe, int? Commercial, int? Depot, int Taille, DocumentsCa? Documents = null)
+{
+    /// <summary>Exclusions des filtres à choix multiple (NOT IN), et commerciaux et dépôts gardés quand plusieurs sont cochés.</summary>
+    public IReadOnlyList<string>? ArticlesExclus { get; init; }
+    public IReadOnlyList<string>? TiersExclus { get; init; }
+    public IReadOnlyList<int>? Commerciaux { get; init; }
+    public IReadOnlyList<int>? CommerciauxExclus { get; init; }
+    public IReadOnlyList<int>? Depots { get; init; }
+    public IReadOnlyList<int>? DepotsExclus { get; init; }
+}
 
 /// <summary>
 /// Lectures du tableau de bord. Toutes en SQL, en lecture seule : aucune ne modifie Sage.
@@ -405,7 +422,9 @@ public sealed class LecturesTableauDeBordSql(Dossiers dossiers, IOptionsMonitor<
             "FROM F_ECRITUREC e " + JournauxReels +
             "WHERE e.JM_Date >= @duMois AND e.JM_Date <= @au AND DATEADD(day, e.EC_Jour - 1, e.JM_Date) BETWEEN @du AND @au AND (@tiers IS NULL OR e.CT_Num = @tiers) " +
             (f.ANouveaux ? "" : "AND e.EC_ANType = 0 ");
-        sql += Prefixes("e.CG_Num", f.Comptes, p, "cpt") + Liste("e.JO_Num", f.Journaux, p, "jo");
+        sql += Prefixes("e.CG_Num", f.Comptes, p, "cpt") + Liste("e.JO_Num", f.Journaux, p, "jo") + Liste("e.CT_Num", f.TiersListe, p, "ti")
+            + Prefixes("e.CG_Num", f.ComptesExclus, p, "cptx", exclure: true) + Liste("e.JO_Num", f.JournauxExclus, p, "jox", exclure: true)
+            + Liste("e.CT_Num", f.TiersExclus, p, "tix", exclure: true);
         return Lire<DetailEcriture>(sql + " ORDER BY e.JM_Date, e.EC_Jour, e.EC_No", p);
     }
 
@@ -420,18 +439,21 @@ public sealed class LecturesTableauDeBordSql(Dossiers dossiers, IOptionsMonitor<
             $"WHERE e.DO_Domaine = @domaine AND {(f.Documents ?? DocumentsCa.Defaut).Condition(f.Domaine)} AND e.DO_Date >= @du AND e.DO_Date < @au AND l.AR_Ref <> '' " +
             "AND (@article IS NULL OR l.AR_Ref = @article) AND (@tiers IS NULL OR e.DO_Tiers = @tiers) " +
             "AND (@commercial IS NULL OR e.CO_No = @commercial) AND (@depot IS NULL OR l.DE_No = @depot) ";
-        sql += Liste("l.AR_Ref", f.Articles, p, "ar") + Liste("e.DO_Tiers", f.TiersListe, p, "ti");
+        sql += Liste("l.AR_Ref", f.Articles, p, "ar") + Liste("e.DO_Tiers", f.TiersListe, p, "ti")
+            + Liste("l.AR_Ref", f.ArticlesExclus, p, "arx", exclure: true) + Liste("e.DO_Tiers", f.TiersExclus, p, "tix", exclure: true)
+            + Liste("e.CO_No", f.Commerciaux, p, "co") + Liste("e.CO_No", f.CommerciauxExclus, p, "cox", exclure: true)
+            + Liste("l.DE_No", f.Depots, p, "de") + Liste("l.DE_No", f.DepotsExclus, p, "dex", exclure: true);
         return Lire<DetailLigne>(sql + " ORDER BY e.DO_Date DESC, e.DO_Piece", p);
     }
 
-    static string Liste(string colonne, IReadOnlyList<string>? valeurs, DynamicParameters p, string nom)
+    static string Liste<T>(string colonne, IReadOnlyList<T>? valeurs, DynamicParameters p, string nom, bool exclure = false)
     {
         if (valeurs is not { Count: > 0 }) return "";
         p.Add(nom, valeurs);
-        return $" AND {colonne} IN @{nom}";
+        return $" AND {colonne} {(exclure ? "NOT IN" : "IN")} @{nom}";
     }
 
-    static string Prefixes(string colonne, IReadOnlyList<string>? prefixes, DynamicParameters p, string nom)
+    static string Prefixes(string colonne, IReadOnlyList<string>? prefixes, DynamicParameters p, string nom, bool exclure = false)
     {
         if (prefixes is not { Count: > 0 }) return "";
         var conditions = prefixes.Select((x, i) =>
@@ -439,6 +461,6 @@ public sealed class LecturesTableauDeBordSql(Dossiers dossiers, IOptionsMonitor<
             p.Add($"{nom}{i}", x.Replace("[", "[[]").Replace("%", "[%]").Replace("_", "[_]") + "%");
             return $"{colonne} LIKE @{nom}{i}";
         });
-        return " AND (" + string.Join(" OR ", conditions) + ")";
+        return (exclure ? " AND NOT (" : " AND (") + string.Join(" OR ", conditions) + ")";
     }
 }

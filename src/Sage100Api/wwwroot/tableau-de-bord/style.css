@@ -169,3 +169,26 @@ table.liste tr.cliquable { cursor: pointer; } table.liste tr.cliquable:hover td 
 }
 .reglages .case { display: flex; align-items: center; gap: 8px; margin: 6px 0; }
 .reglages .case input { width: 18px; height: 18px; }
+
+/* Filtres à choix multiple : bouton résumé + panneau de cases à cocher (garder ou exclure). */
+button.choix { display: inline-flex; align-items: center; gap: 8px; justify-content: space-between; min-width: 130px; max-width: 240px;
+  color: var(--texte); font-size: .85rem; text-align: left; }
+button.choix span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+button.choix .fleche { color: var(--discret); font-size: .75rem; }
+button.choix.actif { border-color: var(--accent); }
+button.choix.exclu { border-color: var(--alerte); color: var(--alerte); }
+.choix-panneau { position: fixed; z-index: 60; width: 300px; max-width: calc(100vw - 16px); display: flex; flex-direction: column; gap: 6px;
+  background: var(--panneau); border: 1px solid var(--bord); border-radius: 10px; padding: 8px; box-shadow: 0 10px 30px rgba(0,0,0,.35); }
+.choix-panneau .segments { display: flex; border: 1px solid var(--bord); border-radius: 8px; overflow: hidden; }
+.choix-panneau .segments button { flex: 1; border: 0; border-radius: 0; min-height: 30px; background: var(--panneau2); color: var(--discret); }
+.choix-panneau .segments button.actif { background: var(--accent); color: #06121c; font-weight: 600; }
+.choix-panneau .segments button[data-mode="exclure"].actif { background: var(--alerte); }
+.choix-panneau .choix-cherche { width: 100%; min-height: 30px; }
+.choix-actions { display: flex; justify-content: space-between; }
+.choix-liste { max-height: 300px; overflow-y: auto; border: 1px solid var(--bord); border-radius: 8px; padding: 2px 0; }
+.choix-liste .case { display: flex; align-items: center; gap: 8px; padding: 4px 8px; font-size: .85rem; cursor: pointer; }
+.choix-liste .case:hover { background: var(--panneau2); }
+.choix-liste .case input { min-height: 0; width: 16px; height: 16px; flex: none; }
+.choix-pied { display: flex; align-items: center; gap: 6px; }
+.choix-pied .espace { flex: 1; }
+.choix-pied button { min-height: 30px; }

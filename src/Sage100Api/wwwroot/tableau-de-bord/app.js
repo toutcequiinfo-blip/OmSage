@@ -344,14 +344,117 @@ function exporterCsv(nom, entetes, lignes) {
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
 /** Filtres clients : catégorie tarifaire et qualité (CT_Qualite) ; une liste n'apparaît que si la base en contient. */
-const selectsClients = (prefixe, f) => [
-  etat.meta.categories.length ? `<label>Catégorie <select id="${prefixe}-categorie"><option value="">Toutes</option>${etat.meta.categories.map((x) =>
-    `<option value="${x.numero}" ${String(f.categorie ?? "") === String(x.numero) ? "selected" : ""}>${echapper(x.intitule)}</option>`).join("")}</select></label>` : "",
-  (etat.meta.qualites ?? []).length ? `<label>Qualité <select id="${prefixe}-qualite"><option value="">Toutes</option>${etat.meta.qualites.map((q) =>
-    `<option value="${echapper(q)}" ${(f.qualite ?? "") === q ? "selected" : ""}>${echapper(q)}</option>`).join("")}</select></label>` : "",
-].join("");
 const selectCollaborateurs = (id, valeur, libelleTous = "Tous les commerciaux") =>
   `<select id="${id}"><option value="">${libelleTous}</option>${etat.meta.collaborateurs.map((c) => `<option value="${c.numero}" ${String(valeur) === String(c.numero) ? "selected" : ""}>${echapper(c.intitule)}</option>`).join("")}</select>`;
+
+// ---------- Filtres à choix multiple ----------
+// Valeur d'un filtre : "" (tout), "A,B" (garder A et B) ou "!A,B" (tout sauf A et B). "~" = non renseigné.
+// Le bouton porte la valeur dans son attribut value et émet « change » quand on l'applique, comme un select.
+const CHOIX = {};
+const VIDE = "~";
+function lireChoix(v) {
+  const t = String(v ?? "").trim();
+  const exclure = t.startsWith("!");
+  return { exclure, valeurs: t.replace(/^!/, "").split(",").map((x) => x.trim()).filter(Boolean) };
+}
+const ecrireChoix = ({ exclure, valeurs }) => (valeurs.length ? `${exclure ? "!" : ""}${valeurs.join(",")}` : "");
+function resumeChoix(id) {
+  const d = CHOIX[id];
+  const { exclure, valeurs } = lireChoix(d.valeur);
+  if (!valeurs.length) return d.tous;
+  const nom = (v) => (v === VIDE ? "(non renseigné)" : d.noms.get(v) ?? v);
+  const texte = valeurs.length <= 2 ? valeurs.map(nom).join(", ") : `${valeurs.length} sélectionnés`;
+  return exclure ? `Sauf ${texte}` : texte;
+}
+/**
+ * Bouton de filtre à cases à cocher. options : [{ valeur, intitule }] ; source : liste cherchée sur le serveur
+ * (articles, clients, fournisseurs, tiers) pour les longues listes ; vide : propose « (non renseigné) ».
+ */
+function choix(id, { options = [], source, valeur = "", tous = "Tous", vide = false } = {}) {
+  const noms = new Map(options.map((o) => [String(o.valeur), o.intitule ?? String(o.valeur)]));
+  CHOIX[id] = { options: options.map((o) => ({ valeur: String(o.valeur), intitule: o.intitule ?? String(o.valeur) })), source, valeur: valeur ?? "", tous, vide, noms };
+  const actif = lireChoix(valeur).valeurs.length > 0;
+  return `<button type="button" class="choix ${actif ? "actif" : ""} ${lireChoix(valeur).exclure ? "exclu" : ""}" id="${id}" value="${echapper(valeur ?? "")}" data-choix="${id}"
+    title="${echapper(resumeChoix(id))}"><span>${echapper(resumeChoix(id))}</span><span class="fleche">▾</span></button>`;
+}
+function ouvrirChoix(bouton) {
+  fermerChoix();
+  const d = CHOIX[bouton.dataset.choix];
+  if (!d) return;
+  const etatChoix = lireChoix(bouton.value);
+  const coches = new Set(etatChoix.valeurs);
+  let exclure = etatChoix.exclure;
+  let affichees = d.options;
+  const p = document.createElement("div");
+  p.className = "choix-panneau";
+  p.innerHTML = `
+    <div class="segments"><button type="button" data-mode="garder">Garder</button><button type="button" data-mode="exclure">Exclure</button></div>
+    <input type="search" class="choix-cherche" placeholder="${d.source ? "Rechercher (code ou nom)" : "Filtrer la liste"}">
+    <div class="choix-actions"><button type="button" class="lien" data-tout>Tout cocher</button><button type="button" class="lien" data-rien>Tout décocher</button></div>
+    <div class="choix-liste"></div>
+    <div class="choix-pied"><span class="discret choix-compte"></span><span class="espace"></span><button type="button" data-effacer>Effacer</button><button type="button" class="principal" data-appliquer>Appliquer</button></div>`;
+  document.body.appendChild(p);
+  const r = bouton.getBoundingClientRect();
+  p.style.top = `${Math.min(r.bottom + 4, window.innerHeight - 40)}px`;
+  p.style.left = `${Math.max(8, Math.min(r.left, window.innerWidth - p.offsetWidth - 8))}px`;
+  const liste = $(".choix-liste", p);
+  const cherche = $(".choix-cherche", p);
+  const modes = () => p.querySelectorAll("[data-mode]").forEach((b) => b.classList.toggle("actif", (b.dataset.mode === "exclure") === exclure));
+  const compte = () => { $(".choix-compte", p).textContent = coches.size ? `${coches.size} ${exclure ? "exclu(s)" : "coché(s)"}` : "aucun filtre"; };
+  const dessiner = () => {
+    const q = cherche.value.trim().toLowerCase();
+    const visibles = (d.source ? affichees : affichees.filter((o) => !q || `${o.valeur} ${o.intitule}`.toLowerCase().includes(q)));
+    // Les valeurs cochées absentes de la liste affichée (recherche) restent visibles en tête.
+    const enPlus = [...coches].filter((v) => !visibles.some((o) => o.valeur === v)).map((v) => ({ valeur: v, intitule: v === VIDE ? "(non renseigné)" : d.noms.get(v) ?? v }));
+    const lignes = [...enPlus, ...(d.vide && !q && !enPlus.some((o) => o.valeur === VIDE) ? [{ valeur: VIDE, intitule: "(non renseigné)" }] : []), ...visibles];
+    liste.innerHTML = lignes.map((o) => `<label class="case"><input type="checkbox" value="${echapper(o.valeur)}" ${coches.has(o.valeur) ? "checked" : ""}>
+      <span>${o.intitule && o.intitule !== o.valeur && d.source ? `<b>${echapper(o.valeur)}</b> ${echapper(o.intitule)}` : echapper(o.intitule)}</span></label>`).join("")
+      || '<p class="discret" style="padding:6px">Aucune valeur.</p>';
+    compte();
+  };
+  let minuterie;
+  const charger = async () => {
+    if (!d.source) return dessiner();
+    try {
+      affichees = await api(`/tableau-de-bord/valeurs/${d.source}?${qs({ q: cherche.value.trim(), limite: 200 })}`);
+      affichees = affichees.map((o) => ({ valeur: o.valeur, intitule: o.intitule ?? o.valeur }));
+      affichees.forEach((o) => d.noms.set(o.valeur, o.intitule ? `${o.valeur} ${o.intitule}` : o.valeur));
+    } catch (e) { affichees = []; }
+    dessiner();
+  };
+  cherche.addEventListener("input", () => { clearTimeout(minuterie); minuterie = setTimeout(charger, d.source ? 250 : 0); });
+  liste.addEventListener("change", (e) => { const v = e.target.value; if (e.target.checked) coches.add(v); else coches.delete(v); compte(); });
+  p.querySelectorAll("[data-mode]").forEach((b) => b.addEventListener("click", () => { exclure = b.dataset.mode === "exclure"; modes(); compte(); }));
+  $("[data-tout]", p).addEventListener("click", () => { liste.querySelectorAll("input").forEach((x) => { x.checked = true; coches.add(x.value); }); compte(); });
+  $("[data-rien]", p).addEventListener("click", () => { liste.querySelectorAll("input").forEach((x) => { x.checked = false; coches.delete(x.value); }); compte(); });
+  const appliquer = (valeur) => {
+    fermerChoix();
+    if (valeur === bouton.value) return;
+    bouton.value = valeur;
+    d.valeur = valeur;
+    bouton.dispatchEvent(new Event("change", { bubbles: true }));
+  };
+  $("[data-effacer]", p).addEventListener("click", () => appliquer(""));
+  $("[data-appliquer]", p).addEventListener("click", () => appliquer(ecrireChoix({ exclure, valeurs: [...coches] })));
+  p.addEventListener("keydown", (e) => { if (e.key === "Escape") fermerChoix(); if (e.key === "Enter") $("[data-appliquer]", p).click(); });
+  modes();
+  charger();
+  cherche.focus();
+}
+function fermerChoix() { document.querySelectorAll(".choix-panneau").forEach((x) => x.remove()); }
+document.addEventListener("click", (e) => {
+  const b = e.target.closest("button.choix");
+  if (b) { e.preventDefault(); return document.querySelector(".choix-panneau") && CHOIX.ouvert === b.id ? (fermerChoix(), (CHOIX.ouvert = null)) : (ouvrirChoix(b), (CHOIX.ouvert = b.id)); }
+  if (!e.target.closest(".choix-panneau")) { fermerChoix(); CHOIX.ouvert = null; }
+});
+window.addEventListener("resize", fermerChoix);
+
+const choixClients = (prefixe, f) => [
+  etat.meta.categories.length ? `<label>Catégorie ${choix(`${prefixe}-categorie`, { options: etat.meta.categories.map((x) => ({ valeur: x.numero, intitule: x.intitule })), valeur: f.categorie, tous: "Toutes", vide: true })}</label>` : "",
+  (etat.meta.qualites ?? []).length ? `<label>Qualité ${choix(`${prefixe}-qualite`, { options: etat.meta.qualites.map((q) => ({ valeur: q, intitule: q })), valeur: f.qualite, tous: "Toutes", vide: true })}</label>` : "",
+].join("");
+const choixCollaborateurs = (id, valeur, tous = "Tous") =>
+  choix(id, { options: etat.meta.collaborateurs.map((c) => ({ valeur: c.numero, intitule: c.intitule })), valeur, tous, vide: true });
 
 // ==================== Tableau comptable ====================
 async function syntheseCompta(c) {
@@ -501,8 +604,8 @@ async function recouvrement(c, type) {
   const clients = type === "clients";
   const TR = [["nonEchu", "Non échu", "var(--c3)"], ["r1a30", "1 à 30 j", "var(--c7)"], ["r31a60", "31 à 60 j", "var(--c4)"], ["r61a90", "61 à 90 j", "var(--c6)"], ["plus90", "Plus de 90 j", "var(--c5)"]];
   c.innerHTML = `
-    ${clients ? `<div class="commandes">${etat.meta.collaborateurs.length > 1 ? `<label>Commercial ${selectCollaborateurs("f-rec-co", f.commercial)}</label>` : ""}
-      ${selectsClients("f-rec", f)}</div>` : ""}
+    ${clients ? `<div class="commandes">${etat.meta.collaborateurs.length > 1 ? `<label>Commercial ${choixCollaborateurs("f-rec-co", f.commercial)}</label>` : ""}
+      ${choixClients("f-rec", f)}</div>` : ""}
     <section class="tuiles">
       ${tuile({ libelle: clients ? "Total dû par les clients" : "Total dû aux fournisseurs", valeur: montant(t.total), pied: t.credits ? `dont crédits non affectés ${montant(t.credits)}` : "" })}
       ${tuile({ libelle: "Échu", valeur: montant(r.echu), pied: t.total > 0 ? `${nombre((r.echu / (t.total - t.credits)) * 100, 0)} % du dû` : "", niveau: r.echu > 0 ? "attention" : "" })}
@@ -611,17 +714,17 @@ async function explorateur(c, nom, sens) {
   const cube = await api(`${base}/cube?${qs(paramsCube(cfg))}`);
   const optAxes = (val, vide) => (vide ? `<option value="">${vide}</option>` : "") + axes.map((a) => `<option value="${a.code}" ${a.code === val ? "selected" : ""}>${echapper(a.libelle)}</option>`).join("");
   const filtresTexte = compta
-    ? `<label class="court">Comptes <input id="x-comptes" value="${echapper(cfg.comptes ?? "")}" placeholder="ex. 6,7 ou 411"></label>
-       ${cfg.source !== "analytique" ? `<label>Journal <select id="x-journal"><option value="">Tous</option>${etat.meta.journaux.map((j) => `<option value="${echapper(j.code)}" ${cfg.journaux === j.code ? "selected" : ""}>${echapper(j.code)} ${echapper(j.intitule ?? "")}</option>`).join("")}</select></label>
-       <label class="court">Tiers <input id="x-tiers" value="${echapper(cfg.tiers ?? "")}" placeholder="code"></label>
+    ? `<label class="court">Comptes <input id="x-comptes" value="${echapper(cfg.comptes ?? "")}" placeholder="ex. 6,7 ou !65" title="Préfixes de comptes séparés par des virgules ; commencer par ! pour les exclure (ex. !65,66)"></label>
+       ${cfg.source !== "analytique" ? `<label>Journal ${choix("x-journal", { options: etat.meta.journaux.map((j) => ({ valeur: j.code, intitule: `${j.code} ${j.intitule ?? ""}` })), valeur: cfg.journaux })}</label>
+       <label>Tiers ${choix("x-tiers", { source: "tiers", valeur: cfg.tiers })}</label>
        <label title="Inclure les écritures d'à-nouveaux"><span>À-nouveaux</span><input id="x-an" type="checkbox" ${cfg.aNouveaux ? "checked" : ""}></label>`
         : `<label>Plan <select id="x-plan">${etat.meta.plans.map((p) => `<option value="${p.numero}" ${String(cfg.plan) === String(p.numero) ? "selected" : ""}>${echapper(p.intitule)}</option>`).join("")}</select></label>`}`
-    : `<label>Famille <select id="x-famille"><option value="">Toutes</option>${etat.meta.familles.map((f) => `<option value="${echapper(f.code)}" ${cfg.famille === f.code ? "selected" : ""}>${echapper(f.intitule ?? f.code)}</option>`).join("")}</select></label>
-       ${cfg.domaine !== "achats" && etat.meta.collaborateurs.length > 1 ? `<label>Commercial ${selectCollaborateurs("x-commercial", cfg.commercial, "Tous")}</label>` : ""}
-       ${cfg.domaine !== "achats" ? selectsClients("x", cfg) : ""}
-       ${etat.meta.depots.length > 1 ? `<label>Dépôt <select id="x-depot"><option value="">Tous</option>${etat.meta.depots.map((d) => `<option value="${d.numero}" ${String(cfg.depot) === String(d.numero) ? "selected" : ""}>${echapper(d.intitule)}</option>`).join("")}</select></label>` : ""}
-       <label class="court">${cfg.domaine === "achats" ? "Fournisseur" : "Client"} <input id="x-tiers" value="${echapper(cfg.tiers ?? "")}" placeholder="code"></label>
-       <label class="court">Article <input id="x-article" value="${echapper(cfg.article ?? "")}" placeholder="référence"></label>`;
+    : `<label>Famille ${choix("x-famille", { options: etat.meta.familles.map((f) => ({ valeur: f.code, intitule: f.intitule ?? f.code })), valeur: cfg.famille, tous: "Toutes", vide: true })}</label>
+       ${cfg.domaine !== "achats" && etat.meta.collaborateurs.length > 1 ? `<label>Commercial ${choixCollaborateurs("x-commercial", cfg.commercial)}</label>` : ""}
+       ${cfg.domaine !== "achats" ? choixClients("x", cfg) : ""}
+       ${etat.meta.depots.length > 1 ? `<label>Dépôt ${choix("x-depot", { options: etat.meta.depots.map((d) => ({ valeur: d.numero, intitule: d.intitule })), valeur: cfg.depot })}</label>` : ""}
+       <label>${cfg.domaine === "achats" ? "Fournisseur" : "Client"} ${choix("x-tiers", { source: cfg.domaine === "achats" ? "fournisseurs" : "clients", valeur: cfg.tiers })}</label>
+       <label>Article ${choix("x-article", { source: "articles", valeur: cfg.article })}</label>`;
 
   c.innerHTML = `
     <article class="carte l12" style="grid-column:1/-1">
@@ -655,7 +758,7 @@ async function explorateur(c, nom, sens) {
       categorie: v("#x-categorie"), qualite: v("#x-qualite") });
     return m;
   };
-  c.querySelectorAll(".commandes select, .commandes input[type=date], .commandes input[type=checkbox]").forEach((x) => x.addEventListener("change", () => changer(lireChamps())));
+  c.querySelectorAll(".commandes select, .commandes input[type=date], .commandes input[type=checkbox], .commandes button.choix").forEach((x) => x.addEventListener("change", () => changer(lireChamps())));
   c.querySelectorAll(".commandes input[type=text], .commandes input:not([type])").forEach((x) => x.addEventListener("keydown", (e) => { if (e.key === "Enter") changer(lireChamps()); }));
   c.querySelectorAll(".commandes input:not([type])").forEach((x) => x.addEventListener("change", () => changer(lireChamps())));
   c.querySelectorAll("[data-vue]").forEach((b) => b.addEventListener("click", () => { cfg.vue = b.dataset.vue; dessiner(); c.querySelectorAll("[data-vue]").forEach((x) => x.classList.toggle("actif", x === b)); }));

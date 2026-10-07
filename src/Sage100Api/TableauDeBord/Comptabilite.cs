@@ -60,19 +60,23 @@ public static class Comptabilite
         _ => s[0] - s[1],
     };
 
-    /// <summary>Écritures générales retenues par les filtres (période en mois, comptes par préfixe, journaux, tiers).</summary>
+    /// <summary>
+    /// Écritures générales retenues par les filtres : période, comptes par préfixe, journaux, tiers. Comptes, journaux et tiers
+    /// sont des choix multiples (<see cref="Selection"/>) : « 6,7 » garde, « !65 » exclut.
+    /// </summary>
     public static IEnumerable<FaitCompta> Filtrer(Instantane i, RequeteCompta r, DateTime aujourdhui)
     {
         var (du, au) = Bornes(i, r.Du, r.Au, aujourdhui);
-        var comptes = Periodes.Liste(r.Comptes);
-        var journaux = Periodes.Liste(r.Journaux)?.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var comptes = Selection.Lire(r.Comptes);
+        var journaux = Selection.Lire(r.Journaux);
+        var tiers = Selection.Lire(r.Tiers);
         var aNouveaux = r.ANouveaux ?? false;
         return i.Compta.Where(f => f.Date >= du && f.Date <= au
             && (aNouveaux || !f.ANouveau)
-            && (comptes == null || comptes.Any(c => f.Compte.StartsWith(c, StringComparison.OrdinalIgnoreCase)))
-            && (journaux == null || journaux.Contains(f.Journal))
+            && (comptes?.RetientPrefixe(f.Compte) ?? true)
+            && (journaux?.Retient(f.Journal) ?? true)
             && (r.TypeJournal == null || (i.Journaux.TryGetValue(f.Journal, out var j) && j.Type == r.TypeJournal))
-            && (r.Tiers == null || string.Equals(f.Tiers, r.Tiers, StringComparison.OrdinalIgnoreCase)));
+            && (tiers?.Retient(f.Tiers) ?? true));
     }
 
     /// <summary>Premier et dernier jour inclus (« 2026-03-15 », ou un mois entier « 2026-03 ») ; par défaut l'exercice du jour.</summary>
@@ -90,13 +94,13 @@ public static class Comptabilite
             var plan = r.Plan ?? i.Plans.Keys.DefaultIfEmpty(1).Min();
             var axes = AxesAnalytiques(i, plan);
             var (du, au) = Bornes(i, r.Du, r.Au, aujourdhui);
-            var comptes = Periodes.Liste(r.Comptes);
-            var sections = Periodes.Liste(r.Sections)?.ToHashSet(StringComparer.OrdinalIgnoreCase);
-            var journaux = Periodes.Liste(r.Journaux)?.ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var comptes = Selection.Lire(r.Comptes);
+            var sections = Selection.Lire(r.Sections);
+            var journaux = Selection.Lire(r.Journaux);
             var faits = i.Analytique.Where(f => f.Plan == plan && f.Date >= du && f.Date <= au
-                && (comptes == null || comptes.Any(c => f.Compte.StartsWith(c, StringComparison.OrdinalIgnoreCase)))
-                && (sections == null || sections.Contains(f.Section))
-                && (journaux == null || journaux.Contains(f.Journal)));
+                && (comptes?.RetientPrefixe(f.Compte) ?? true)
+                && (sections?.Retient(f.Section) ?? true)
+                && (journaux?.Retient(f.Journal) ?? true));
             return Cube.Pivoter(faits, Axe(axes, r.Lignes, "section"), Axe(axes, r.Colonnes, null), 1, f => [f.Montant],
                 MesuresAnalytiques, (s, m) => m == "soldeCrediteur" ? -s[0] : s[0], r.Tri ?? "solde", limite);
         }
@@ -115,10 +119,14 @@ public static class Comptabilite
     public static FiltreDetailCompta? Detail(Instantane i, RequeteCompta r, string? cleLigne, string? cleColonne, DateTime aujourdhui)
     {
         var (du, au) = Bornes(i, r.Du, r.Au, aujourdhui);
-        var comptes = Periodes.Liste(r.Comptes)?.ToList();
-        var journaux = Periodes.Liste(r.Journaux)?.ToList();
+        var selComptes = Selection.Lire(r.Comptes);
+        var selJournaux = Selection.Lire(r.Journaux);
+        var selTiers = Selection.Lire(r.Tiers);
+        var comptes = selComptes is { Exclure: false } ? selComptes.Valeurs.Where(v => v != "").ToList() : null;
+        var journaux = selJournaux is { Exclure: false } ? selJournaux.Valeurs.ToList() : null;
         if (r.TypeJournal is { } tj) journaux = Intersection(journaux, i.Journaux.Values.Where(j => j.Type == tj).Select(j => j.Code));
-        var tiers = r.Tiers;
+        string? tiers = null;
+        List<string>? tiersListe = selTiers is { Exclure: false } ? selTiers.Valeurs.ToList() : null;
         foreach (var (axe, cle) in new[] { (r.Lignes ?? "classe", cleLigne), (r.Colonnes, cleColonne) })
         {
             if (axe == null || cle == null) continue;
@@ -142,13 +150,21 @@ public static class Comptabilite
                 case "tiers":
                     if (cle == Cube.CleAucun) return null;
                     tiers = cle;
+                    if (tiersListe != null && !tiersListe.Contains(cle, StringComparer.OrdinalIgnoreCase)) return null;
                     break;
                 default:
                     return null;
             }
         }
         if (comptes is { Count: 0 } || journaux is { Count: 0 } || du > au) return null;
-        return new FiltreDetailCompta(du, au, comptes, journaux, tiers, r.ANouveaux ?? false, 500);
+        if (tiersListe is { Count: 1 } && tiers == null) (tiers, tiersListe) = (tiersListe[0], null);
+        return new FiltreDetailCompta(du, au, comptes, journaux, tiers, r.ANouveaux ?? false, 500)
+        {
+            TiersListe = tiers == null ? tiersListe : null,
+            ComptesExclus = selComptes is { Exclure: true } ? selComptes.Valeurs.Where(v => v != "").ToList() : null,
+            JournauxExclus = selJournaux is { Exclure: true } ? selJournaux.Valeurs.ToList() : null,
+            TiersExclus = selTiers is { Exclure: true } ? selTiers.Valeurs.ToList() : null,
+        };
     }
 
     static List<string> Intersection(List<string>? actuels, IEnumerable<string> autres) =>
