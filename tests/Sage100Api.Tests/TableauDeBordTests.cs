@@ -383,6 +383,43 @@ public sealed class TableauDeBordTests : IDisposable
         Assert.Equal(Perimetre.Vendeur, P(chef: true, financier: true));
     }
     [Fact]
+    public void La_semaine_suit_la_norme_ISO()
+    {
+        Assert.Equal("2026-S01", Periodes.Semaine(new DateTime(2025, 12, 29)));
+        Assert.Equal("2025-S52", Periodes.Semaine(new DateTime(2025, 12, 28)));
+        Assert.Equal(new DateTime(2026, 10, 5), Periodes.DebutSemaine("2026-S41"));
+        Assert.Null(Periodes.DebutSemaine("2026-S54"));
+        Assert.Equal("S41 2026 (05/10)", Periodes.IntituleSemaine("2026-S41"));
+    }
+
+    [Fact]
+    public async Task Le_taux_de_transformation_compare_le_livre_au_commande()
+    {
+        var i = await Instantane();
+        var du = Aujourdhui.AddDays(-60).ToString("yyyy-MM-dd");
+        var au = Aujourdhui.ToString("yyyy-MM-dd");
+        RequeteVentes R(string lignes, string? tiers = null) => new(null, lignes, null, du, au, null, null, tiers, null, null, null, null, null);
+
+        var total = Transformation.Croiser(i, R("tiers"), Direction, Aujourdhui).Total.Total;
+        Assert.Equal(4500m, total["commande"]);
+        Assert.Equal(2500m, total["livre"]);
+        Assert.Equal(1500m, total["encours"]);
+        Assert.Equal(500m, total["nonservi"]);
+        Assert.Equal(55.6m, total["transfo"]);
+        Assert.Equal(40m, total["transfoQte"]);
+        Assert.Equal(1000m, Transformation.Croiser(i, R("tiers", "!CISEL"), Direction, Aujourdhui).Total.Total["commande"]);
+
+        var cisel = Transformation.Detail(i, R("tiers"), Direction, "CISEL", null, Aujourdhui)!;
+        Assert.Equal(["BC00004", "BC00002"], cisel.Select(c => c.Piece));
+        Assert.Equal("Non servie", cisel[0].Statut);
+        Assert.Equal("Partielle", cisel[1].Statut);
+        Assert.Equal(15, cisel[1].Delai);
+        Assert.Equal("Livrée", Transformation.Detail(i, R("tiers"), Direction, "BAGUES", null, Aujourdhui)!.Single().Statut);
+        Assert.Equal(["BC00003"], Transformation.Detail(i, R("semaine"), Direction, Periodes.Semaine(Aujourdhui.AddDays(-18)), null, Aujourdhui)!
+            .Select(c => c.Piece).Where(p => p == "BC00003"));
+    }
+
+    [Fact]
     public async Task Les_filtres_acceptent_plusieurs_valeurs_et_les_exclusions()
     {
         var i = await Instantane();
@@ -482,6 +519,13 @@ sealed class FaussesLecturesTableauDeBord : ILecturesTableauDeBord
     public Task<IReadOnlyList<FaitEnCours>> EnCours() => L(
         new FaitEnCours { Type = 1, Date = J.AddDays(-10), DateLivraison = J.AddDays(-2), Piece = "BC00001", Tiers = "CISEL", Commercial = 3, MontantHT = 800 },
         new FaitEnCours { Type = 0, Date = J, Piece = "DE00001", Tiers = "BAGUES", Commercial = 4, MontantHT = 1200 });
+
+    // BC00002 : 2 CHORFA, 1 livré (BL), 1 en attente ; BC00003 : facturé en entier ; BC00004 : soldé sans livraison.
+    public Task<IReadOnlyList<FaitCommande>> Commandes(DateTime depuis) => L(
+        new FaitCommande { Commande = "BC00002", DateCommande = J.AddDays(-20), Piece = "BL00002", Type = 3, DateLivraison = J.AddDays(-5), Article = "CHORFA", Tiers = "CISEL", Commercial = 3, Quantite = 1, MontantHT = 1500 },
+        new FaitCommande { Commande = "BC00002", DateCommande = J.AddDays(-20), Piece = "BC00002", Type = 1, Article = "CHORFA", Tiers = "CISEL", Commercial = 3, Quantite = 1, MontantHT = 1500 },
+        new FaitCommande { Commande = "BC00003", DateCommande = J.AddDays(-18), Piece = "FA00003", Type = 6, DateLivraison = J.AddDays(-15), Article = "BAOR01", Tiers = "BAGUES", Commercial = 4, Quantite = 1, MontantHT = 1000 },
+        new FaitCommande { Commande = "BC00004", DateCommande = J.AddDays(-10), Piece = "BC00004", Type = 1, Cloture = true, Article = "CHORFA", Tiers = "CISEL", Commercial = 3, Quantite = 2, MontantHT = 500 });
 
     public Task<IReadOnlyList<LigneStock>> Stock() => StockEnPanne
         ? throw new InvalidOperationException("Nom de colonne non valide : AS_MontSto")

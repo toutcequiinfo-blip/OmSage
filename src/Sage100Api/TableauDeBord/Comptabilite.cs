@@ -23,6 +23,7 @@ public static class Comptabilite
         new("annee", "Année", f => Periodes.Annee(f.Mois), null, true),
         new("trimestre", "Trimestre", f => Periodes.Trimestre(f.Mois), null, true),
         new("mois", "Mois", f => Periodes.Mois(f.Mois), Periodes.IntituleMois, true),
+        new("semaine", "Semaine", f => Periodes.Semaine(f.Date), Periodes.IntituleSemaine, true),
         new("classe", "Classe", f => f.Compte[..Math.Min(1, f.Compte.Length)], k => Classes.TryGetValue(k, out var c) ? $"{k} {c}" : k, true),
         new("radical", "Compte à 2 chiffres", f => f.Compte[..Math.Min(2, f.Compte.Length)], k => Compte(i, k), true),
         new("compte", "Compte", f => f.Compte, k => Compte(i, k), true),
@@ -39,6 +40,7 @@ public static class Comptabilite
         new("annee", "Année", f => Periodes.Annee(f.Mois), null, true),
         new("trimestre", "Trimestre", f => Periodes.Trimestre(f.Mois), null, true),
         new("mois", "Mois", f => Periodes.Mois(f.Mois), Periodes.IntituleMois, true),
+        new("semaine", "Semaine", f => Periodes.Semaine(f.Date), Periodes.IntituleSemaine, true),
         new("section", "Section analytique", f => f.Section, k => i.Sections.TryGetValue((plan, k), out var s) ? $"{k} {s}" : k, true),
         new("classe", "Classe", f => f.Compte[..Math.Min(1, f.Compte.Length)], k => Classes.TryGetValue(k, out var c) ? $"{k} {c}" : k, true),
         new("radical", "Compte à 2 chiffres", f => f.Compte[..Math.Min(2, f.Compte.Length)], k => Compte(i, k), true),
@@ -131,7 +133,7 @@ public static class Comptabilite
         {
             if (axe == null || cle == null) continue;
             if (cle == Cube.CleAutres) return null;
-            if (axe is "exercice" or "annee" or "trimestre" or "mois")
+            if (axe is "exercice" or "annee" or "trimestre" or "mois" or "semaine")
             {
                 if (!Periodes.Restreindre(i, axe, cle, ref du, ref au)) return null;
                 continue;

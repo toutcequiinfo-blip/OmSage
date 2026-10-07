@@ -40,22 +40,28 @@ public static class Commercial
 
     public static int Domaine(string? d) => d == "achats" ? 1 : 0;
 
-    public static IReadOnlyDictionary<string, Axe<FaitLigne>> Axes(Instantane i) => new Axe<FaitLigne>[]
+    public static IReadOnlyDictionary<string, Axe<FaitLigne>> Axes(Instantane i) =>
+        AxesVentes<FaitLigne>(i, f => f.Date, f => f.Article, f => f.Tiers, f => f.Commercial, f => f.Depot);
+
+    /// <summary>Axes des ventes, communs aux lignes de factures et aux commandes (taux de transformation).</summary>
+    internal static IReadOnlyDictionary<string, Axe<T>> AxesVentes<T>(Instantane i, Func<T, DateTime> date, Func<T, string> article, Func<T, string> tiers,
+        Func<T, int?> commercial, Func<T, int?> depot) => new Axe<T>[]
     {
-        new("exercice", "Exercice", f => Periodes.CleExercice(i.ExerciceDe(f.Mois)),
+        new("exercice", "Exercice", f => Periodes.CleExercice(i.ExerciceDe(date(f))),
             k => i.Exercices.FirstOrDefault(e => Periodes.CleExercice(e) == k) is { } e ? Periodes.IntituleExercice(e) : k, true),
-        new("annee", "Année", f => Periodes.Annee(f.Mois), null, true),
-        new("trimestre", "Trimestre", f => Periodes.Trimestre(f.Mois), null, true),
-        new("mois", "Mois", f => Periodes.Mois(f.Mois), Periodes.IntituleMois, true),
-        new("article", "Article", f => f.Article, k => i.Articles.TryGetValue(k, out var a) ? $"{k} {a.Designation?.Trim()}" : k),
-        new("famille", "Famille", f => i.Famille(f.Article), k => i.Familles.GetValueOrDefault(k) is { } x ? $"{k} {x}" : k),
-        new("tiers", "Client / fournisseur", f => f.Tiers, k => i.IntituleTiers(k) is { } t ? $"{k} {t}" : k),
-        new("categorie", "Catégorie tarifaire", f => i.Tiers.TryGetValue(f.Tiers, out var t) ? t.Categorie?.ToString() : null,
+        new("annee", "Année", f => Periodes.Annee(date(f)), null, true),
+        new("trimestre", "Trimestre", f => Periodes.Trimestre(date(f)), null, true),
+        new("mois", "Mois", f => Periodes.Mois(date(f)), Periodes.IntituleMois, true),
+        new("semaine", "Semaine", f => Periodes.Semaine(date(f)), Periodes.IntituleSemaine, true),
+        new("article", "Article", f => article(f), k => i.Articles.TryGetValue(k, out var a) ? $"{k} {a.Designation?.Trim()}" : k),
+        new("famille", "Famille", f => i.Famille(article(f)), k => i.Familles.GetValueOrDefault(k) is { } x ? $"{k} {x}" : k),
+        new("tiers", "Client / fournisseur", f => tiers(f), k => i.IntituleTiers(k) is { } t ? $"{k} {t}" : k),
+        new("categorie", "Catégorie tarifaire", f => i.Tiers.TryGetValue(tiers(f), out var t) ? t.Categorie?.ToString() : null,
             k => int.TryParse(k, out var c) ? i.Categories.GetValueOrDefault(c) ?? k : k),
-        new("qualite", "Qualité client", f => i.Tiers.TryGetValue(f.Tiers, out var t) ? t.Qualite : null, null),
-        new("commercial", "Commercial", f => (f.Commercial ?? i.Representant(f.Tiers))?.ToString(),
+        new("qualite", "Qualité client", f => i.Tiers.TryGetValue(tiers(f), out var t) ? t.Qualite : null, null),
+        new("commercial", "Commercial", f => (commercial(f) ?? i.Representant(tiers(f)))?.ToString(),
             k => int.TryParse(k, out var c) ? i.Collaborateurs.GetValueOrDefault(c) ?? k : k),
-        new("depot", "Dépôt", f => f.Depot?.ToString(), k => int.TryParse(k, out var d) ? i.Depots.GetValueOrDefault(d) ?? k : k),
+        new("depot", "Dépôt", f => depot(f)?.ToString(), k => int.TryParse(k, out var d) ? i.Depots.GetValueOrDefault(d) ?? k : k),
     }.ToDictionary(a => a.Code);
 
     static decimal Mesure(decimal[] s, string m) => m switch
@@ -120,7 +126,7 @@ public static class Commercial
         {
             if (axe == null || cle == null) continue;
             if (cle == Cube.CleAutres) return null;
-            if (axe is "exercice" or "annee" or "trimestre" or "mois")
+            if (axe is "exercice" or "annee" or "trimestre" or "mois" or "semaine")
             {
                 if (!Periodes.Restreindre(i, axe, cle, ref du, ref au)) return null;
                 continue;
@@ -282,6 +288,7 @@ public static class Commercial
             aRelancer,
             devis = EnCours(0), commandes = EnCours(1), preparations = EnCours(2), livraisons = EnCours(3),
             commandesEnRetard = new { nombre = bcEnRetard.Count, montant = bcEnRetard.Sum(x => x.MontantHT) },
+            transformation = Transformation.Synthese(i.Commandes.Where(x => x.DateCommande.Date >= du.Date && x.DateCommande.Date <= au.Date && Retenue(x.Tiers, x.Commercial))),
             stock,
             creancesClients = creances,
             alertes,

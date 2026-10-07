@@ -151,6 +151,17 @@ public static class Routes
             return await c.Sage(() => l.DetailVentes(f));
         }).WithSummary("Lignes de factures d'une cellule du tableau croisé (500 au plus), lues dans Sage");
 
+        g.MapGet("/commercial/transformation/cube", (Contexte c, [AsParameters] RequeteVentes r) =>
+            c.Refus(p => p.VoitCommercial) ?? Results.Ok(Transformation.Croiser(c.Instantane, r, c.Perimetre, DateTime.Today)))
+            .WithSummary("Taux de transformation commande → livraison : commandé, livré, en cours, non servi et taux, par article, client, mois, semaine...");
+
+        g.MapGet("/commercial/transformation/detail", (Contexte c, [AsParameters] RequeteVentes r, string? cleLigne, string? cleColonne) =>
+        {
+            if (c.Refus(p => p.VoitCommercial) is { } refus) return refus;
+            var d = Transformation.Detail(c.Instantane, r, c.Perimetre, cleLigne, cleColonne, DateTime.Today);
+            return d == null ? Results.BadRequest(new { code = "DETAIL_INDISPONIBLE", message = "Pas de détail pour cette cellule : choisissez une ligne précise." }) : Results.Ok(d);
+        }).WithSummary("Commandes clients d'une cellule du tableau de transformation : commandé, livré, reste, taux, délai et statut (500 au plus)");
+
         g.MapGet("/commercial/commandes", (Contexte c, int? commercial) =>
             c.Refus(p => p.VoitCommercial) ?? Results.Ok(Commercial.Commandes(c.Instantane, c.Perimetre, commercial, DateTime.Today)))
             .WithSummary("Devis, commandes, préparations et bons de livraison non clôturés");

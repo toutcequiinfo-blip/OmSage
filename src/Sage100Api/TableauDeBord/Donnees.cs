@@ -138,6 +138,36 @@ public sealed class FaitEnCours
     public decimal MontantHT { get; init; }
 }
 
+/// <summary>
+/// Lignes de vente issues d'un bon de commande, pour le taux de transformation commande → livraison :
+/// le reliquat des bons de commande (DO_Type 1) et les lignes déjà transformées (préparation, bon de livraison, facture)
+/// qui gardent le numéro du bon d'origine (DL_PieceBC).
+/// </summary>
+public sealed class FaitCommande
+{
+    /// <summary>Numéro du bon de commande d'origine.</summary>
+    public string Commande { get; init; } = "";
+    public DateTime DateCommande { get; init; }
+    /// <summary>Pièce où se trouve la ligne aujourd'hui (le bon de commande lui-même, une préparation, un BL ou une facture).</summary>
+    public string Piece { get; init; } = "";
+    public int Type { get; init; }
+    /// <summary>Bon de commande clôturé : son reliquat ne sera pas livré.</summary>
+    public bool Cloture { get; init; }
+    /// <summary>Date de livraison (date du BL) des lignes livrées.</summary>
+    public DateTime? DateLivraison { get; init; }
+    public string Article { get; init; } = "";
+    public string Tiers { get; init; } = "";
+    public int? Commercial { get; init; }
+    public int? Depot { get; init; }
+    public decimal Quantite { get; init; }
+    public decimal MontantHT { get; init; }
+
+    public bool Livree => Type is 3 or 6 or 7;
+    public bool Preparee => Type == 2;
+    public bool EnAttente => Type == 1 && !Cloture;
+    public bool NonServie => Type == 1 && Cloture;
+}
+
 public sealed class LigneStock
 {
     public string Article { get; init; } = "";
@@ -256,6 +286,7 @@ public interface ILecturesTableauDeBord
     Task<IReadOnlyList<FaitLigne>> Lignes(DateTime depuis);
     Task<IReadOnlyList<FaitPiece>> Pieces(DateTime depuis);
     Task<IReadOnlyList<FaitEnCours>> EnCours();
+    Task<IReadOnlyList<FaitCommande>> Commandes(DateTime depuis);
     Task<IReadOnlyList<LigneStock>> Stock();
     /// <summary>Dernière sortie de stock (livraison ou facture de vente, mouvement de sortie) par article.</summary>
     Task<IReadOnlyDictionary<string, DateTime>> DernieresSorties();
@@ -348,6 +379,21 @@ public sealed class LecturesTableauDeBordSql(Dossiers dossiers, IOptionsMonitor<
         "SELECT CAST(e.DO_Type AS int) AS Type, e.DO_Date AS Date, NULLIF(e.DO_DateLivr, '1900-01-01') AS DateLivraison, e.DO_Piece AS Piece, " +
         "e.DO_Tiers AS Tiers, NULLIF(e.CO_No, 0) AS Commercial, CAST(e.DO_TotalHT AS decimal(18,2)) AS MontantHT " +
         "FROM F_DOCENTETE e WHERE e.DO_Domaine = 0 AND e.DO_Type IN (0, 1, 2, 3) AND e.DO_Cloture = 0");
+
+    // Commandes clients et ce qu'elles sont devenues. Les factures de retour et d'avoir (DO_Provenance 1, 2) n'en font pas partie.
+    public Task<IReadOnlyList<FaitCommande>> Commandes(DateTime depuis) => Lire<FaitCommande>(
+        "SELECT x.Commande, x.DateCommande, e.DO_Piece AS Piece, CAST(e.DO_Type AS int) AS Type, " +
+        "CAST(CASE WHEN e.DO_Cloture <> 0 THEN 1 ELSE 0 END AS bit) AS Cloture, x.DateLivraison, l.AR_Ref AS Article, " +
+        "e.DO_Tiers AS Tiers, NULLIF(e.CO_No, 0) AS Commercial, NULLIF(l.DE_No, 0) AS Depot, " +
+        "CAST(SUM(ABS(l.DL_Qte)) AS decimal(18,4)) AS Quantite, CAST(SUM(l.DL_MontantHT) AS decimal(18,2)) AS MontantHT " +
+        "FROM F_DOCLIGNE l JOIN F_DOCENTETE e ON e.DO_Domaine = l.DO_Domaine AND e.DO_Type = l.DO_Type AND e.DO_Piece = l.DO_Piece " +
+        "CROSS APPLY (SELECT CASE WHEN e.DO_Type = 1 THEN e.DO_Piece ELSE l.DL_PieceBC END AS Commande, " +
+        "CASE WHEN e.DO_Type = 1 THEN e.DO_Date ELSE COALESCE(NULLIF(l.DL_DateBC, '1900-01-01'), e.DO_Date) END AS DateCommande, " +
+        "CASE WHEN e.DO_Type IN (3, 6, 7) THEN COALESCE(NULLIF(l.DL_DateBL, '1900-01-01'), e.DO_Date) END AS DateLivraison) x " +
+        "WHERE e.DO_Domaine = 0 AND l.AR_Ref <> '' AND e.DO_Provenance NOT IN (1, 2) " +
+        "AND (e.DO_Type = 1 OR (e.DO_Type IN (2, 3, 6, 7) AND l.DL_PieceBC <> '')) AND x.DateCommande >= @depuis " +
+        "GROUP BY x.Commande, x.DateCommande, e.DO_Piece, e.DO_Type, e.DO_Cloture, x.DateLivraison, l.AR_Ref, e.DO_Tiers, NULLIF(e.CO_No, 0), NULLIF(l.DE_No, 0)",
+        new { depuis });
 
     public Task<IReadOnlyList<LigneStock>> Stock() => Lire<LigneStock>(
         "SELECT s.AR_Ref AS Article, CAST(s.DE_No AS int) AS Depot, CAST(s.AS_QteSto AS decimal(18,4)) AS Quantite, " +
