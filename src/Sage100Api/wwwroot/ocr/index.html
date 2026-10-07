@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#1f4e79">
+  <title>Lecture de documents</title>
+  <link rel="icon" href="../borne/icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <h1>Lecture de documents</h1>
+    <nav id="onglets" class="onglets" hidden>
+      <button type="button" data-onglet="lire" class="actif">Lire un document</button>
+      <button type="button" data-onglet="documents">Documents enregistrés</button>
+      <button type="button" data-onglet="modeles">Modèles</button>
+    </nav>
+    <button id="btn-utilisateur" class="utilisateur" type="button" hidden></button>
+  </header>
+  <div id="bandeau" class="bandeau" hidden></div>
+
+  <!-- Réglages : clé d'API (reprise de la borne ou du CRM si elle est sur le même serveur) -->
+  <main id="ecran-reglages" class="ecran etroit" hidden>
+    <form id="form-reglages" class="carte formulaire">
+      <h2>Réglages</h2>
+      <label>Clé d'API <input name="cle" type="password" required autocomplete="off"></label>
+      <button type="submit" class="principal">Enregistrer</button>
+    </form>
+  </main>
+
+  <!-- Connexion avec le login Sage -->
+  <main id="ecran-connexion" class="ecran etroit" hidden>
+    <form id="form-connexion" class="carte formulaire">
+      <h2>Connexion</h2>
+      <p class="discret">Votre nom d'utilisateur et votre mot de passe Sage.</p>
+      <label id="choix-dossier" hidden>Société <select name="dossier"></select></label>
+      <label>Utilisateur <input name="utilisateur" required autocomplete="username" autocapitalize="none" spellcheck="false"></label>
+      <label>Mot de passe <input name="motDePasse" type="password" autocomplete="current-password"></label>
+      <button id="btn-connexion" type="submit" class="principal">Se connecter</button>
+      <button id="btn-ouvrir-reglages" type="button" class="lien">Réglages</button>
+    </form>
+  </main>
+
+  <!-- Lecture : le document à gauche avec les zones du modèle, la saisie à vérifier à droite -->
+  <main id="ecran-lire" class="ecran lire" hidden>
+    <section class="visionneuse">
+      <div class="barre">
+        <label class="bouton principal">Ouvrir un scan ou un PDF<input id="fichier" type="file" accept="image/*,application/pdf" hidden></label>
+        <span id="etat-lecture" class="discret">Image (JPG, PNG) ou PDF. Glissez le fichier ici.</span>
+      </div>
+      <div id="page" class="page vide-page">
+        <canvas id="toile"></canvas>
+        <div id="calque" class="calque"></div>
+      </div>
+    </section>
+
+    <section class="panneau">
+      <form id="form-document" class="formulaire compact" autocomplete="off">
+        <div class="ligne-modele">
+          <label>Modèle <select id="modele"></select></label>
+          <button id="btn-marquer" type="button" class="secondaire" title="Tracer sur le document la zone de chaque champ">Marquer les zones</button>
+        </div>
+        <p id="info-modele" class="discret"></p>
+
+        <div id="edition" class="edition" hidden>
+          <p class="aide">Cliquez ⌖ devant un champ puis tracez un cadre autour de sa valeur sur le document.
+            Commencez par <b>Identification</b> : un texte fixe de l'en-tête (NIF, nom du fournisseur) qui reconnaît ce format.</p>
+          <label>Nom du modèle <input id="nom-modele" placeholder="Ex. : Facture JIRAMA"></label>
+          <div class="champ"><button type="button" class="zone" data-champ="identification" title="Tracer la zone">⌖</button>
+            <label>Identification <input id="identification" placeholder="Texte fixe de l'en-tête"></label></div>
+        </div>
+
+        <div class="deux">
+          <label>Type <select name="typeDocument">
+            <option value="facture-fournisseur">Facture fournisseur</option>
+            <option value="commande-client">Commande client</option>
+          </select></label>
+          <label>Tiers <input name="tiers" list="liste-tiers" required placeholder="Compte Sage"></label>
+        </div>
+        <datalist id="liste-tiers"></datalist>
+        <p id="nom-tiers" class="discret"></p>
+
+        <div class="champ"><button type="button" class="zone" data-champ="numero" title="Tracer la zone">⌖</button>
+          <label>N° du document <input name="numero" required maxlength="35"></label></div>
+        <div class="champ"><button type="button" class="zone" data-champ="date" title="Tracer la zone">⌖</button>
+          <label>Date <input name="date" type="date" required></label></div>
+        <div class="champ"><button type="button" class="zone" data-champ="montantHT" title="Tracer la zone">⌖</button>
+          <label>Montant HT <input name="montantHT" inputmode="decimal" class="nombre"></label></div>
+        <div class="champ"><button type="button" class="zone" data-champ="montantTVA" title="Tracer la zone">⌖</button>
+          <label>TVA <input name="montantTVA" inputmode="decimal" class="nombre"></label></div>
+        <div class="champ"><button type="button" class="zone" data-champ="montantTTC" title="Tracer la zone">⌖</button>
+          <label>Montant TTC <input name="montantTTC" inputmode="decimal" class="nombre"></label></div>
+
+        <fieldset class="suite" id="imputation">
+          <legend>Imputation (valeurs par défaut du modèle)</legend>
+          <div class="deux">
+            <label>Compte de charge <input name="compteCharge" list="liste-comptes"></label>
+            <label>Journal <select name="journal"></select></label>
+          </div>
+          <label>Libellé <input name="libelle" maxlength="69"></label>
+        </fieldset>
+        <datalist id="liste-comptes"></datalist>
+
+        <p id="controles" class="controles"></p>
+
+        <div class="boutons">
+          <button id="btn-abandonner" type="button">Abandonner</button>
+          <button id="btn-enregistrer-modele" type="button" class="secondaire" hidden>Enregistrer le modèle</button>
+          <button id="btn-valider" type="submit" class="principal">Valider le document</button>
+        </div>
+      </form>
+    </section>
+  </main>
+
+  <!-- Documents validés, en attente d'écriture dans Sage -->
+  <main id="ecran-documents" class="ecran" hidden>
+    <div class="barre">
+      <label>Statut <select id="filtre-statut">
+        <option value="">Tous</option>
+        <option value="a-ecrire" selected>À écrire dans Sage</option>
+        <option value="ecrit">Écrits dans Sage</option>
+        <option value="rejete">Rejetés</option>
+      </select></label>
+      <input id="filtre-tiers" type="search" placeholder="Tiers" class="petit">
+      <span class="espace"></span>
+      <button id="btn-csv" type="button">Exporter (CSV)</button>
+    </div>
+    <div class="tableau"><table id="table-documents"></table></div>
+  </main>
+
+  <!-- Modèles enregistrés -->
+  <main id="ecran-modeles" class="ecran" hidden>
+    <p class="discret">Un modèle par format de document. Pour changer ses zones, ouvrez un document de ce format puis « Marquer les zones ».</p>
+    <div class="tableau"><table id="table-modeles"></table></div>
+  </main>
+
+  <script src="lib/tesseract.min.js"></script>
+  <script type="module" src="app.js"></script>
+</body>
+</html>

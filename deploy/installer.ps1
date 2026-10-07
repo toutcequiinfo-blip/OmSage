@@ -143,6 +143,7 @@ Write-Host "  Borne (HTTP)  : http://$($env:COMPUTERNAME):$PortHttp/borne/"
 if (Test-Path "$Dossier\api\appsettings.Https.json") {
     Write-Host "  Borne (HTTPS) : https://$($env:COMPUTERNAME):$PortHttps/borne/"
     Write-Host "  Tableaux de bord : https://$($env:COMPUTERNAME):$PortHttps/tableau-de-bord/"
+    Write-Host "  Lecture de documents (OCR) : https://$($env:COMPUTERNAME):$PortHttps/ocr/"
 }
 else { Write-Host "  Pour le HTTPS : lancez deploy\creer-certificats.ps1, puis relancez ce script." }
 Write-Host "  Journal du worker : $Dossier\worker\logs"
