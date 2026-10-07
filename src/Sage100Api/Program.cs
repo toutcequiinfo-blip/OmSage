@@ -35,6 +35,7 @@ builder.Services.AddSingleton<ILecturesErp, LecturesErpSql>();
 builder.Services.AddSingleton<ILecturesTarifs, LecturesTarifsSql>();
 builder.Services.AddSingleton<Geolocalisation>();
 builder.Services.AddSingleton<Crm>();
+builder.Services.AddSingleton<Ocr>();
 builder.Services.AddSingleton<Livraison>();
 builder.Services.AddSingleton<IWorkerClient, WorkerClient>();
 builder.Services.AddSingleton<JournalOperations>();
@@ -68,7 +69,11 @@ app.UseSwagger();
 app.UseSwaggerUI();
 // Application tablette de la borne (wwwroot/borne). Toujours revalidée : c'est son service worker qui la garde hors ligne.
 app.UseDefaultFiles();
-app.UseStaticFiles(new StaticFileOptions { OnPrepareResponse = f => f.Context.Response.Headers.CacheControl = "no-cache" });
+// Types des bibliothèques de lecture de documents (/ocr/lib) : modules JavaScript .mjs et langue de Tesseract.
+var typesFichiers = new Microsoft.AspNetCore.StaticFiles.FileExtensionContentTypeProvider();
+typesFichiers.Mappings[".mjs"] = "text/javascript";
+typesFichiers.Mappings[".traineddata"] = "application/octet-stream";
+app.UseStaticFiles(new StaticFileOptions { ContentTypeProvider = typesFichiers, OnPrepareResponse = f => f.Context.Response.Headers.CacheControl = "no-cache" });
 app.MapGet("/", () => Results.Redirect("/borne/")).ExcludeFromDescription();
 app.UseMiddleware<CleApi>();
 app.UseMiddleware<SocieteDeLaRequete>();
@@ -472,6 +477,75 @@ crmApp.MapDelete("/activites/{id}", (Crm crm, ServiceAuthentification auth, Http
     if (auth.Lire(http) == null && auth.Options.Active) return Reponses.ConnexionRequise();
     return crm.Supprimer(id) ? Results.NoContent() : Results.NotFound();
 });
+
+// ---------- Lecture de documents scannés par modèles (OCR fait dans le navigateur, /ocr/) ----------
+var ocr = v1.MapGroup("/ocr").WithTags("Lecture de documents (OCR)");
+IResult? SansConnexion(ServiceAuthentification auth, HttpContext http) =>
+    auth.Lire(http) == null && auth.Options.Active ? Reponses.ConnexionRequise() : null;
+
+ocr.MapGet("/tiers", (ServiceTableauDeBord tdb, ServiceAuthentification auth, HttpContext http, string? type, string? q, int limite = 30) =>
+{
+    if (SansConnexion(auth, http) is { } refus) return refus;
+    var t = type == "client" ? 0 : 1;
+    var mots = (q ?? "").Trim();
+    return Results.Ok(tdb.Instantane.Tiers.Values.Where(x => x.Type == t && (mots.Length == 0
+            || x.Numero.Contains(mots, StringComparison.OrdinalIgnoreCase) || (x.Intitule ?? "").Contains(mots, StringComparison.OrdinalIgnoreCase)))
+        .OrderBy(x => x.Numero).Take(Math.Clamp(limite, 1, 200)).Select(x => new { numero = x.Numero, intitule = x.Intitule?.Trim() }));
+}).WithSummary("Fournisseurs (type=fournisseur, défaut) ou clients de la photo du tableau de bord, pour choisir le tiers d'un modèle");
+
+ocr.MapGet("/referentiels", (ServiceTableauDeBord tdb, ServiceAuthentification auth, HttpContext http) =>
+{
+    if (SansConnexion(auth, http) is { } refus) return refus;
+    var i = tdb.Instantane;
+    return Results.Ok(new
+    {
+        comptes = i.Comptes.Values.Where(c => c.Numero.StartsWith('6') || c.Numero.StartsWith('2')).OrderBy(c => c.Numero)
+            .Select(c => new { numero = c.Numero, intitule = c.Intitule?.Trim() }),
+        journaux = i.Journaux.Values.Where(j => j.Type == 0).OrderBy(j => j.Code).Select(j => new { code = j.Code, intitule = j.Intitule?.Trim() }),
+    });
+}).WithSummary("Comptes de charges et d'immobilisations, journaux d'achats : valeurs par défaut d'un modèle de facture fournisseur");
+
+ocr.MapGet("/modeles", (Ocr o, ServiceAuthentification auth, HttpContext http) =>
+    SansConnexion(auth, http) ?? Results.Ok(o.Modeles()));
+ocr.MapGet("/modeles/{id}", (Ocr o, ServiceAuthentification auth, HttpContext http, string id) =>
+    SansConnexion(auth, http) ?? (o.LireModele(id) is { } m ? Results.Ok(m) : Results.NotFound()));
+ocr.MapPut("/modeles/{id}", (Ocr o, ServiceAuthentification auth, HttpContext http, string id, ModeleOcrRequest m) =>
+{
+    if (SansConnexion(auth, http) is { } refus) return refus;
+    var erreurs = Ocr.Verifier(id, m).ToList();
+    return erreurs.Count > 0 ? Reponses.Invalide(erreurs) : Results.Ok(o.EnregistrerModele(id, m));
+}).WithSummary("Crée ou met à jour un modèle : texte qui reconnaît le format, ancre et zone de chaque champ (fractions de la page)");
+ocr.MapDelete("/modeles/{id}", (Ocr o, ServiceAuthentification auth, HttpContext http, string id) =>
+    SansConnexion(auth, http) ?? (o.SupprimerModele(id) ? Results.NoContent() : Results.NotFound()));
+
+ocr.MapGet("/documents", (Ocr o, ServiceAuthentification auth, HttpContext http, string? statut, string? tiers, int taille = 200) =>
+    SansConnexion(auth, http) ?? Results.Ok(o.Documents(statut, tiers, Math.Clamp(taille, 1, 2000))));
+ocr.MapGet("/documents/{id}", (Ocr o, ServiceAuthentification auth, HttpContext http, string id) =>
+    SansConnexion(auth, http) ?? (o.LireDocument(id) is { } d ? Results.Ok(d) : Results.NotFound()));
+ocr.MapGet("/documents/{id}/fichier", (Ocr o, ServiceAuthentification auth, HttpContext http, string id) =>
+    SansConnexion(auth, http) ?? (o.Fichier(id) is { } f ? Results.File(f.Contenu, f.Type ?? "application/octet-stream", f.Nom) : Results.NotFound()));
+ocr.MapPut("/documents/{id}", (Ocr o, ServiceAuthentification auth, HttpContext http, string id, DocumentOcrRequest d) =>
+{
+    var u = auth.Lire(http);
+    if (u == null && auth.Options.Active) return Reponses.ConnexionRequise();
+    var erreurs = Ocr.Verifier(id, d).ToList();
+    if (erreurs.Count > 0) return Reponses.Invalide(erreurs);
+    if (o.LireDocument(id) is { Statut: "ecrit" })
+        return Results.Conflict(new { code = "DEJA_ECRIT", message = "Ce document est déjà écrit dans Sage : il ne peut plus être modifié." });
+    var empreinte = d.Contenu == null ? null : Ocr.Empreinte(Convert.FromBase64String(d.Contenu));
+    if (d.Statut != "rejete" && o.Doublon(id, d.Tiers, d.Numero, empreinte) is { } doublon)
+        return Results.Conflict(new
+        {
+            code = "DOUBLON",
+            message = doublon.Empreinte == empreinte && empreinte != null
+                ? $"Ce fichier a déjà été enregistré (document {doublon.Numero} du {doublon.CreeLe.ToLocalTime():dd/MM/yyyy})."
+                : $"Le document {doublon.Numero} de {doublon.Tiers} est déjà enregistré.",
+            document = doublon.Id,
+        });
+    return Results.Ok(o.EnregistrerDocument(id, d, u?.Login));
+}).WithSummary("Enregistre un document lu et validé (id choisi par l'application) ; refuse un doublon (même tiers et numéro, ou même fichier)");
+ocr.MapDelete("/documents/{id}", (Ocr o, ServiceAuthentification auth, HttpContext http, string id) =>
+    SansConnexion(auth, http) ?? (o.SupprimerDocument(id) ? Results.NoContent() : Results.NotFound()));
 
 // ---------- Écritures (worker Objets Métiers, idempotentes) ----------
 var ecritures = v1.MapGroup("/commandes").WithTags("Commandes et encaissements");

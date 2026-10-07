@@ -580,6 +580,45 @@ public sealed class ApiTests : IDisposable
     }
 
     [Fact]
+    public async Task Un_document_lu_par_ocr_s_enregistre_avec_son_modele_et_refuse_les_doublons()
+    {
+        using var usine = Usine(connexion: true);
+        var http = ClientAvecConnexion(usine);
+        var marie = ClientAvecConnexion(usine, await Jeton(http, "MARIE"));
+        var modele = new ModeleOcrRequest("Facture Comptoir", "facture-fournisseur", "F001", "NIF 4001234567", new ZoneOcr("identification", 0.06, 0.08, 0.3, 0.02),
+            [new ZoneOcr("numero", 0.6, 0.08, 0.3, 0.03), new ZoneOcr("montantTTC", 0.6, 0.57, 0.3, 0.03)], new Dictionary<string, string> { ["compteCharge"] = "601000" });
+        var scan = Convert.ToBase64String("faux scan"u8.ToArray());
+        var document = new DocumentOcrRequest("m1", "facture-fournisseur", "F001", "FA-0142", new DateTime(2026, 10, 2), 1_200_000m, 240_000m, 1_440_000m,
+            new Dictionary<string, string> { ["journal"] = "ACH" }, "fa.png", "image/png", scan, null);
+
+        var sans = await http.PutAsJsonAsync("/api/v1/ocr/modeles/m1", modele);
+        var zoneHors = await marie.PutAsJsonAsync("/api/v1/ocr/modeles/m2", modele with { Zones = [new ZoneOcr("numero", 0.9, 0.1, 0.3, 0.03)] });
+        var cree = await marie.PutAsJsonAsync("/api/v1/ocr/modeles/m1", modele);
+        var ecart = await marie.PutAsJsonAsync("/api/v1/ocr/documents/d0", document with { MontantTVA = 200_000m });
+        var enregistre = await marie.PutAsJsonAsync("/api/v1/ocr/documents/d1", document);
+        var memeNumero = await marie.PutAsJsonAsync("/api/v1/ocr/documents/d2", document with { Contenu = null });
+        var memeFichier = await marie.PutAsJsonAsync("/api/v1/ocr/documents/d3", document with { Numero = "FA-0143" });
+        var rejoue = await marie.PutAsJsonAsync("/api/v1/ocr/documents/d1", document);
+        var liste = await marie.GetFromJsonAsync<JsonElement>("/api/v1/ocr/documents?statut=a-ecrire");
+        var fichier = await marie.GetAsync("/api/v1/ocr/documents/d1/fichier");
+        var modeles = await marie.GetFromJsonAsync<JsonElement>("/api/v1/ocr/modeles");
+
+        Assert.Equal(HttpStatusCode.Unauthorized, sans.StatusCode);
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, zoneHors.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, cree.StatusCode);
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, ecart.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, enregistre.StatusCode);
+        Assert.Equal(HttpStatusCode.Conflict, memeNumero.StatusCode);
+        Assert.Equal(HttpStatusCode.Conflict, memeFichier.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, rejoue.StatusCode);
+        var d = Assert.Single(liste.EnumerateArray());
+        Assert.Equal("MARIE", d.GetProperty("utilisateur").GetString());
+        Assert.Equal("ACH", d.GetProperty("champs").GetProperty("journal").GetString());
+        Assert.Equal("faux scan", await fichier.Content.ReadAsStringAsync());
+        Assert.Equal(1, modeles[0].GetProperty("utilisations").GetInt32());
+    }
+
+    [Fact]
     public async Task Une_activite_crm_s_enregistre_une_fois_et_revient_dans_la_vue_360()
     {
         using var usine = Usine(connexion: true);

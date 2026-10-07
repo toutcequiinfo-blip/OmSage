@@ -238,6 +238,7 @@ Borne de caisse     : $base/borne/
 CRM commerciaux     : $base/crm/
 Livraison           : $base/livraison/
 Tableaux de bord    : $base/tableau-de-bord/
+Lecture documents   : $base/ocr/
 Documentation API   : http://localhost:$($p.portHttp)/swagger
 
 Clé d'API de la borne : $($a.Sage.ClesApi.borne)
