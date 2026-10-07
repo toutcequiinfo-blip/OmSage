@@ -41,15 +41,25 @@ public static class Creances
     }
 
     /// <summary>Échéances retenues : type de tiers, périmètre du vendeur, filtres commercial (représentant du tiers), catégorie tarifaire et qualité.</summary>
-    public static IEnumerable<EcheanceTiers> Filtrer(Instantane i, int type, Perimetre p, int? commercial, int? categorie, string? qualite = null) =>
+    public static IEnumerable<EcheanceTiers> Filtrer(Instantane i, int type, Perimetre p, string? commercial, string? categorie, string? qualite = null) =>
+        Filtrer(i, type, p, Selection.Lire(commercial), Selection.Lire(categorie), Selection.Lire(qualite));
+
+    static IEnumerable<EcheanceTiers> Filtrer(Instantane i, int type, Perimetre p, Selection? commercial, Selection? categorie, Selection? qualite) =>
         i.Echeances.Where(e => e.Type == type
             && (type != 0 || p.Autorise(i, e.Tiers))
-            && (commercial == null || i.Representant(e.Tiers) == commercial)
-            && (categorie == null || (i.Tiers.TryGetValue(e.Tiers, out var t) && t.Categorie == categorie))
-            && (qualite == null || (i.Tiers.TryGetValue(e.Tiers, out var q) && string.Equals(q.Qualite, qualite, StringComparison.OrdinalIgnoreCase))));
+            && Retient(i, e.Tiers, commercial, categorie, qualite));
 
-    public static object Analyse(Instantane i, int type, Perimetre p, int? commercial, int? categorie, DateTime aujourdhui, string? qualite = null)
+    /// <summary>Tiers retenu par les choix multiples commercial (représentant), catégorie tarifaire et qualité.</summary>
+    static bool Retient(Instantane i, string? tiers, Selection? commercial, Selection? categorie, Selection? qualite)
     {
+        if (commercial == null && categorie == null && qualite == null) return true;
+        var t = tiers != null && i.Tiers.TryGetValue(tiers, out var x) ? x : null;
+        return (commercial?.Retient(t?.Representant) ?? true) && (categorie?.Retient(t?.Categorie) ?? true) && (qualite?.Retient(t?.Qualite) ?? true);
+    }
+
+    public static object Analyse(Instantane i, int type, Perimetre p, string? commercialTexte, string? categorieTexte, DateTime aujourdhui, string? qualiteTexte = null)
+    {
+        Selection? commercial = Selection.Lire(commercialTexte), categorie = Selection.Lire(categorieTexte), qualite = Selection.Lire(qualiteTexte);
         var echeances = Filtrer(i, type, p, commercial, categorie, qualite).ToList();
         var total = Ventiler(echeances, aujourdhui);
         var derniereFacture = i.Pieces.Where(x => x.Domaine == type && x.Facture && !x.Avoir).GroupBy(x => x.Tiers)
@@ -78,9 +88,7 @@ public static class Creances
         // Encaissements (clients) ou décaissements (fournisseurs) des 12 derniers mois, par mode de règlement et par mois.
         var depuis = Periodes.DebutMois(aujourdhui).AddMonths(-11);
         var reglements = i.Reglements.Where(r => r.Type == type && r.Mois >= depuis && (type != 0 || p.Autorise(i, r.Tiers))
-            && (commercial == null || i.Representant(r.Tiers) == commercial)
-            && (categorie == null || (i.Tiers.TryGetValue(r.Tiers, out var t) && t.Categorie == categorie))
-            && (qualite == null || (i.Tiers.TryGetValue(r.Tiers, out var q) && string.Equals(q.Qualite, qualite, StringComparison.OrdinalIgnoreCase)))).ToList();
+            && Retient(i, r.Tiers, commercial, categorie, qualite)).ToList();
 
         return new
         {

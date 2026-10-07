@@ -135,3 +135,38 @@ public static class Periodes
 
 /// <summary>Alerte affichée en tête d'écran. Niveau : critique (rouge), attention (orange), info.</summary>
 public sealed record Alerte(string Niveau, string Code, string Message);
+
+/// <summary>
+/// Filtre à choix multiple de l'explorateur : « CHA,BOU » garde ces valeurs, « !CHA,BOU » les exclut.
+/// « ~ » désigne une valeur non renseignée (famille, catégorie, qualité, commercial vides). Vide : pas de filtre.
+/// </summary>
+public sealed class Selection
+{
+    public const string Vide = "~";
+
+    public bool Exclure { get; }
+    public IReadOnlySet<string> Valeurs { get; }
+
+    Selection(bool exclure, HashSet<string> valeurs) { Exclure = exclure; Valeurs = valeurs; }
+
+    public static Selection? Lire(string? texte)
+    {
+        if (string.IsNullOrWhiteSpace(texte)) return null;
+        texte = texte.Trim();
+        var exclure = texte.StartsWith('!');
+        var valeurs = texte.TrimStart('!').Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(v => v == Vide ? "" : v).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        return valeurs.Count == 0 ? null : new Selection(exclure, valeurs);
+    }
+
+    public bool Retient(string? valeur) => Valeurs.Contains(valeur?.Trim() ?? "") != Exclure;
+    public bool Retient(int? valeur) => Retient(valeur?.ToString(CultureInfo.InvariantCulture));
+
+    /// <summary>Valeurs entières de la sélection (non renseigné = 0, comme CO_No et DE_No vides dans Sage).</summary>
+    public IReadOnlyList<int> Entiers() =>
+        Valeurs.Select(v => v == "" ? 0 : int.TryParse(v, NumberStyles.Integer, CultureInfo.InvariantCulture, out var n) ? n : (int?)null)
+            .Where(n => n != null).Select(n => n!.Value).ToList();
+
+    /// <summary>Préfixes de comptes : « 6,7 » garde les comptes qui commencent ainsi, « !65 » les exclut.</summary>
+    public bool RetientPrefixe(string compte) => Valeurs.Any(p => p != "" && compte.StartsWith(p, StringComparison.OrdinalIgnoreCase)) != Exclure;
+}

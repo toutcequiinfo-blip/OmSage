@@ -382,6 +382,43 @@ public sealed class TableauDeBordTests : IDisposable
         o.Profils["USER"] = "Vendeur";
         Assert.Equal(Perimetre.Vendeur, P(chef: true, financier: true));
     }
+    [Fact]
+    public async Task Les_filtres_acceptent_plusieurs_valeurs_et_les_exclusions()
+    {
+        var i = await Instantane();
+        RequeteVentes V(string? tiers = null, string? commercial = null, string? qualite = null, string? famille = null, string? categorie = null) =>
+            new(null, "tiers", null, null, null, null, famille, tiers, commercial, null, categorie, null, null, qualite);
+        decimal Ca(RequeteVentes r) => Commercial.Croiser(i, r, Direction, Aujourdhui).Total.Total["ca"];
+
+        Assert.Equal(5000m, Ca(V(tiers: "CISEL,BAGUES")));
+        Assert.Equal(2000m, Ca(V(tiers: "!CISEL")));
+        Assert.Equal(3000m, Ca(V(commercial: "!4")));
+        Assert.Equal(5000m, Ca(V(qualite: "grossiste,Détaillant")));
+        Assert.Equal(2000m, Ca(V(qualite: "!Grossiste")));
+        Assert.Equal(0m, Ca(V(famille: "!OR")));
+        Assert.Equal(5000m, Ca(V(famille: "OR,~")));
+        Assert.Equal(3000m, Ca(V(categorie: "1,~")));
+
+        // Détail d'une cellule : exclusions traduites en NOT IN, choix multiples en IN.
+        var d = Commercial.Detail(i, V(tiers: "!CISEL", commercial: "3,4"), Direction, null, null, Aujourdhui)!;
+        Assert.Equal(["CISEL"], d.TiersExclus!);
+        Assert.Equal([3, 4], d.Commerciaux!);
+        var q = Commercial.Detail(i, V(qualite: "!Grossiste"), Direction, null, null, Aujourdhui)!;
+        Assert.Equal(["CISEL"], q.TiersExclus!);
+        Assert.Null(q.TiersListe);
+
+        RequeteCompta C(string? comptes = null, string? journaux = null, string? tiers = null) =>
+            new(null, "journal", null, null, null, comptes, journaux, null, tiers, null, null, null, null, null);
+        decimal Debit(RequeteCompta r) => Comptabilite.Croiser(i, r, Aujourdhui).Total.Total["debit"];
+        Assert.Equal(Debit(C(journaux: "BQ")) + Debit(C(journaux: "ACH")), Debit(C(journaux: "BQ,ACH")));
+        Assert.Equal(Debit(C()) - Debit(C(journaux: "VTE")), Debit(C(journaux: "!VTE")));
+        Assert.Equal(Debit(C()) - Debit(C(comptes: "4")), Debit(C(comptes: "!4")));
+        Assert.Equal(Debit(C()) - Debit(C(tiers: "CISEL")), Debit(C(tiers: "!CISEL")));
+        var dc = Comptabilite.Detail(i, C(comptes: "!4", journaux: "!VTE", tiers: "CISEL,FOUR"), null, null, Aujourdhui)!;
+        Assert.Equal(["4"], dc.ComptesExclus!);
+        Assert.Equal(["VTE"], dc.JournauxExclus!);
+        Assert.Equal(2, dc.TiersListe!.Count);
+    }
 }
 
 sealed class OptionsFixes<T>(T valeur) : Microsoft.Extensions.Options.IOptionsMonitor<T>
