@@ -205,7 +205,7 @@ public sealed class LecturesSql(Dossiers dossiers) : ILecturesSage
         // Bon de commande, bon de livraison ou facture (comptabilisée ou non) créé par la borne.
         using var c = Cnx();
         return await c.QueryFirstOrDefaultAsync<string>(
-            "SELECT TOP 1 DO_Piece FROM F_DOCENTETE WHERE DO_Domaine = 0 AND DO_Type IN (1, 3, 6, 7) AND DO_RefExterne = @idExterne ORDER BY DO_Type",
+            SchemaSage.Adapter("SELECT TOP 1 DO_Piece FROM F_DOCENTETE WHERE DO_Domaine = 0 AND DO_Type IN (1, 3, 6, 7) AND DO_RefExterne = @idExterne ORDER BY DO_Type", dossiers.ChaineSql),
             new { idExterne });
     }
 
@@ -257,7 +257,7 @@ public sealed class LecturesSql(Dossiers dossiers) : ILecturesSage
         // Les factures d'acompte (DO_PieceAcompte d'un acompte) sont exclues : elles sont elles-mêmes le règlement.
         using var c = Cnx();
         var r = await c.QueryAsync<CommandeOuverte>(
-            "SELECT TOP (@taille) x.Piece, x.Date, x.Client, x.Intitule, x.Reference, x.IdExterne, x.TotalTTC, x.DejaRegle, x.NetAPayer, x.TypePiece FROM (" +
+            SchemaSage.Adapter("SELECT TOP (@taille) x.Piece, x.Date, x.Client, x.Intitule, x.Reference, x.IdExterne, x.TotalTTC, x.DejaRegle, x.NetAPayer, x.TypePiece FROM (" +
             "SELECT e.DO_Piece AS Piece, e.DO_Date AS Date, e.DO_Tiers AS Client, t.CT_Intitule AS Intitule, " +
             "NULLIF(e.DO_Ref, '') AS Reference, NULLIF(e.DO_RefExterne, '') AS IdExterne, " +
             "CAST(e.DO_TotalTTC AS decimal(18,2)) AS TotalTTC, CAST(" + Regle + " AS decimal(18,2)) AS DejaRegle, " +
@@ -266,7 +266,7 @@ public sealed class LecturesSql(Dossiers dossiers) : ILecturesSage
             "WHERE e.DO_Domaine = 0 AND (e.DO_Type IN (1, 3) AND e.DO_Cloture = 0 OR e.DO_Type IN (6, 7) " +
             "AND NOT EXISTS (SELECT 1 FROM F_DOCREGL fa WHERE fa.DO_PieceAcompte = e.DO_Piece)) " +
             "AND (@q IS NULL OR e.DO_Piece LIKE @q OR e.DO_Tiers LIKE @q OR t.CT_Intitule LIKE @q OR e.DO_Ref LIKE @q)" +
-            ") x WHERE x.TotalTTC - x.DejaRegle > 0.005 ORDER BY x.Date DESC, x.Piece DESC",
+            ") x WHERE x.TotalTTC - x.DejaRegle > 0.005 ORDER BY x.Date DESC, x.Piece DESC", dossiers.ChaineSql),
             new { q = Motif(recherche), taille });
         return r.AsList();
     }
@@ -288,11 +288,11 @@ public sealed class LecturesSql(Dossiers dossiers) : ILecturesSage
         // Même numéro possible sur deux types (souches différentes) : la pièce la plus avancée (facture, puis BL, puis BC).
         var entete = await c.QueryFirstOrDefaultAsync<(string Piece, DateTime Date, string Client, string? Intitule, string? Reference, string? IdExterne,
             decimal TotalTTC, decimal DejaRegle, decimal NetAPayer, decimal TotalHT, int TypePiece)>(
-            "SELECT TOP 1 e.DO_Piece, e.DO_Date, e.DO_Tiers, t.CT_Intitule, NULLIF(e.DO_Ref, ''), NULLIF(e.DO_RefExterne, ''), " +
+            SchemaSage.Adapter("SELECT TOP 1 e.DO_Piece, e.DO_Date, e.DO_Tiers, t.CT_Intitule, NULLIF(e.DO_Ref, ''), NULLIF(e.DO_RefExterne, ''), " +
             "CAST(e.DO_TotalTTC AS decimal(18,2)), CAST(" + Regle + " AS decimal(18,2)), " +
             "CAST(e.DO_NetAPayer AS decimal(18,2)), CAST(e.DO_TotalHT AS decimal(18,2)), CAST(e.DO_Type AS int) " +
             "FROM F_DOCENTETE e LEFT JOIN F_COMPTET t ON t.CT_Num = e.DO_Tiers " +
-            "WHERE e.DO_Domaine = 0 AND e.DO_Type IN (1, 3, 6, 7) AND e.DO_Piece = @piece ORDER BY e.DO_Type DESC",
+            "WHERE e.DO_Domaine = 0 AND e.DO_Type IN (1, 3, 6, 7) AND e.DO_Piece = @piece ORDER BY e.DO_Type DESC", dossiers.ChaineSql),
             new { piece });
         if (entete.Piece is null) return null;
         // Lignes sans article (commentaires, sous-totaux) incluses : AR_Ref vide, seule la désignation compte.

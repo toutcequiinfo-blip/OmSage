@@ -7,3 +7,5 @@ obj/
 *.db-wal
 appsettings.Local.json
 deploy/sortie/
+# DLL Objets Métiers Sage (fichier de Sage, jamais dans Git)
+lib/sage-v9/

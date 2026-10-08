@@ -424,7 +424,12 @@ namespace Sage100Api.Worker
             entete.SetDefaultClient(cpta.FactoryClient.ReadNumero(c.Client));
             AffecterSouche(entete, c.Souche);
             AffecterDepot(entete, c.Depot);
+#if SAGE_V9
+            // Sage V9 n'a pas DO_RefExterne (V10 et plus) : l'identifiant de la borne va dans l'information libre IdBorne.
+            EcrireIdBorne(entete, c.IdExterne);
+#else
             entete.DO_RefExterne = c.IdExterne;
+#endif
             entete.DO_Ref = Tronquer(string.IsNullOrEmpty(c.Reference) ? c.IdExterne : c.Reference!, Validation.LongueurReference);
             AffecterCollaborateur(entete, demande.Auteur, c.IdExterne);
 
@@ -440,7 +445,9 @@ namespace Sage100Api.Worker
                 var lignes = sortieStock && SuiviParLot(article) ? AffecterLots(pm, ligne, article, l, c.IdExterne) : new List<IBODocumentVenteLigne3> { ligne };
                 foreach (var x in lignes)
                 {
+#if !SAGE_V9
                     x.DL_RefExterne = Tronquer($"{c.IdExterne}-{i + 1}", Validation.LongueurIdExterne);
+#endif
                     AppliquerTarif(x, l, c.IdExterne);
                     libelles.Add($"{l.Article}{(x.Depot != null ? ", dépôt " + x.Depot.DE_Intitule : "")}{(string.IsNullOrEmpty(x.LS_NoSerie) ? "" : ", lot " + x.LS_NoSerie)}");
                 }
@@ -451,6 +458,15 @@ namespace Sage100Api.Worker
             pm.Process();
 
             var piece = (IBODocumentVente3)pm.DocumentResult;
+#if SAGE_V9
+            // Si le processus n'a pas reporté l'information libre sur la pièce créée, on l'écrit sur la pièce elle-même.
+            if (PieceParRefExterne(c.IdExterne) == null)
+            {
+                piece.Read();
+                EcrireIdBorne(piece, c.IdExterne);
+                piece.Write();
+            }
+#endif
             Console.WriteLine($"{TypesPiece.Libelle(type)} {c.IdExterne} -> {piece.DO_Piece}{(demande.Auteur != null ? " par " + demande.Auteur.Utilisateur : "")}");
             return new CommandeResult { IdExterne = c.IdExterne, Piece = piece.DO_Piece, NetAPayer = piece.DO_NetAPayer, TypeDocument = type };
         }
@@ -532,7 +548,31 @@ namespace Sage100Api.Worker
 
         /// <summary>Pièce déjà créée avec cet identifiant externe (bon de commande, de livraison ou facture), ou null.</summary>
         (string Piece, int Type)? PieceParRefExterne(string idExterne) =>
+#if SAGE_V9
+            Piece("SELECT TOP 1 DO_Piece, DO_Type FROM F_DOCENTETE WHERE DO_Domaine = 0 AND DO_Type IN (1, 3, 6, 7) AND [" + InfoLibreIdBorne + "] = @r ORDER BY DO_Type", idExterne);
+#else
             Piece("SELECT TOP 1 DO_Piece, DO_Type FROM F_DOCENTETE WHERE DO_Domaine = 0 AND DO_Type IN (1, 3, 6, 7) AND DO_RefExterne = @r ORDER BY DO_Type", idExterne);
+#endif
+
+#if SAGE_V9
+        /// <summary>Information libre de l'entête des documents qui porte l'identifiant de la borne en V9 (texte de 69 caractères).</summary>
+        const string InfoLibreIdBorne = "IdBorne";
+
+        static void EcrireIdBorne(IBODocumentVente3 document, string idExterne)
+        {
+            try
+            {
+                var valeurs = Lire(document, "InfoLibre")!;
+                valeurs.GetType().InvokeMember("Item", BindingFlags.SetProperty, null, valeurs, new object[] { InfoLibreIdBorne, idExterne });
+            }
+            catch (Exception ex)
+            {
+                throw new ErreurMetier(CodesErreur.Technique,
+                    $"Information libre « {InfoLibreIdBorne} » introuvable sur l'entête des documents de vente : créez-la dans Sage " +
+                    $"(Paramètres société > Informations libres > Entête de document, texte de 69 caractères). {ex.GetBaseException().Message}");
+            }
+        }
+#endif
 
         /// <summary>Type d'une pièce de vente par son numéro (BC, BL ou facture), ou null.</summary>
         (string Piece, int Type)? PieceParNumero(string piece) =>

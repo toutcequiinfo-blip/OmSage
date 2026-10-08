@@ -14,6 +14,15 @@
 #ifndef Sortie
   #define Sortie "..\sortie"
 #endif
+; Version de Sage 100 visée par le worker du paquet (V12 par défaut, V9 avec fabriquer-installateur.ps1 -VersionSage V9).
+#ifndef SageVersion
+  #define SageVersion "V12"
+#endif
+#if SageVersion == "V12"
+  #define Suffixe ""
+#else
+  #define Suffixe "-" + SageVersion
+#endif
 
 [Setup]
 AppId={{8C6F2E4A-5B1D-4E7A-9C3F-2A1B6D7E8F90}
@@ -29,7 +38,7 @@ PrivilegesRequired=admin
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 OutputDir={#Sortie}
-OutputBaseFilename=Sage100Api-Setup-{#Version}
+OutputBaseFilename=Sage100Api-Setup-{#Version}{#Suffixe}
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
@@ -94,7 +103,7 @@ procedure InitializeWizard;
 begin
   PageSage := CreateInputQueryPage(wpSelectDir, 'Base Sage 100',
     'Connexion à la base Sage, pour les lectures SQL et pour les Objets Métiers',
-    'Les Objets Métiers Sage 100 V12 doivent déjà être installés sur ce serveur. Mot de passe Sage : vide si l''utilisateur n''en a pas.');
+    'Les Objets Métiers Sage 100 {#SageVersion} doivent déjà être installés sur ce serveur. Mot de passe Sage : vide si l''utilisateur n''en a pas.');
   PageSage.Add('Serveur SQL (nom ou nom\instance) :', False);
   PageSage.Add('Base Gestion commerciale (plusieurs sociétés : séparées par des virgules) :', False);
   PageSage.Add('Base Comptabilité (vide = la même ; plusieurs : même ordre) :', False);
