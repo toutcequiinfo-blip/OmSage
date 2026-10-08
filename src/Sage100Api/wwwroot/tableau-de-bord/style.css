@@ -198,3 +198,8 @@ button.choix.exclu { border-color: var(--alerte); color: var(--alerte); }
 .choix-pied { display: flex; align-items: center; gap: 4px; }
 .choix-pied .espace { flex: 1; }
 .choix-pied button { min-height: 26px; padding: 0 10px; border-radius: 6px; font-size: .78rem; }
+/* Saisie des dates jj/mm/aaaa avec bouton calendrier */
+.champ-date { position: relative; display: inline-flex; align-items: stretch; }
+.champ-date input.date { width: 92px; font-variant-numeric: tabular-nums; }
+.champ-date button.cal { padding: 0 4px; margin-left: 2px; font-size: .75rem; line-height: 1; background: none; border: 1px solid var(--bord, #ccc); border-radius: 4px; cursor: pointer; }
+.champ-date input.cal-natif { position: absolute; left: 0; bottom: 0; width: 1px; height: 1px; opacity: 0; pointer-events: none; border: 0; padding: 0; }
