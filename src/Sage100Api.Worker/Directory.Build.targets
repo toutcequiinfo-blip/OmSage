@@ -1,0 +1,15 @@
+<Project>
+  <!-- Worker pour Sage 100 V9, fabriqué à part par deploy\fabriquer-installateur.ps1 -VersionSage V9 :
+       la référence COM V12 du poste est remplacée par l'interop générée (tlbimp) depuis la DLL Objets Métiers V9.
+       Sans SageVersion=V9, rien ne change : le worker V12 se compile comme avant. -->
+  <PropertyGroup Condition="'$(SageVersion)' == 'V9'">
+    <DefineConstants>$(DefineConstants);SAGE_V9</DefineConstants>
+  </PropertyGroup>
+  <ItemGroup Condition="'$(SageVersion)' == 'V9'">
+    <COMReference Remove="@(COMReference)" />
+    <Reference Include="Interop.Objets100cLib">
+      <HintPath>$(SageInterop)</HintPath>
+      <EmbedInteropTypes>true</EmbedInteropTypes>
+    </Reference>
+  </ItemGroup>
+</Project>

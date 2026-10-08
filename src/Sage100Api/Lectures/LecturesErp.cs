@@ -259,6 +259,9 @@ public sealed class LecturesErpSql(Dossiers dossiers) : ILecturesErp
     // Sage met 1900-01-01 dans les dates non saisies.
     static string Date(string colonne) => $"NULLIF({colonne}, '1900-01-01')";
 
+    /// <summary>Entête de document, l'identifiant de la borne lu là où cette version de Sage le range.</summary>
+    string Entete() => SchemaSage.Adapter(SelectEntete, dossiers.ChaineSql);
+
     const string SelectEntete =
         "SELECT CAST(e.DO_Type AS int) AS TypeCode, e.DO_Piece AS Piece, e.DO_Date AS Date, e.DO_Tiers AS Client, t.CT_Intitule AS Intitule, " +
         "NULLIF(e.DO_Ref, '') AS Reference, NULLIF(e.DO_RefExterne, '') AS IdExterne, " +
@@ -354,7 +357,7 @@ public sealed class LecturesErpSql(Dossiers dossiers) : ILecturesErp
     {
         using var c = Cnx();
         var r = await c.QueryAsync<LigneEntete>(
-            SelectEntete +
+            Entete() +
             "WHERE e.DO_Domaine = 0 AND e.DO_Type BETWEEN 0 AND 7 AND (@type IS NULL OR e.DO_Type = @type) AND (@client IS NULL OR e.DO_Tiers = @client) " +
             "AND (@du IS NULL OR e.DO_Date >= @du) AND (@au IS NULL OR e.DO_Date <= @au) " +
             "AND (@cloture IS NULL OR e.DO_Cloture = @cloture) " +
@@ -366,7 +369,7 @@ public sealed class LecturesErpSql(Dossiers dossiers) : ILecturesErp
     public async Task<DetailDocument?> Document(int type, string piece)
     {
         using var c = Cnx();
-        var e = await c.QueryFirstOrDefaultAsync<LigneEntete>(SelectEntete + "WHERE e.DO_Domaine = 0 AND e.DO_Type = @type AND e.DO_Piece = @piece", new { type, piece });
+        var e = await c.QueryFirstOrDefaultAsync<LigneEntete>(Entete() + "WHERE e.DO_Domaine = 0 AND e.DO_Type = @type AND e.DO_Piece = @piece", new { type, piece });
         if (e is null) return null;
         var lignes = await c.QueryAsync<LignePiece>(
             LecturesSql.SelectLignes + "WHERE l.DO_Domaine = 0 AND l.DO_Type = @type AND l.DO_Piece = @piece ORDER BY l.DL_Ligne",
