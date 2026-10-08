@@ -88,6 +88,62 @@ const jourDe = (d) => String(d).slice(0, 10);
 const lundiSemaine = (cle) => { const a = Number(cle.slice(0, 4)), n = Number(cle.slice(6)); const j4 = new Date(Date.UTC(a, 0, 4));
   return new Date(j4.getTime() + ((n - 1) * 7 - ((j4.getUTCDay() + 6) % 7)) * 86400000); };
 const isoJour = (d) => d.toISOString().slice(0, 10);
+
+// ---------- Saisie des dates : jj/mm/aaaa ----------
+// Champ texte masqué (on tape 01022026, on lit 01/02/2026) ; le calendrier reste accessible par le bouton.
+// Le filtre ne s'applique qu'à la sortie du champ ou sur Entrée, et seulement si la date est complète et valide.
+const dateFr = (iso) => (/^\d{4}-\d{2}-\d{2}/.test(iso ?? "") ? `${iso.slice(8, 10)}/${iso.slice(5, 7)}/${iso.slice(0, 4)}` : "");
+function dateIso(texte) {
+  const ch = String(texte ?? "").replace(/\D/g, "");
+  if (ch.length !== 8 && ch.length !== 6) return null;
+  const j = Number(ch.slice(0, 2)), m = Number(ch.slice(2, 4));
+  const a = ch.length === 6 ? 2000 + Number(ch.slice(4)) : Number(ch.slice(4));
+  const d = new Date(Date.UTC(a, m - 1, j));
+  if (a < 1900 || d.getUTCFullYear() !== a || d.getUTCMonth() !== m - 1 || d.getUTCDate() !== j) return null;
+  return isoJour(d);
+}
+const champDate = (id, iso) => `<span class="champ-date"><input id="${id}" type="text" class="date" inputmode="numeric" autocomplete="off" maxlength="10" placeholder="jj/mm/aaaa" value="${dateFr(iso)}" data-iso="${jourDe(iso ?? "")}"><button type="button" class="cal" tabindex="-1" title="Calendrier">📅</button><input type="date" class="cal-natif" tabindex="-1" aria-hidden="true"></span>`;
+// Date ISO d'un champ de saisie (celle de la dernière saisie valide).
+const lireDate = (sel, r) => $(sel, r)?.dataset.iso || undefined;
+const masquer = (ch) => { const d = ch.slice(0, 8); return d.length > 4 ? `${d.slice(0, 2)}/${d.slice(2, 4)}/${d.slice(4)}` : d.length > 2 ? `${d.slice(0, 2)}/${d.slice(2)}` : d; };
+document.addEventListener("input", (e) => {
+  const x = e.target;
+  if (!x.matches?.("input.date")) return;
+  const avant = x.value.slice(0, x.selectionStart ?? x.value.length).replace(/\D/g, "").length;
+  x.value = masquer(x.value.replace(/\D/g, ""));
+  let pos = 0, n = 0;
+  while (pos < x.value.length && n < avant) { if (/\d/.test(x.value[pos])) n++; pos++; }
+  if (n === avant && x.value[pos] === "/" && e.inputType !== "deleteContentBackward") pos++;
+  x.setSelectionRange(pos, pos);
+}, true);
+// Capture au niveau du document : passe avant les écouteurs des écrans, qui ne voient donc que des dates valides.
+document.addEventListener("change", (e) => {
+  const x = e.target;
+  if (x.matches?.("input.cal-natif")) {
+    e.stopImmediatePropagation();
+    const champ = x.parentElement.querySelector("input.date");
+    if (x.value && champ) { champ.value = dateFr(x.value); champ.dispatchEvent(new Event("change", { bubbles: true })); }
+    return;
+  }
+  if (!x.matches?.("input.date")) return;
+  const iso = dateIso(x.value);
+  if (!iso || iso === x.dataset.iso) { e.stopImmediatePropagation(); x.value = dateFr(x.dataset.iso); return; }
+  x.dataset.iso = iso;
+  x.value = dateFr(iso);
+}, true);
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Enter" || !e.target.matches?.("input.date")) return;
+  e.preventDefault();
+  e.stopImmediatePropagation();
+  e.target.dispatchEvent(new Event("change", { bubbles: true }));
+}, true);
+document.addEventListener("click", (e) => {
+  const b = e.target.closest?.(".champ-date button.cal");
+  if (!b) return;
+  const natif = b.nextElementSibling, champ = b.previousElementSibling;
+  natif.value = champ.dataset.iso ?? "";
+  try { natif.showPicker(); } catch { natif.focus(); natif.click(); }
+});
 const finDuMois = (m) => { const [a, n] = m.split("-").map(Number); return `${m}-${String(new Date(a, n, 0).getDate()).padStart(2, "0")}`; };
 const qs = (o) => Object.entries(o).filter(([, v]) => v !== undefined && v !== null && v !== "").map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join("&");
 
@@ -758,8 +814,8 @@ async function explorateur(c, nom, sens) {
         <label>Colonnes <select id="x-colonnes">${optAxes(cfg.colonnes, "Toutes les mesures")}</select></label>
         ${cfg.colonnes ? `<label>Mesure <select id="x-mesure">${mesures.map((m) => `<option value="${m}" ${m === cfg.mesure ? "selected" : ""}>${MESURES[m]}</option>`).join("")}</select></label>`
           : `<label>Trier par <select id="x-mesure">${mesures.map((m) => `<option value="${m}" ${m === cfg.mesure ? "selected" : ""}>${MESURES[m]}</option>`).join("")}</select></label>`}
-        <label>Du <input id="x-du" type="date" value="${cfg.du}"></label>
-        <label>Au <input id="x-au" type="date" value="${cfg.au}"></label>
+        <label>Du ${champDate("x-du", cfg.du)}</label>
+        <label>Au ${champDate("x-au", cfg.au)}</label>
         ${filtresTexte}
         <span class="espace"></span>
         <div class="segments"><button type="button" data-vue="table" class="${cfg.vue !== "graphique" ? "actif" : ""}">Tableau</button><button type="button" data-vue="graphique" class="${cfg.vue === "graphique" ? "actif" : ""}">Graphique</button></div>
@@ -774,14 +830,14 @@ async function explorateur(c, nom, sens) {
   const changer = (modifs) => { Object.assign(cfg, modifs); afficherOnglet(); };
   const lireChamps = () => {
     const v = (id) => $(id, c)?.value?.trim() ?? undefined;
-    const m = { lignes: v("#x-lignes"), colonnes: v("#x-colonnes"), mesure: v("#x-mesure"), du: v("#x-du") || cfg.du, au: v("#x-au") || cfg.au };
+    const m = { lignes: v("#x-lignes"), colonnes: v("#x-colonnes"), mesure: v("#x-mesure"), du: lireDate("#x-du", c) || cfg.du, au: lireDate("#x-au", c) || cfg.au };
     if (compta) Object.assign(m, { comptes: v("#x-comptes"), journaux: v("#x-journal"), tiers: v("#x-tiers"), aNouveaux: $("#x-an", c)?.checked ?? cfg.aNouveaux, plan: v("#x-plan") ?? cfg.plan });
     else Object.assign(m, { famille: v("#x-famille"), commercial: v("#x-commercial"), depot: v("#x-depot"), tiers: v("#x-tiers"), article: v("#x-article"),
       categorie: v("#x-categorie"), qualite: v("#x-qualite") });
     return m;
   };
-  c.querySelectorAll(".commandes select, .commandes input[type=date], .commandes input[type=checkbox], .commandes button.choix").forEach((x) => x.addEventListener("change", () => changer(lireChamps())));
-  c.querySelectorAll(".commandes input[type=text], .commandes input:not([type])").forEach((x) => x.addEventListener("keydown", (e) => { if (e.key === "Enter") changer(lireChamps()); }));
+  c.querySelectorAll(".commandes select, .commandes input.date, .commandes input[type=checkbox], .commandes button.choix").forEach((x) => x.addEventListener("change", () => changer(lireChamps())));
+  c.querySelectorAll(".commandes input[type=text]:not(.date), .commandes input:not([type])").forEach((x) => x.addEventListener("keydown", (e) => { if (e.key === "Enter") changer(lireChamps()); }));
   c.querySelectorAll(".commandes input:not([type])").forEach((x) => x.addEventListener("change", () => changer(lireChamps())));
   c.querySelectorAll("[data-vue]").forEach((b) => b.addEventListener("click", () => { cfg.vue = b.dataset.vue; dessiner(); c.querySelectorAll("[data-vue]").forEach((x) => x.classList.toggle("actif", x === b)); }));
   c.querySelectorAll("[data-source]").forEach((b) => b.addEventListener("click", () => changer({ source: b.dataset.source, lignes: b.dataset.source === "analytique" ? "section" : "classe", pile: [], plan: cfg.plan ?? etat.meta.plans[0]?.numero })));
@@ -1057,7 +1113,7 @@ function filtresProduction(nom) {
 }
 function barreProduction(f, { periode = true, extra = "" } = {}) {
   return `<div class="commandes">
-    ${periode ? `<label>Du <input id="p-du" type="date" value="${f.du}"></label><label>Au <input id="p-au" type="date" value="${f.au}"></label>` : ""}
+    ${periode ? `<label>Du ${champDate("p-du", f.du)}</label><label>Au ${champDate("p-au", f.au)}</label>` : ""}
     ${etat.meta.depots.length > 1 ? `<label>Dépôt <select id="p-depot"><option value="">Tous</option>${etat.meta.depots.map((d) => `<option value="${d.numero}" ${String(f.depot) === String(d.numero) ? "selected" : ""}>${echapper(d.intitule)}</option>`).join("")}</select></label>` : ""}
     <label>Famille <select id="p-famille"><option value="">Toutes</option>${etat.meta.familles.map((x) => `<option value="${echapper(x.code)}" ${f.famille === x.code ? "selected" : ""}>${echapper(x.intitule ?? x.code)}</option>`).join("")}</select></label>
     ${extra}</div>`;
@@ -1067,7 +1123,7 @@ function relierFiltres(c, nom, lireExtra = () => ({})) {
     // Un champ retiré pendant le rechargement émet encore « change » : l'écran est déjà en train de se refaire.
     if (!c.isConnected) return;
     const f = etat.explorateurs[nom];
-    Object.assign(f, { du: $("#p-du", c)?.value || f.du, au: $("#p-au", c)?.value || f.au, depot: $("#p-depot", c)?.value ?? "", famille: $("#p-famille", c)?.value ?? "" }, lireExtra());
+    Object.assign(f, { du: lireDate("#p-du", c) || f.du, au: lireDate("#p-au", c) || f.au, depot: $("#p-depot", c)?.value ?? "", famille: $("#p-famille", c)?.value ?? "" }, lireExtra());
     afficherOnglet();
   }));
 }
