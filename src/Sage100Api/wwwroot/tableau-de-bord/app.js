@@ -57,7 +57,7 @@ const ONGLETS = {
   ],
   commercial: [
     ["direction", "Direction", "commercial"], ["ventes", "Explorateur", "commercial"], ["clients", "Clients", "commercial"], ["articles", "Articles & marges", "commercial"],
-    ["commandes", "Commandes", "commercial"], ["transformation", "Transformation", "commercial"], ["stock", "Stock", "commercial"], ["recouvrement", "Recouvrement", "clients"], ["achats", "Achats", "achats"],
+    ["commandes", "Commandes", "commercial"], ["transformation", "Satisfaction client", "commercial"], ["stock", "Stock", "commercial"], ["recouvrement", "Recouvrement", "clients"], ["achats", "Achats", "achats"],
     ["objectifs", "Objectifs", "commercial"],
   ],
 };
@@ -667,7 +667,7 @@ async function recouvrement(c, type) {
 const MESURES = {
   debit: "Débit", credit: "Crédit", solde: "Solde (D − C)", soldeCrediteur: "Solde (C − D)", nombre: "Écritures",
   ca: "CA HT", quantite: "Quantité", cout: "Coût de revient", marge: "Marge", taux: "Taux de marge %",
-  commande: "Commandé HT", livre: "Livré HT", encours: "Reste à livrer", nonservi: "Non servi (soldé)", transfo: "Taux de transformation %",
+  commande: "Commandé HT", livre: "Livré HT", encours: "Reste à livrer", nonservi: "Non servi (soldé)", transfo: "Taux de satisfaction %",
   qteCommandee: "Qté commandée", qteLivree: "Qté livrée", transfoQte: "Taux en quantité %",
 };
 const MESURES_TYPE = {
@@ -698,7 +698,7 @@ function presetExplorateur(nom, sens) {
     articles: { type: "ventes", domaine: "ventes", lignes: "article", colonnes: "", mesure: "marge", titre: "Articles : CA, coût, marge et taux" },
     achats: { type: "ventes", domaine: "achats", lignes: "tiers", colonnes: "mois", mesure: "ca", titre: "Achats par fournisseur" },
     transformation: { type: "transformation", domaine: "ventes", lignes: "mois", colonnes: "", mesure: "transfo",
-      titre: "Transformation des commandes en livraisons (par date de commande)" },
+      titre: "Satisfaction client : commandes livrées (par date de commande)" },
   };
   return { ...base, ...P[nom] };
 }
@@ -762,7 +762,7 @@ async function explorateur(c, nom, sens) {
       ${cfg.pile.length ? `<div class="fil" style="margin-top:8px"><span class="discret">Zoom :</span>${cfg.pile.map((p, i) => `<span class="puce">${echapper(p.libelle)} <button type="button" data-retour="${i}" title="Retirer">✕</button></span>`).join("")}</div>` : ""}
       <div style="margin-top:8px" id="x-sortie"></div>
       <p class="discret" style="margin:6px 0 0">Cliquez un intitulé pour zoomer dessus, une valeur pour voir ${compta ? "les écritures" : transfo ? "les commandes" : "les lignes de factures"} qui la composent.${transfo
-        ? " Taux de transformation = livré / commandé : part des commandes clients déjà livrée (BL ou facture). Reste à livrer : bons de commande et préparations non clôturés ; non servi : reliquat des bons soldés." : ""}</p>
+        ? " Taux de satisfaction = livré / commandé : part des commandes clients déjà livrée (BL ou facture). Reste à livrer : bons de commande et préparations non clôturés ; non servi : reliquat des bons soldés." : ""}</p>
     </article>`;
 
   const changer = (modifs) => { Object.assign(cfg, modifs); afficherOnglet(); };
@@ -917,7 +917,7 @@ async function direction(c) {
         : etat.meta.droits.objectifs ? tuile({ libelle: "Objectifs", valeur: "–", pied: "à saisir", vers: "commercial/objectifs" }) : ""}
       ${tuile({ libelle: "Valeur du stock", valeur: montant(s.stock.valeur), pied: `${nombre(s.stock.ruptures)} ruptures · ${nombre(s.stock.dormants)} dormants`, vers: "commercial/stock", niveau: s.stock.ruptures ? "attention" : "" })}
       ${tuile({ libelle: "Créances clients", valeur: montant(s.creancesClients.total), pied: `échu ${montant(s.creancesClients.echu)}`, vers: "commercial/recouvrement", niveau: s.creancesClients.plus90 > 0 ? "attention" : "" })}
-      ${s.transformation ? tuile({ libelle: "Taux de transformation", valeur: s.transformation.taux == null ? "–" : `${nombre(s.transformation.taux, 1)} %`,
+      ${s.transformation ? tuile({ libelle: "Satisfaction client", valeur: s.transformation.taux == null ? "–" : `${nombre(s.transformation.taux, 1)} %`,
         pied: `${nombre(s.transformation.completes)} / ${nombre(s.transformation.nombre)} BC livrés en entier`,
         titre: `Part des commandes clients de la période déjà livrée (BL ou facture) : ${montant(s.transformation.livre)} sur ${montant(s.transformation.commande)}${s.transformation.delaiMoyen != null ? ` · délai moyen de livraison ${nombre(s.transformation.delaiMoyen, 1)} j` : ""}`,
         vers: "commercial/transformation", niveau: s.transformation.taux != null && s.transformation.taux < 80 ? "attention" : "" }) : ""}
