@@ -303,6 +303,13 @@ public interface ILecturesTableauDeBord
     Task<IReadOnlyList<RefCode>> Collaborateurs();
     Task<IReadOnlyList<RefCode>> ModesReglement();
     Task<IReadOnlyList<RefCode>> CategoriesTarifaires();
+    /// <summary>Bons de fabrication et mouvements de sortie (documents de stock 26 et 21).</summary>
+    Task<IReadOnlyList<FaitMouvement>> Mouvements(DateTime depuis);
+    Task<IReadOnlyList<LigneNomenclature>> Nomenclatures();
+    Task<IReadOnlyList<RefFournisseurArticle>> FournisseursArticles();
+    /// <summary>Réceptions des commandes fournisseurs (BL et factures d'achat issus d'un bon de commande).</summary>
+    Task<IReadOnlyList<FaitReception>> Receptions(DateTime depuis);
+    Task<IReadOnlyList<RefArticleProduction>> ArticlesProduction();
     Task<IReadOnlyList<DetailEcriture>> DetailCompta(FiltreDetailCompta f);
     Task<IReadOnlyList<DetailLigne>> DetailVentes(FiltreDetailVentes f);
 }
@@ -457,6 +464,52 @@ public sealed class LecturesTableauDeBordSql(Dossiers dossiers, IOptionsMonitor<
 
     public Task<IReadOnlyList<RefCode>> CategoriesTarifaires() =>
         Lire<RefCode>("SELECT CAST(cbIndice AS int) AS Numero, CT_Intitule AS Intitule FROM P_CATTARIF WHERE CT_Intitule <> ''");
+
+    // Ligne du composé : elle entre en stock (DL_MvtStock 1, 2). Valeur : montant de la ligne, sinon quantité × prix de revient.
+    public Task<IReadOnlyList<FaitMouvement>> Mouvements(DateTime depuis) => Lire<FaitMouvement>(
+        "SELECT CAST(e.DO_Type AS int) AS Type, e.DO_Date AS Date, e.DO_Piece AS Piece, NULLIF(l.AR_RefCompose, '') AS Compose, l.AR_Ref AS Article, " +
+        "NULLIF(l.DE_No, 0) AS Depot, CAST(CASE WHEN l.DL_MvtStock IN (1, 2) THEN 1 ELSE 0 END AS bit) AS Entree, " +
+        "CAST(SUM(ABS(l.DL_Qte)) AS decimal(18,4)) AS Quantite, " +
+        "CAST(SUM(CASE WHEN l.DL_MontantHT <> 0 THEN ABS(l.DL_MontantHT) ELSE ABS(l.DL_Qte * l.DL_PrixRU) END) AS decimal(18,2)) AS Valeur " +
+        "FROM F_DOCLIGNE l JOIN F_DOCENTETE e ON e.DO_Domaine = l.DO_Domaine AND e.DO_Type = l.DO_Type AND e.DO_Piece = l.DO_Piece " +
+        "WHERE e.DO_Domaine = 2 AND e.DO_Type IN (21, 26) AND e.DO_Date >= @depuis AND l.AR_Ref <> '' " +
+        "GROUP BY e.DO_Type, e.DO_Date, e.DO_Piece, NULLIF(l.AR_RefCompose, ''), l.AR_Ref, NULLIF(l.DE_No, 0), CASE WHEN l.DL_MvtStock IN (1, 2) THEN 1 ELSE 0 END",
+        new { depuis });
+
+    // Gammes du composé : une nomenclature par combinaison. Sans ces colonnes (version plus ancienne), une seule nomenclature par article.
+    public async Task<IReadOnlyList<LigneNomenclature>> Nomenclatures()
+    {
+        string Requete(string gammes) =>
+            "SELECT n.AR_Ref AS Compose, n.NO_RefDet AS Composant, CAST(n.NO_Qte AS decimal(18,6)) AS Quantite, " +
+            "CAST(CASE WHEN n.NO_Type = 0 THEN 1 ELSE 0 END AS bit) AS Fixe, " +
+            "CAST(CASE WHEN a.AR_QteComp > 0 THEN a.AR_QteComp ELSE 1 END AS decimal(18,6)) AS QteComposition, " + gammes +
+            " FROM F_NOMENCLAT n JOIN F_ARTICLE a ON a.AR_Ref = n.AR_Ref WHERE n.NO_RefDet <> ''";
+        try
+        {
+            return await Lire<LigneNomenclature>(Requete("CAST(ISNULL(n.AG_No1Comp, 0) AS int) AS Gamme1, CAST(ISNULL(n.AG_No2Comp, 0) AS int) AS Gamme2"));
+        }
+        catch (SqlException)
+        {
+            return await Lire<LigneNomenclature>(Requete("0 AS Gamme1, 0 AS Gamme2"));
+        }
+    }
+
+    public Task<IReadOnlyList<RefFournisseurArticle>> FournisseursArticles() => Lire<RefFournisseurArticle>(
+        "SELECT f.AR_Ref AS Article, f.CT_Num AS Fournisseur, CAST(CASE WHEN f.AF_Principal <> 0 THEN 1 ELSE 0 END AS bit) AS Principal, " +
+        "CAST(f.AF_DelaiAppro AS int) AS Delai, CAST(f.AF_QteMini AS decimal(18,4)) AS QteMini, CAST(f.AF_Colisage AS decimal(18,4)) AS Colisage, " +
+        "CAST(f.AF_PrixAch AS decimal(18,4)) AS Prix FROM F_ARTFOURNISS f WHERE f.CT_Num <> ''");
+
+    public Task<IReadOnlyList<FaitReception>> Receptions(DateTime depuis) => Lire<FaitReception>(
+        "SELECT l.AR_Ref AS Article, e.DO_Tiers AS Fournisseur, l.DL_DateBC AS DateCommande, " +
+        "COALESCE(NULLIF(l.DL_DateBL, '1900-01-01'), e.DO_Date) AS DateReception, CAST(SUM(ABS(l.DL_Qte)) AS decimal(18,4)) AS Quantite " +
+        "FROM F_DOCLIGNE l JOIN F_DOCENTETE e ON e.DO_Domaine = l.DO_Domaine AND e.DO_Type = l.DO_Type AND e.DO_Piece = l.DO_Piece " +
+        "WHERE e.DO_Domaine = 1 AND e.DO_Type IN (13, 16, 17) AND e.DO_Provenance NOT IN (1, 2) AND l.AR_Ref <> '' AND l.DL_PieceBC <> '' " +
+        "AND l.DL_DateBC > '1900-01-01' AND e.DO_Date >= @depuis " +
+        "GROUP BY l.AR_Ref, e.DO_Tiers, l.DL_DateBC, COALESCE(NULLIF(l.DL_DateBL, '1900-01-01'), e.DO_Date)", new { depuis });
+
+    public Task<IReadOnlyList<RefArticleProduction>> ArticlesProduction() => Lire<RefArticleProduction>(
+        "SELECT AR_Ref AS Reference, CAST(AR_Nomencl AS int) AS Nomenclature, CAST(AR_PrixAch AS decimal(18,4)) AS PrixAchat, " +
+        "CAST(AR_DelaiFabrication AS int) AS DelaiFabrication FROM F_ARTICLE");
 
     public Task<IReadOnlyList<DetailEcriture>> DetailCompta(FiltreDetailCompta f)
     {

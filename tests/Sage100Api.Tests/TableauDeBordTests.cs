@@ -209,6 +209,81 @@ public sealed class TableauDeBordTests : IDisposable
     }
 
     [Fact]
+    public async Task La_production_compare_les_matieres_consommees_a_la_nomenclature()
+    {
+        var i = await Instantane();
+        var r = new RequeteProduction(null, null, null, null, null, null, null, null, null, null);
+        var s = JsonSerializer.SerializeToElement(Production.Synthese(i, r, Aujourdhui));
+        var t = s.GetProperty("totaux");
+        Assert.Equal(1, t.GetProperty("bons").GetInt32());
+        Assert.Equal(5000m, t.GetProperty("valeur").GetDecimal());
+        Assert.Equal(2610m, t.GetProperty("matieres").GetDecimal());
+        // Théorique : 20 OR18 à 100 (prix moyen des sorties), 10 FERMOIR à 50, 1 EMBAL à 10.
+        Assert.Equal(2510m, t.GetProperty("theorique").GetDecimal());
+        Assert.Equal(4.0m, t.GetProperty("ecartPourcent").GetDecimal());
+
+        var m = JsonSerializer.SerializeToElement(Production.Matieres(i, r, Aujourdhui)).GetProperty("matieres").EnumerateArray().ToList();
+        var or18 = m.Single(x => x.GetProperty("article").GetString() == "OR18");
+        Assert.Equal(1m, or18.GetProperty("ecart").GetDecimal());
+        Assert.Equal(100m, or18.GetProperty("ecartValeur").GetDecimal());
+        Assert.Equal(2m, or18.GetProperty("autresSorties").GetDecimal());
+        Assert.Equal(m[0].GetProperty("article").GetString(), "OR18");
+    }
+
+    [Fact]
+    public async Task L_approvisionnement_eclate_les_commandes_par_nomenclature_et_propose_les_achats()
+    {
+        var i = await Instantane();
+        var l = Production.Lignes(i, new RequeteProduction(null, null, null, null, null, null, 90, 15, 7, 30), Aujourdhui);
+        // 3 CHORFA réservés sans stock : 6 OR18, 3 FERMOIR et 1 EMBAL à sortir.
+        var or18 = l.Single(x => x.Article == "OR18");
+        Assert.Equal(6m, or18.BesoinFabrication);
+        Assert.Equal(10, or18.Delai);
+        Assert.Equal("fiche", or18.SourceDelai);
+        Assert.Equal("ok", or18.Statut);
+
+        var fermoir = l.Single(x => x.Article == "FERMOIR");
+        Assert.Equal(3m, fermoir.BesoinFabrication);
+        Assert.Equal(20, fermoir.Delai);
+        Assert.Equal("historique", fermoir.SourceDelai);
+        Assert.Equal("urgent", fermoir.Statut);
+        Assert.Equal(4.34m, fermoir.AProposer);
+
+        var embal = l.Single(x => x.Article == "EMBAL");
+        Assert.Equal("rupture", embal.Statut);
+        Assert.Equal("defaut", embal.SourceDelai);
+        Assert.Equal(1.58m, embal.AProposer);
+        Assert.DoesNotContain(l, x => x.Article == "CHORFA");
+
+        Assert.Equal(15m, Production.Arrondir(12, 5, 10));
+        Assert.Equal(10m, Production.Arrondir(3, 0, 10));
+        Assert.Equal(0m, Production.Arrondir(-2, 5, 10));
+    }
+
+    [Fact]
+    public async Task Les_previsions_donnent_la_quantite_a_produire_et_le_composant_limitant()
+    {
+        var i = await Instantane();
+        var p = JsonSerializer.SerializeToElement(Production.Previsions(i, new RequeteProduction(null, null, null, null, null, null, null, null, null, null), Aujourdhui));
+        var chorfa = p.GetProperty("lignes").EnumerateArray().Single(x => x.GetProperty("article").GetString() == "CHORFA");
+        Assert.Equal(3m, chorfa.GetProperty("aProduire").GetDecimal());
+        Assert.Equal(5m, chorfa.GetProperty("fabricable").GetDecimal());
+        Assert.Equal("FERMOIR", chorfa.GetProperty("bloquant").GetString());
+        Assert.Equal(12, chorfa.GetProperty("ventes").GetArrayLength());
+    }
+
+    [Fact]
+    public async Task Le_tableau_production_est_reserve_a_la_direction_et_aux_commerciaux()
+    {
+        var http = await Client("DIR");
+        Assert.Equal(HttpStatusCode.OK, (await http.GetAsync("/api/v1/tableau-de-bord/production/synthese")).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await http.GetAsync("/api/v1/tableau-de-bord/production/appro?vue=tous")).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await http.GetAsync("/api/v1/tableau-de-bord/production/produit/CHORFA")).StatusCode);
+        var compta = await Client("COMPTA");
+        Assert.Equal(HttpStatusCode.Forbidden, (await compta.GetAsync("/api/v1/tableau-de-bord/production/previsions")).StatusCode);
+    }
+
+    [Fact]
     public async Task Le_detail_d_une_cellule_se_traduit_en_filtres_d_ecritures()
     {
         var i = await Instantane();
@@ -529,8 +604,10 @@ sealed class FaussesLecturesTableauDeBord : ILecturesTableauDeBord
 
     public Task<IReadOnlyList<LigneStock>> Stock() => StockEnPanne
         ? throw new InvalidOperationException("Nom de colonne non valide : AS_MontSto")
-        : L(new LigneStock { Article = "CHORFA", Depot = 1, Quantite = 0, Mini = 2 },
-            new LigneStock { Article = "BAOR01", Depot = 1, Quantite = 5, Valeur = 7500 });
+        : L(new LigneStock { Article = "CHORFA", Depot = 1, Quantite = 0, Mini = 2, Reserve = 3 },
+            new LigneStock { Article = "BAOR01", Depot = 1, Quantite = 5, Valeur = 7500 },
+            new LigneStock { Article = "OR18", Depot = 1, Quantite = 30 },
+            new LigneStock { Article = "FERMOIR", Depot = 1, Quantite = 5 });
 
     public Task<IReadOnlyDictionary<string, DateTime>> DernieresSorties() =>
         Task.FromResult<IReadOnlyDictionary<string, DateTime>>(new Dictionary<string, DateTime> { ["CHORFA"] = J, ["BAOR01"] = J.AddDays(-200) });
@@ -560,6 +637,29 @@ sealed class FaussesLecturesTableauDeBord : ILecturesTableauDeBord
     public Task<IReadOnlyList<RefCode>> Collaborateurs() => L(new RefCode { Numero = 3, Intitule = "Marie DUPONT" }, new RefCode { Numero = 4, Intitule = "Paul MARTIN" });
     public Task<IReadOnlyList<RefCode>> ModesReglement() => L(new RefCode { Numero = 1, Intitule = "Espèces" });
     public Task<IReadOnlyList<RefCode>> CategoriesTarifaires() => L(new RefCode { Numero = 1, Intitule = "Détaillant" }, new RefCode { Numero = 2, Intitule = "Grossiste" });
+
+    // Fabrication : CHORFA = 2 OR18 et 1 FERMOIR par unité (nomenclature décrite pour 2), plus 1 EMBAL par bon.
+    // BF00001 : 10 CHORFA avec 21 OR18 (1 de trop), 10 FERMOIR, 1 EMBAL ; une sortie diverse de 2 OR18.
+    public Task<IReadOnlyList<FaitMouvement>> Mouvements(DateTime depuis) => L(
+        new FaitMouvement { Date = J.AddDays(-5), Piece = "BF00001", Compose = "CHORFA", Article = "CHORFA", Depot = 1, Entree = true, Quantite = 10, Valeur = 5000 },
+        new FaitMouvement { Date = J.AddDays(-5), Piece = "BF00001", Compose = "CHORFA", Article = "OR18", Depot = 1, Quantite = 21, Valeur = 2100 },
+        new FaitMouvement { Date = J.AddDays(-5), Piece = "BF00001", Compose = "CHORFA", Article = "FERMOIR", Depot = 1, Quantite = 10, Valeur = 500 },
+        new FaitMouvement { Date = J.AddDays(-5), Piece = "BF00001", Compose = "CHORFA", Article = "EMBAL", Depot = 1, Quantite = 1, Valeur = 10 },
+        new FaitMouvement { Type = 21, Date = J.AddDays(-3), Piece = "MS00001", Article = "OR18", Depot = 1, Quantite = 2, Valeur = 200 });
+
+    public Task<IReadOnlyList<LigneNomenclature>> Nomenclatures() => L(
+        new LigneNomenclature { Compose = "CHORFA", Composant = "OR18", Quantite = 4, QteComposition = 2 },
+        new LigneNomenclature { Compose = "CHORFA", Composant = "FERMOIR", Quantite = 2, QteComposition = 2 },
+        new LigneNomenclature { Compose = "CHORFA", Composant = "EMBAL", Quantite = 1, Fixe = true, QteComposition = 2 });
+
+    public Task<IReadOnlyList<RefFournisseurArticle>> FournisseursArticles() => L(
+        new RefFournisseurArticle { Article = "OR18", Fournisseur = "FOUR", Principal = true, Delai = 10, QteMini = 10, Colisage = 5, Prix = 100 });
+
+    public Task<IReadOnlyList<FaitReception>> Receptions(DateTime depuis) => L(
+        new FaitReception { Article = "FERMOIR", Fournisseur = "FOUR", DateCommande = J.AddDays(-60), DateReception = J.AddDays(-40), Quantite = 20 });
+
+    public Task<IReadOnlyList<RefArticleProduction>> ArticlesProduction() => L(
+        new RefArticleProduction { Reference = "CHORFA", Nomenclature = 1 }, new RefArticleProduction { Reference = "EMBAL", PrixAchat = 10 });
 
     public Task<IReadOnlyList<DetailEcriture>> DetailCompta(FiltreDetailCompta f)
     {

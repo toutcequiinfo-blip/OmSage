@@ -32,6 +32,12 @@ public sealed class Instantane
     /// <summary>Commandes clients et leurs transformations (taux de transformation commande → livraison).</summary>
     public IReadOnlyList<FaitCommande> Commandes { get; init; } = [];
     public IReadOnlyList<LigneStock> Stock { get; init; } = [];
+    /// <summary>Bons de fabrication et mouvements de sortie (tableau Production).</summary>
+    public IReadOnlyList<FaitMouvement> Mouvements { get; init; } = [];
+    public IReadOnlyList<LigneNomenclature> Nomenclatures { get; init; } = [];
+    public IReadOnlyList<RefFournisseurArticle> FournisseursArticles { get; init; } = [];
+    public IReadOnlyList<FaitReception> Receptions { get; init; } = [];
+    public IReadOnlyDictionary<string, RefArticleProduction> ArticlesProduction { get; init; } = new Dictionary<string, RefArticleProduction>();
     public IReadOnlyDictionary<string, DateTime> DernieresSorties { get; init; } = new Dictionary<string, DateTime>();
     public IReadOnlyList<EcheanceTiers> Echeances { get; init; } = [];
     public IReadOnlyList<FaitReglement> Reglements { get; init; } = [];
@@ -206,6 +212,7 @@ public sealed class ServiceTableauDeBord(ILecturesTableauDeBord lectures, IOptio
         var collaborateurs = await Referentiel("collaborateurs", lectures.Collaborateurs);
         var modes = await Referentiel("modes de règlement", lectures.ModesReglement);
         var categories = await Referentiel("catégories tarifaires", lectures.CategoriesTarifaires);
+        var articlesProduction = await Referentiel("articles (fabrication)", lectures.ArticlesProduction);
 
         var nouveau = new Instantane
         {
@@ -221,6 +228,11 @@ public sealed class ServiceTableauDeBord(ILecturesTableauDeBord lectures, IOptio
             DernieresSorties = await Partie("dernières sorties de stock", lectures.DernieresSorties, avant.DernieresSorties),
             Echeances = await Partie("échéances clients et fournisseurs", lectures.Echeances, avant.Echeances),
             Reglements = await Partie("règlements", () => lectures.Reglements(depuis), avant.Reglements),
+            Mouvements = await Partie("bons de fabrication", () => lectures.Mouvements(depuis), avant.Mouvements),
+            Nomenclatures = await Partie("nomenclatures", lectures.Nomenclatures, avant.Nomenclatures),
+            FournisseursArticles = await Partie("fournisseurs des articles", lectures.FournisseursArticles, avant.FournisseursArticles),
+            Receptions = await Partie("réceptions fournisseurs", () => lectures.Receptions(depuis), avant.Receptions),
+            ArticlesProduction = articlesProduction?.GroupBy(a => a.Reference).ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase) ?? avant.ArticlesProduction,
             Comptes = comptes?.GroupBy(c => c.Numero).ToDictionary(g => g.Key, g => g.First()) ?? avant.Comptes,
             Journaux = journaux?.GroupBy(j => j.Code).ToDictionary(g => g.Key, g => g.First()) ?? avant.Journaux,
             Tiers = tiers?.GroupBy(t => t.Numero).ToDictionary(g => g.Key, g => g.First()) ?? avant.Tiers,

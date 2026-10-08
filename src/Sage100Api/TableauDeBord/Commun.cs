@@ -19,6 +19,8 @@ public sealed record Perimetre(string Profil, int? Collaborateur, string? Utilis
     public bool VoitCompta => Profil is Direction or Comptable;
     public bool VoitCommercial => Profil is Direction or Commercial or Vendeur;
     public bool VoitAchats => Profil is Direction;
+    /// <summary>Tableau Production (fabrication, matières, approvisionnement) : Direction et Commercial, pas un vendeur limité à ses clients.</summary>
+    public bool VoitProduction => Profil is Direction or Commercial;
     public bool VoitClients => Profil is Direction or Comptable or Commercial or Vendeur;
     public bool VoitFournisseurs => Profil is Direction or Comptable;
     public bool ModifieObjectifs => Profil is Direction;

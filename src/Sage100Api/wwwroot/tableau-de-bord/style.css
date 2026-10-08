@@ -100,6 +100,8 @@ input[type="month"], input[type="date"] { padding: 0 6px; }
 .commandes { display: flex; flex-wrap: wrap; gap: 8px; align-items: end; }
 .commandes label { display: grid; gap: 2px; font-size: .74rem; color: var(--discret); }
 .commandes label.court input { width: 110px; }
+.commandes label.nb input { width: 76px; }
+table.liste td svg.mini { display: block; width: 72px; height: 18px; }
 .commandes label select, .commandes label input, .commandes .segments button, .commandes > button { font-size: .85rem; }
 input[type="checkbox"] { min-height: 0; width: 18px; height: 18px; padding: 0; accent-color: var(--accent); }
 .commandes .segments { display: flex; border: 1px solid var(--bord); border-radius: 8px; overflow: hidden; }
@@ -129,6 +131,8 @@ table.liste tr.cliquable { cursor: pointer; } table.liste tr.cliquable:hover td 
 .statut.sousMini, .statut.surstock { background: rgba(255,181,71,.18); color: var(--alerte); }
 .statut.dormant { background: rgba(167,139,250,.18); color: var(--accent2); }
 .statut.ok { background: rgba(61,220,151,.15); color: var(--ok); }
+.statut.urgent { background: rgba(255,181,71,.18); color: var(--alerte); }
+.statut.commander { background: rgba(77,171,247,.16); color: var(--accent); }
 
 /* ---------- Dialogues ---------- */
 .dialogue { border: 1px solid var(--bord); border-radius: 12px; background: var(--panneau); color: var(--texte); padding: 16px; width: min(420px, 94vw); }
