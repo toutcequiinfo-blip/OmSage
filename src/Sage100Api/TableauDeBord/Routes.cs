@@ -27,7 +27,7 @@ public static class Routes
                 droits = new
                 {
                     compta = p.VoitCompta, commercial = p.VoitCommercial, achats = p.VoitAchats, clients = p.VoitClients,
-                    fournisseurs = p.VoitFournisseurs, objectifs = p.ModifieObjectifs, reglages = p.Profil == Perimetre.Direction, actualiser = p.Profil is Perimetre.Direction or Perimetre.Comptable,
+                    fournisseurs = p.VoitFournisseurs, production = p.VoitProduction, objectifs = p.ModifieObjectifs, reglages = p.Profil == Perimetre.Direction, actualiser = p.Profil is Perimetre.Direction or Perimetre.Comptable,
                 },
                 exercices = (i.Exercices.Count > 0 ? i.Exercices : [courant]).Where(e => e.Fin >= i.Depuis)
                     .Select(e => new { cle = Periodes.CleExercice(e), intitule = Periodes.IntituleExercice(e), debut = e.Debut, fin = e.Fin }),
@@ -169,6 +169,27 @@ public static class Routes
         g.MapGet("/stock", (Contexte c, int? depot, string? famille, string? statut) =>
             c.Refus(p => p.VoitCommercial || p.VoitCompta) ?? Results.Ok(Stocks.Analyse(c.Instantane, depot, famille, statut, DateTime.Today, c.Options.Seuils)))
             .WithSummary("Valeur du stock, ruptures, sous minimum, surstocks, dormants, rotation et couverture");
+
+        // ---------- Tableau Production ----------
+        g.MapGet("/production/synthese", (Contexte c, [AsParameters] RequeteProduction r) =>
+            c.Refus(p => p.VoitProduction) ?? Results.Ok(Production.Synthese(c.Instantane, r, DateTime.Today)))
+            .WithSummary("Production réalisée (bons de fabrication) : valeur, matières consommées face à la nomenclature, par mois et par produit");
+
+        g.MapGet("/production/produit/{article}", (Contexte c, string article, [AsParameters] RequeteProduction r) =>
+            c.Refus(p => p.VoitProduction) ?? Results.Ok(Production.DetailProduit(c.Instantane, article, r, DateTime.Today)))
+            .WithSummary("Matières d'un produit fabriqué : consommation réelle face à la nomenclature, et ses bons de fabrication");
+
+        g.MapGet("/production/matieres", (Contexte c, [AsParameters] RequeteProduction r) =>
+            c.Refus(p => p.VoitProduction) ?? Results.Ok(Production.Matieres(c.Instantane, r, DateTime.Today)))
+            .WithSummary("Consommation des matières : réelle, théorique (nomenclature), écarts, sorties hors fabrication");
+
+        g.MapGet("/production/appro", (Contexte c, [AsParameters] RequeteProduction r) =>
+            c.Refus(p => p.VoitProduction) ?? Results.Ok(Production.Appro(c.Instantane, r, DateTime.Today)))
+            .WithSummary("Aide à l'approvisionnement : besoins des fabrications, couverture, point de commande, quantité proposée par fournisseur");
+
+        g.MapGet("/production/previsions", (Contexte c, [AsParameters] RequeteProduction r) =>
+            c.Refus(p => p.VoitProduction) ?? Results.Ok(Production.Previsions(c.Instantane, r, DateTime.Today)))
+            .WithSummary("Prévisions : ventes prévues des produits finis, quantité à produire, quantité fabricable avec le stock des composants");
 
         g.MapGet("/objectifs", (Contexte c, Objectifs o, string? du, string? au) =>
             c.Refus(p => p.VoitCommercial) ?? Results.Ok(o.Lire(du, au).Where(x => !c.Perimetre.Restreint || x.Commercial == c.Perimetre.Collaborateur)))
