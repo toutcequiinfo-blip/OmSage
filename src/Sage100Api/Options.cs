@@ -36,4 +36,9 @@ public sealed class AuthentificationOptions
     public bool ExigerCaissier { get; set; } = true;
     /// <summary>Clé de signature des jetons (base64). Vide : clé aléatoire gardée dans un fichier à côté du journal.</summary>
     public string CleSignature { get; set; } = "";
+    /// <summary>
+    /// Vrai : les pages demandent la session Windows de l'utilisateur (authentification Windows intégrée, sans saisie sur un poste
+    /// du réseau local) pour la liste des utilisateurs actifs. Faux si le navigateur affiche une fenêtre de mot de passe.
+    /// </summary>
+    public bool SessionWindows { get; set; } = true;
 }

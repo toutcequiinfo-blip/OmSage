@@ -7,7 +7,7 @@ namespace Sage100Api.TableauDeBord;
 /// Direction (tout), Comptable (comptabilité, trésorerie, créances et dettes), Commercial (ventes, marges, stock, créances clients),
 /// Vendeur (comme Commercial, limité à ses clients : ceux dont il est le représentant ou les pièces dont il est le commercial).
 /// </summary>
-public sealed record Perimetre(string Profil, int? Collaborateur, string? Utilisateur)
+public sealed record Perimetre(string Profil, int? Collaborateur, string? Utilisateur, IReadOnlySet<string>? Permis = null, bool Administre = false)
 {
     public const string Direction = "Direction";
     public const string Comptable = "Comptable";
@@ -16,14 +16,20 @@ public sealed record Perimetre(string Profil, int? Collaborateur, string? Utilis
     public const string Aucun = "Aucun";
     public static readonly string[] Profils = [Direction, Comptable, Commercial, Vendeur];
 
-    public bool VoitCompta => Profil is Direction or Comptable;
-    public bool VoitCommercial => Profil is Direction or Commercial or Vendeur;
-    public bool VoitAchats => Profil is Direction;
-    /// <summary>Tableau Production (fabrication, matières, approvisionnement) : Direction et Commercial, pas un vendeur limité à ses clients.</summary>
-    public bool VoitProduction => Profil is Direction or Commercial;
-    public bool VoitClients => Profil is Direction or Comptable or Commercial or Vendeur;
-    public bool VoitFournisseurs => Profil is Direction or Comptable;
-    public bool ModifieObjectifs => Profil is Direction;
+    /// <summary>Onglets ouverts : ceux cochés dans l'administration (utilisateur, sinon profil), sinon ceux du profil par défaut.</summary>
+    public IReadOnlySet<string> Onglets => Permis ?? OngletsTableauDeBord.ParDefaut(Profil);
+    public bool Peut(params string[] onglets) => onglets.Any(Onglets.Contains);
+
+    // Droits sur les données, déduits des onglets ouverts : une route sert les onglets qui en ont besoin.
+    public bool VoitCompta => Peut("compta/synthese", "compta/explorateur", "compta/balance", "compta/charges", "compta/tresorerie", "compta/rapprochement");
+    public bool VoitCommercial => Peut("commercial/direction", "commercial/ventes", "commercial/clients", "commercial/articles", "commercial/commandes",
+        "commercial/transformation", "commercial/stock", "commercial/objectifs");
+    public bool VoitAchats => Peut("commercial/achats");
+    /// <summary>Tableau Production (fabrication, matières, approvisionnement) : par défaut Direction et Commercial, pas un vendeur limité à ses clients.</summary>
+    public bool VoitProduction => Peut("production/production", "production/matieres", "production/appro", "production/previsions");
+    public bool VoitClients => Peut("compta/recouvrement", "commercial/recouvrement", "compta/tresorerie") || VoitCommercial;
+    public bool VoitFournisseurs => Peut("compta/fournisseurs", "compta/tresorerie");
+    public bool ModifieObjectifs => Profil is Direction && Peut("commercial/objectifs");
     public bool Restreint => Profil == Vendeur;
 
     /// <summary>Vendeur : un client ou une pièce lui appartient s'il en est le représentant ou le commercial.</summary>

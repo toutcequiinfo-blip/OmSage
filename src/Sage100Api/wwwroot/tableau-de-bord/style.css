@@ -203,3 +203,20 @@ button.choix.exclu { border-color: var(--alerte); color: var(--alerte); }
 .champ-date input.date { width: 92px; font-variant-numeric: tabular-nums; }
 .champ-date button.cal { padding: 0 4px; margin-left: 2px; font-size: .75rem; line-height: 1; background: none; border: 1px solid var(--bord, #ccc); border-radius: 4px; cursor: pointer; }
 .champ-date input.cal-natif { position: absolute; left: 0; bottom: 0; width: 1px; height: 1px; opacity: 0; pointer-events: none; border: 0; padding: 0; }
+/* Administration : droits par onglet, utilisateurs actifs */
+table.liste .centre { text-align: center; }
+table.liste.droits tr.groupe td { font-weight: 600; background: var(--panneau2); }
+table.liste.droits td.retrait { padding-left: 22px; }
+table.liste.droits input[type=checkbox] { margin: 0; }
+.onglets-utilisateur { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 8px; }
+.onglets-utilisateur fieldset { border: 1px solid var(--bord); border-radius: 6px; padding: 6px 10px; margin: 0; display: grid; gap: 3px; align-content: start; }
+.onglets-utilisateur legend { font-weight: 600; font-size: .85rem; }
+.onglets-utilisateur label { font-size: .85rem; display: flex; gap: 6px; align-items: center; }
+.pastille { display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: var(--discret); }
+.pastille.actif { background: #2fbf71; }
+.pastille.attente { background: #e0a526; }
+.commandes label.case { display: flex; flex-direction: row; align-items: center; gap: 4px; font-size: .8rem; }
+.table-defile.complet { max-height: none; }
+table.liste.droits td, table.liste.droits th { padding-top: 2px; padding-bottom: 2px; }
+table.liste.droits th.centre, table.liste.droits td.centre { width: 13%; }
+button:disabled { opacity: .45; cursor: default; }

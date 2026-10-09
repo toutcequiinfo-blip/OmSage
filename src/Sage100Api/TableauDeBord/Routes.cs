@@ -9,13 +9,18 @@ namespace Sage100Api.TableauDeBord;
 /// </summary>
 public static class Routes
 {
+    // Onglets servis par les explorateurs (cube et détail d'une cellule).
+    static readonly string[] OngletsCubeCompta = ["compta/explorateur", "compta/balance", "compta/charges"];
+    static readonly string[] OngletsCreancesClients = ["compta/recouvrement", "commercial/recouvrement", "compta/tresorerie"];
+    static readonly string[] OngletsCubeVentes = ["commercial/ventes", "commercial/articles", "commercial/direction", "commercial/clients"];
+
     public static void MapTableauDeBord(this RouteGroupBuilder v1)
     {
         var g = v1.MapGroup("/tableau-de-bord").WithTags("Tableau de bord");
 
         g.MapGet("/etat", (Contexte c) =>
         {
-            if (c.Refus(p => p.Profil != Perimetre.Aucun) is { } refus) return refus;
+            if (c.Refus(p => p.Onglets.Count > 0 || p.Administre) is { } refus) return refus;
             var i = c.Instantane;
             var p = c.Perimetre;
             var aujourdhui = DateTime.Today;
@@ -24,10 +29,11 @@ public static class Routes
             {
                 genere = i.Genere, i.DureeSecondes, enCours = c.Service.EnCours, prochaine = c.Service.Prochaine, erreurs = i.Erreurs,
                 profil = p.Profil, utilisateur = p.Utilisateur,
+                onglets = p.Onglets.Order().Concat(p.Administre ? ["administration/droits", "administration/utilisateurs"] : []),
                 droits = new
                 {
                     compta = p.VoitCompta, commercial = p.VoitCommercial, achats = p.VoitAchats, clients = p.VoitClients,
-                    fournisseurs = p.VoitFournisseurs, production = p.VoitProduction, objectifs = p.ModifieObjectifs, reglages = p.Profil == Perimetre.Direction, actualiser = p.Profil is Perimetre.Direction or Perimetre.Comptable,
+                    fournisseurs = p.VoitFournisseurs, production = p.VoitProduction, objectifs = p.ModifieObjectifs, reglages = p.Profil == Perimetre.Direction, administration = p.Administre, actualiser = p.Profil is Perimetre.Direction or Perimetre.Comptable,
                 },
                 exercices = (i.Exercices.Count > 0 ? i.Exercices : [courant]).Where(e => e.Fin >= i.Depuis)
                     .Select(e => new { cle = Periodes.CleExercice(e), intitule = Periodes.IntituleExercice(e), debut = e.Debut, fin = e.Fin }),
@@ -53,7 +59,7 @@ public static class Routes
 
         g.MapGet("/reglages", (Contexte c) =>
         {
-            if (c.Refus(p => p.Profil != Perimetre.Aucun) is { } refus) return refus;
+            if (c.Refus(p => p.Onglets.Count > 0 || p.Administre) is { } refus) return refus;
             return Results.Ok(new { documents = c.Reglages.Documents() });
         }).WithSummary("Réglages de la société : documents comptés dans le CA");
 
@@ -73,17 +79,17 @@ public static class Routes
 
         // ---------- Tableau comptable ----------
         g.MapGet("/compta/synthese", (Contexte c, string? exercice) =>
-            c.Refus(p => p.VoitCompta) ?? Results.Ok(Comptabilite.Synthese(c.Instantane, Periodes.Choisir(c.Instantane, exercice, DateTime.Today),
+            c.Refus(p => p.Peut("compta/synthese", "compta/charges", "compta/tresorerie")) ?? Results.Ok(Comptabilite.Synthese(c.Instantane, Periodes.Choisir(c.Instantane, exercice, DateTime.Today),
                 DateTime.Today, c.Options.Seuils, c.Perimetre)))
             .WithSummary("Produits, charges, résultat, trésorerie, créances et dettes de l'exercice, avec N-1, par mois et alertes");
 
         g.MapGet("/compta/cube", (Contexte c, [AsParameters] RequeteCompta r) =>
-            c.Refus(p => p.VoitCompta) ?? Results.Ok(Comptabilite.Croiser(c.Instantane, r, DateTime.Today)))
+            c.Refus(p => p.Peut(OngletsCubeCompta)) ?? Results.Ok(Comptabilite.Croiser(c.Instantane, r, DateTime.Today)))
             .WithSummary("Tableau croisé des écritures : axes en lignes et colonnes (mois, classe, compte, journal, tiers, section...), mesures débit, crédit, solde");
 
         g.MapGet("/compta/detail", async (Contexte c, ILecturesTableauDeBord l, [AsParameters] RequeteCompta r, string? cleLigne, string? cleColonne) =>
         {
-            if (c.Refus(p => p.VoitCompta) is { } refus) return refus;
+            if (c.Refus(p => p.Peut(OngletsCubeCompta)) is { } refus) return refus;
             if (r.Source == "analytique") return Results.BadRequest(new { code = "DETAIL_INDISPONIBLE", message = "Le détail est disponible sur les écritures générales." });
             var f = Comptabilite.Detail(c.Instantane, r, cleLigne, cleColonne, DateTime.Today);
             if (f == null) return Results.BadRequest(new { code = "DETAIL_INDISPONIBLE", message = "Pas de détail pour cette cellule : choisissez une ligne précise." });
@@ -91,7 +97,7 @@ public static class Routes
         }).WithSummary("Écritures d'une cellule du tableau croisé (500 au plus), lues dans Sage");
 
         g.MapGet("/compta/rapprochement", (Contexte c, string? exercice) =>
-            c.Refus(p => p.VoitCompta) ?? Results.Ok(Comptabilite.Rapprochement(c.Instantane, Periodes.Choisir(c.Instantane, exercice, DateTime.Today), DateTime.Today)))
+            c.Refus(p => p.Peut("compta/rapprochement")) ?? Results.Ok(Comptabilite.Rapprochement(c.Instantane, Periodes.Choisir(c.Instantane, exercice, DateTime.Today), DateTime.Today)))
             .WithSummary("Contrôle par mois : CA, règlements et achats de la gestion commerciale face à la comptabilité");
 
         g.MapGet("/valeurs/{liste}", (Contexte c, string liste, string? q, int? limite) =>
@@ -120,79 +126,79 @@ public static class Routes
         g.MapGet("/recouvrement/{type}", (Contexte c, string type, string? commercial, string? categorie, string? qualite) =>
         {
             var t = type == "fournisseurs" ? 1 : 0;
-            return c.Refus(p => t == 0 ? p.VoitClients : p.VoitFournisseurs)
+            return c.Refus(p => t == 0 ? p.Peut(OngletsCreancesClients) : p.VoitFournisseurs)
                 ?? Results.Ok(Creances.Analyse(c.Instantane, t, c.Perimetre, commercial, categorie, DateTime.Today, qualite));
         }).WithSummary("Balance âgée (clients ou fournisseurs) : tranches, par tiers, par commercial, par catégorie, par qualité, règlements par mode");
 
         g.MapGet("/recouvrement/{type}/{tiers}", (Contexte c, string type, string tiers) =>
         {
             var t = type == "fournisseurs" ? 1 : 0;
-            if (c.Refus(p => (t == 0 ? p.VoitClients : p.VoitFournisseurs) && (t == 1 || p.Autorise(c.Instantane, tiers))) is { } refus) return refus;
+            if (c.Refus(p => (t == 0 ? p.Peut(OngletsCreancesClients) : p.VoitFournisseurs) && (t == 1 || p.Autorise(c.Instantane, tiers))) is { } refus) return refus;
             return Results.Ok(Creances.Pieces(c.Instantane, tiers, DateTime.Today));
         }).WithSummary("Pièces non soldées d'un client ou d'un fournisseur, avec leur retard");
 
         // ---------- Tableau commercial ----------
         g.MapGet("/commercial/synthese", (Contexte c, Objectifs o, string? exercice, int? commercial) =>
-            c.Refus(p => p.VoitCommercial) ?? Results.Ok(Commercial.Synthese(c.Instantane, Periodes.Choisir(c.Instantane, exercice, DateTime.Today),
+            c.Refus(p => p.Peut("commercial/direction", "commercial/clients", "commercial/objectifs")) ?? Results.Ok(Commercial.Synthese(c.Instantane, Periodes.Choisir(c.Instantane, exercice, DateTime.Today),
                 DateTime.Today, c.Options.Seuils, c.Perimetre, commercial ?? (c.Perimetre.Restreint ? c.Perimetre.Collaborateur : null),
                 o.ParMois(commercial ?? (c.Perimetre.Restreint ? c.Perimetre.Collaborateur : null)))))
             .WithSummary("CA jour / mois / exercice et N-1, marge, panier moyen, clients, objectifs, classements, en-cours, stock et alertes");
 
         g.MapGet("/commercial/cube", (Contexte c, [AsParameters] RequeteVentes r) =>
-            c.Refus(p => Commercial.Domaine(r.Domaine) == 1 ? p.VoitAchats : p.VoitCommercial)
+            c.Refus(p => Commercial.Domaine(r.Domaine) == 1 ? p.VoitAchats : p.Peut(OngletsCubeVentes))
                 ?? Results.Ok(Commercial.Croiser(c.Instantane, r, c.Perimetre, DateTime.Today)))
             .WithSummary("Tableau croisé des factures de vente (ou d'achat) : axes article, famille, client, catégorie tarifaire, qualité client, commercial, dépôt, mois... ; mesures CA, quantité, coût, marge, taux");
 
         g.MapGet("/commercial/detail", async (Contexte c, ILecturesTableauDeBord l, [AsParameters] RequeteVentes r, string? cleLigne, string? cleColonne) =>
         {
-            if (c.Refus(p => Commercial.Domaine(r.Domaine) == 1 ? p.VoitAchats : p.VoitCommercial) is { } refus) return refus;
+            if (c.Refus(p => Commercial.Domaine(r.Domaine) == 1 ? p.VoitAchats : p.Peut(OngletsCubeVentes)) is { } refus) return refus;
             var f = Commercial.Detail(c.Instantane, r, c.Perimetre, cleLigne, cleColonne, DateTime.Today);
             if (f == null) return Results.BadRequest(new { code = "DETAIL_INDISPONIBLE", message = "Pas de détail pour cette cellule : choisissez une ligne précise." });
             return await c.Sage(() => l.DetailVentes(f));
         }).WithSummary("Lignes de factures d'une cellule du tableau croisé (500 au plus), lues dans Sage");
 
         g.MapGet("/commercial/transformation/cube", (Contexte c, [AsParameters] RequeteVentes r) =>
-            c.Refus(p => p.VoitCommercial) ?? Results.Ok(Transformation.Croiser(c.Instantane, r, c.Perimetre, DateTime.Today)))
+            c.Refus(p => p.Peut("commercial/transformation")) ?? Results.Ok(Transformation.Croiser(c.Instantane, r, c.Perimetre, DateTime.Today)))
             .WithSummary("Taux de transformation commande → livraison : commandé, livré, en cours, non servi et taux, par article, client, mois, semaine...");
 
         g.MapGet("/commercial/transformation/detail", (Contexte c, [AsParameters] RequeteVentes r, string? cleLigne, string? cleColonne) =>
         {
-            if (c.Refus(p => p.VoitCommercial) is { } refus) return refus;
+            if (c.Refus(p => p.Peut("commercial/transformation")) is { } refus) return refus;
             var d = Transformation.Detail(c.Instantane, r, c.Perimetre, cleLigne, cleColonne, DateTime.Today);
             return d == null ? Results.BadRequest(new { code = "DETAIL_INDISPONIBLE", message = "Pas de détail pour cette cellule : choisissez une ligne précise." }) : Results.Ok(d);
         }).WithSummary("Commandes clients d'une cellule du tableau de transformation : commandé, livré, reste, taux, délai et statut (500 au plus)");
 
         g.MapGet("/commercial/commandes", (Contexte c, int? commercial) =>
-            c.Refus(p => p.VoitCommercial) ?? Results.Ok(Commercial.Commandes(c.Instantane, c.Perimetre, commercial, DateTime.Today)))
+            c.Refus(p => p.Peut("commercial/commandes")) ?? Results.Ok(Commercial.Commandes(c.Instantane, c.Perimetre, commercial, DateTime.Today)))
             .WithSummary("Devis, commandes, préparations et bons de livraison non clôturés");
 
         g.MapGet("/stock", (Contexte c, int? depot, string? famille, string? statut) =>
-            c.Refus(p => p.VoitCommercial || p.VoitCompta) ?? Results.Ok(Stocks.Analyse(c.Instantane, depot, famille, statut, DateTime.Today, c.Options.Seuils)))
+            c.Refus(p => p.Peut("commercial/stock")) ?? Results.Ok(Stocks.Analyse(c.Instantane, depot, famille, statut, DateTime.Today, c.Options.Seuils)))
             .WithSummary("Valeur du stock, ruptures, sous minimum, surstocks, dormants, rotation et couverture");
 
         // ---------- Tableau Production ----------
         g.MapGet("/production/synthese", (Contexte c, [AsParameters] RequeteProduction r) =>
-            c.Refus(p => p.VoitProduction) ?? Results.Ok(Production.Synthese(c.Instantane, r, DateTime.Today)))
+            c.Refus(p => p.Peut("production/production")) ?? Results.Ok(Production.Synthese(c.Instantane, r, DateTime.Today)))
             .WithSummary("Production réalisée (bons de fabrication) : valeur, matières consommées face à la nomenclature, par mois et par produit");
 
         g.MapGet("/production/produit/{article}", (Contexte c, string article, [AsParameters] RequeteProduction r) =>
-            c.Refus(p => p.VoitProduction) ?? Results.Ok(Production.DetailProduit(c.Instantane, article, r, DateTime.Today)))
+            c.Refus(p => p.Peut("production/production", "production/previsions")) ?? Results.Ok(Production.DetailProduit(c.Instantane, article, r, DateTime.Today)))
             .WithSummary("Matières d'un produit fabriqué : consommation réelle face à la nomenclature, et ses bons de fabrication");
 
         g.MapGet("/production/matieres", (Contexte c, [AsParameters] RequeteProduction r) =>
-            c.Refus(p => p.VoitProduction) ?? Results.Ok(Production.Matieres(c.Instantane, r, DateTime.Today)))
+            c.Refus(p => p.Peut("production/matieres")) ?? Results.Ok(Production.Matieres(c.Instantane, r, DateTime.Today)))
             .WithSummary("Consommation des matières : réelle, théorique (nomenclature), écarts, sorties hors fabrication");
 
         g.MapGet("/production/appro", (Contexte c, [AsParameters] RequeteProduction r) =>
-            c.Refus(p => p.VoitProduction) ?? Results.Ok(Production.Appro(c.Instantane, r, DateTime.Today)))
+            c.Refus(p => p.Peut("production/appro")) ?? Results.Ok(Production.Appro(c.Instantane, r, DateTime.Today)))
             .WithSummary("Aide à l'approvisionnement : besoins des fabrications, couverture, point de commande, quantité proposée par fournisseur");
 
         g.MapGet("/production/previsions", (Contexte c, [AsParameters] RequeteProduction r) =>
-            c.Refus(p => p.VoitProduction) ?? Results.Ok(Production.Previsions(c.Instantane, r, DateTime.Today)))
+            c.Refus(p => p.Peut("production/previsions")) ?? Results.Ok(Production.Previsions(c.Instantane, r, DateTime.Today)))
             .WithSummary("Prévisions : ventes prévues des produits finis, quantité à produire, quantité fabricable avec le stock des composants");
 
         g.MapGet("/objectifs", (Contexte c, Objectifs o, string? du, string? au) =>
-            c.Refus(p => p.VoitCommercial) ?? Results.Ok(o.Lire(du, au).Where(x => !c.Perimetre.Restreint || x.Commercial == c.Perimetre.Collaborateur)))
+            c.Refus(p => p.Peut("commercial/objectifs", "commercial/direction")) ?? Results.Ok(o.Lire(du, au).Where(x => !c.Perimetre.Restreint || x.Commercial == c.Perimetre.Collaborateur)))
             .WithSummary("Objectifs de CA mensuels (commercial 0 = objectif global)");
 
         g.MapPut("/objectifs", (Contexte c, Objectifs o, List<Objectifs.Objectif> objectifs) =>
@@ -203,6 +209,62 @@ public static class Routes
             o.Enregistrer(objectifs, c.Perimetre.Utilisateur);
             return Results.NoContent();
         }).WithSummary("Enregistre des objectifs (Direction). Montant 0 = suppression");
+        // ---------- Administration : droits par onglet, utilisateurs actifs ----------
+        g.MapGet("/administration/droits", (Contexte c, UtilisateursActifs activite, Dossiers dossiers) =>
+        {
+            if (c.Refus(p => p.Administre) is { } refus) return refus;
+            var connus = activite.Connus(dossiers.Code).GroupBy(u => u.Login, StringComparer.OrdinalIgnoreCase).Select(x => x.First()).ToList();
+            var logins = connus.Select(u => u.Login).Concat(c.Options.Profils.Keys).Distinct(StringComparer.OrdinalIgnoreCase);
+            return Results.Ok(new
+            {
+                droits = c.Droits.Etat(),
+                connus = logins.Order(StringComparer.OrdinalIgnoreCase).Select(l =>
+                {
+                    var u = connus.FirstOrDefault(x => x.Login.Equals(l, StringComparison.OrdinalIgnoreCase));
+                    return new
+                    {
+                        login = l,
+                        nom = u == null ? null : string.Join(" ", new[] { u.Prenom, u.Nom }.Where(x => !string.IsNullOrWhiteSpace(x))),
+                        profilAuto = u == null ? DroitsTableauDeBord.Normaliser(c.Options.Profils.GetValueOrDefault(l)) : Perimetre.De(u, c.Options, true).Profil,
+                        administrateurSage = u?.Administrateur ?? false,
+                    };
+                }),
+            });
+        }).WithSummary("Droits d'accès aux onglets (profils et utilisateurs) et utilisateurs connus (administrateurs)");
+
+        g.MapPut("/administration/droits/profil", (Contexte c, DroitsProfilRequete r) =>
+        {
+            if (c.Refus(p => p.Administre) is { } refus) return refus;
+            if (!Perimetre.Profils.Contains(r.Profil)) return Reponses.Invalide([$"Profil inconnu : {r.Profil}."]);
+            c.Droits.EnregistrerProfil(r.Profil, r.Onglets, c.Perimetre.Utilisateur);
+            return Results.Ok(c.Droits.Etat());
+        }).WithSummary("Onglets d'un profil (administrateurs). Onglets absents = revenir aux onglets par défaut");
+
+        g.MapPut("/administration/droits/utilisateur", (Contexte c, DroitsUtilisateurRequete r) =>
+        {
+            if (c.Refus(p => p.Administre) is { } refus) return refus;
+            var login = r.Login?.Trim() ?? "";
+            if (login.Length == 0) return Reponses.Invalide(["Saisissez le login Sage de l'utilisateur."]);
+            var profil = string.IsNullOrWhiteSpace(r.Profil) ? null : DroitsTableauDeBord.Normaliser(r.Profil);
+            if (!string.IsNullOrWhiteSpace(r.Profil) && profil == null) return Reponses.Invalide([$"Profil inconnu : {r.Profil}."]);
+            // Un administrateur ne peut pas se retirer lui-même le droit d'administrer.
+            var administrateur = r.Administrateur || (login.Equals(c.Perimetre.Utilisateur, StringComparison.OrdinalIgnoreCase) && c.Perimetre.Administre);
+            c.Droits.EnregistrerUtilisateur(login, profil, r.Onglets, administrateur, c.Perimetre.Utilisateur);
+            return Results.Ok(c.Droits.Etat());
+        }).WithSummary("Profil imposé, onglets propres et droit d'administrer d'un utilisateur (administrateurs). Tout vide = réglage retiré");
+
+        g.MapGet("/administration/utilisateurs", (Contexte c, UtilisateursActifs activite) =>
+        {
+            if (c.Refus(p => p.Administre) is { } refus) return refus;
+            var maintenant = DateTime.UtcNow;
+            return Results.Ok(activite.Sessions().Select(s => new
+            {
+                login = s.Login, nom = s.Nom, dossier = s.Dossier, adresse = s.Adresse, poste = string.IsNullOrEmpty(s.Poste) ? null : s.Poste,
+                sessionWindows = s.SessionWindows, administrateur = s.Administrateur,
+                applications = s.Applications.OrderByDescending(a => a.Value).Select(a => a.Key),
+                debut = s.Debut, derniere = s.Derniere, inactifMinutes = (int)(maintenant - s.Derniere).TotalMinutes, requetes = s.Requetes,
+            }));
+        }).WithSummary("Utilisateurs connectés depuis 24 heures : société, poste, session Windows, applications, dernière activité (administrateurs)");
     }
 }
 
@@ -214,6 +276,7 @@ public sealed class Contexte
     public required Perimetre Perimetre { get; init; }
     public required ILogger Log { get; init; }
     public required ReglagesTableauDeBord Reglages { get; init; }
+    public required DroitsTableauDeBord Droits { get; init; }
     /// <summary>Instantané de la société, limité aux documents que ses réglages comptent dans le CA.</summary>
     public Instantane Instantane => Service.Instantane.Retenir(Reglages.Documents());
 
@@ -222,24 +285,27 @@ public sealed class Contexte
         var s = http.RequestServices;
         var auth = s.GetRequiredService<ServiceAuthentification>();
         var options = s.GetRequiredService<IOptionsMonitor<TableauDeBordOptions>>().CurrentValue;
+        var droits = s.GetRequiredService<DroitsTableauDeBord>();
+        var u = auth.Lire(http);
         return ValueTask.FromResult<Contexte?>(new Contexte
         {
             Service = s.GetRequiredService<ServiceTableauDeBord>(),
             Options = options,
-            Perimetre = Perimetre.De(auth.Lire(http), options, auth.Options.Active),
+            Perimetre = droits.Appliquer(Perimetre.De(u, options, auth.Options.Active), u, auth.Options.Active),
             Log = s.GetRequiredService<ILoggerFactory>().CreateLogger("TableauDeBord"),
             Reglages = s.GetRequiredService<ReglagesTableauDeBord>(),
+            Droits = droits,
         });
     }
 
     /// <summary>401 sans connexion, 403 si le profil n'a pas ce droit, null si l'accès est permis.</summary>
     public IResult? Refus(Func<Perimetre, bool> droit)
     {
-        if (Perimetre.Utilisateur == null && Perimetre.Profil == Perimetre.Aucun) return Reponses.ConnexionRequise();
+        if (Perimetre.Utilisateur == null && Perimetre.Profil == Perimetre.Aucun && !Perimetre.Administre) return Reponses.ConnexionRequise();
         if (!droit(Perimetre))
-            return Reponses.DroitRefuse(Perimetre.Profil == Perimetre.Aucun
-                ? $"{Perimetre.Utilisateur} n'a pas de profil pour le tableau de bord (Direction, Comptable, Commercial ou Vendeur) : à déclarer dans TableauDeBord:Profils."
-                : $"Le profil {Perimetre.Profil} n'a pas accès à cet écran.");
+            return Reponses.DroitRefuse(Perimetre.Onglets.Count == 0 && !Perimetre.Administre
+                ? $"{Perimetre.Utilisateur} n'a accès à aucun onglet du tableau de bord : un administrateur peut lui en ouvrir (Administration > Droits d'accès)."
+                : $"Vous n'avez pas accès à cet écran (profil {Perimetre.Profil}).");
         return null;
     }
 

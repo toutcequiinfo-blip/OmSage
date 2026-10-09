@@ -273,6 +273,66 @@ public sealed class TableauDeBordTests : IDisposable
     }
 
     [Fact]
+    public async Task Les_administrateurs_choisissent_les_onglets_de_chaque_profil_et_utilisateur()
+    {
+        var compta = await Client("COMPTA");
+        var etat = await compta.GetFromJsonAsync<JsonElement>("/api/v1/tableau-de-bord/etat");
+        Assert.Contains("compta/balance", etat.GetProperty("onglets").EnumerateArray().Select(x => x.GetString()));
+        Assert.False(etat.GetProperty("droits").GetProperty("administration").GetBoolean());
+        // Direction par la configuration mais pas administrateur Sage : pas d'administration.
+        var dir = await Client("DIR");
+        Assert.Equal(HttpStatusCode.Forbidden, (await dir.GetAsync("/api/v1/tableau-de-bord/administration/droits")).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await compta.GetAsync("/api/v1/tableau-de-bord/administration/utilisateurs")).StatusCode);
+
+        var admin = await Client("ADMIN");
+        var droits = await admin.GetFromJsonAsync<JsonElement>("/api/v1/tableau-de-bord/administration/droits");
+        Assert.Equal(3, droits.GetProperty("droits").GetProperty("tableaux").GetArrayLength());
+        Assert.Contains("COMPTA", droits.GetProperty("connus").EnumerateArray().Select(x => x.GetProperty("login").GetString()));
+
+        // Le profil Comptable perd la balance et gagne le stock.
+        var r = await admin.PutAsJsonAsync("/api/v1/tableau-de-bord/administration/droits/profil",
+            new { profil = "Comptable", onglets = new[] { "compta/synthese", "compta/explorateur", "commercial/stock", "inconnu/x" } });
+        Assert.Equal(HttpStatusCode.OK, r.StatusCode);
+        etat = await compta.GetFromJsonAsync<JsonElement>("/api/v1/tableau-de-bord/etat");
+        Assert.Equal(["commercial/stock", "compta/explorateur", "compta/synthese"], etat.GetProperty("onglets").EnumerateArray().Select(x => x.GetString()));
+        Assert.Equal(HttpStatusCode.OK, (await compta.GetAsync("/api/v1/tableau-de-bord/stock")).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await compta.GetAsync("/api/v1/tableau-de-bord/compta/rapprochement")).StatusCode);
+
+        // Un utilisateur : profil imposé et onglets propres, puis retour au profil.
+        await admin.PutAsJsonAsync("/api/v1/tableau-de-bord/administration/droits/utilisateur",
+            new { login = "COMPTA", profil = "Commercial", onglets = new[] { "production/appro" }, administrateur = true });
+        etat = await compta.GetFromJsonAsync<JsonElement>("/api/v1/tableau-de-bord/etat");
+        Assert.Equal("Commercial", etat.GetProperty("profil").GetString());
+        Assert.Equal(["production/appro", "administration/droits", "administration/utilisateurs"], etat.GetProperty("onglets").EnumerateArray().Select(x => x.GetString()));
+        Assert.Equal(HttpStatusCode.Forbidden, (await compta.GetAsync("/api/v1/tableau-de-bord/compta/synthese")).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await compta.GetAsync("/api/v1/tableau-de-bord/production/appro")).StatusCode);
+
+        await admin.PutAsJsonAsync("/api/v1/tableau-de-bord/administration/droits/utilisateur", new { login = "COMPTA", administrateur = false });
+        await admin.PutAsJsonAsync("/api/v1/tableau-de-bord/administration/droits/profil", new { profil = "Comptable" });
+        etat = await compta.GetFromJsonAsync<JsonElement>("/api/v1/tableau-de-bord/etat");
+        Assert.Equal("Comptable", etat.GetProperty("profil").GetString());
+        Assert.Contains("compta/balance", etat.GetProperty("onglets").EnumerateArray().Select(x => x.GetString()));
+        Assert.Equal(HttpStatusCode.Forbidden, (await compta.GetAsync("/api/v1/tableau-de-bord/administration/droits")).StatusCode);
+    }
+
+    [Fact]
+    public async Task Les_utilisateurs_actifs_sont_listes_avec_leur_societe_et_leur_poste()
+    {
+        var vendeur = await Client("MARIE");
+        await vendeur.GetAsync("/api/v1/tableau-de-bord/etat");
+        var admin = await Client("ADMIN");
+        var liste = await admin.GetFromJsonAsync<JsonElement>("/api/v1/tableau-de-bord/administration/utilisateurs");
+        var marie = liste.EnumerateArray().Single(x => x.GetProperty("login").GetString() == "MARIE");
+        Assert.False(string.IsNullOrEmpty(marie.GetProperty("dossier").GetString()));
+        Assert.True(marie.GetProperty("requetes").GetInt32() >= 1);
+        Assert.Equal(0, marie.GetProperty("inactifMinutes").GetInt32());
+        // Sans jeton, la session Windows n'est pas demandée.
+        var anonyme = _usine.CreateClient();
+        anonyme.DefaultRequestHeaders.Add("X-Api-Key", Cle);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await anonyme.PostAsync("/api/v1/session-windows", null)).StatusCode);
+    }
+
+    [Fact]
     public async Task Le_tableau_production_est_reserve_a_la_direction_et_aux_commerciaux()
     {
         var http = await Client("DIR");
@@ -319,7 +379,7 @@ public sealed class TableauDeBordTests : IDisposable
         var http = await Client("INCONNU");
         var r = await http.GetAsync("/api/v1/tableau-de-bord/etat");
         Assert.Equal(HttpStatusCode.Forbidden, r.StatusCode);
-        Assert.Contains("TableauDeBord:Profils", await r.Content.ReadAsStringAsync());
+        Assert.Contains("Administration", await r.Content.ReadAsStringAsync());
     }
 
     [Fact]
