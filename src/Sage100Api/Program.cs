@@ -1,4 +1,6 @@
 using System.Text.Json;
+using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Authentication.Negotiate;
 using Microsoft.Extensions.Hosting.WindowsServices;
 using Microsoft.Extensions.Options;
 using Sage100Api;
@@ -42,6 +44,9 @@ builder.Services.AddSingleton<JournalOperations>();
 builder.Services.AddSingleton<ControleStock>();
 builder.Services.AddSingleton<ServiceEcritures>();
 builder.Services.AddSingleton<ServiceAuthentification>();
+// Utilisateurs actifs (poste, session Windows) : la session Windows vient de l'authentification Windows intégrée (Negotiate).
+builder.Services.AddSingleton<UtilisateursActifs>();
+builder.Services.AddAuthentication().AddNegotiate();
 // Tableau de bord : instantané des données Sage relu en SQL (lecture seule) au démarrage et aux heures configurées.
 builder.Services.Configure<TableauDeBordOptions>(builder.Configuration.GetSection("TableauDeBord"));
 builder.Services.AddSingleton<ILecturesTableauDeBord, LecturesTableauDeBordSql>();
@@ -49,6 +54,7 @@ builder.Services.AddSingleton<ServiceTableauDeBord>();
 builder.Services.AddHostedService(s => s.GetRequiredService<ServiceTableauDeBord>());
 builder.Services.AddSingleton<Objectifs>();
 builder.Services.AddSingleton<ReglagesTableauDeBord>();
+builder.Services.AddSingleton<DroitsTableauDeBord>();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(o =>
 {
@@ -77,6 +83,10 @@ app.UseStaticFiles(new StaticFileOptions { ContentTypeProvider = typesFichiers, 
 app.MapGet("/", () => Results.Redirect("/borne/")).ExcludeFromDescription();
 app.UseMiddleware<CleApi>();
 app.UseMiddleware<SocieteDeLaRequete>();
+app.UseMiddleware<NoterActivite>();
+// Authentification Windows (Negotiate) seulement pour la route de la session Windows, qui la mène elle-même.
+// La clé empêche ASP.NET d'ajouter l'authentification à toutes les requêtes (les autres routes gardent la clé d'API et le jeton).
+((IApplicationBuilder)app).Properties["__AuthenticationMiddlewareSet"] = true;
 
 var v1 = app.MapGroup("/api/v1");
 
@@ -121,6 +131,32 @@ v1.MapPost("/connexion", async (ConnexionRequest demande, ServiceAuthentificatio
         dossier = u.Dossier,
     });
 }).WithTags("Connexion");
+
+// ---------- Session Windows du poste (liste des utilisateurs actifs) ----------
+// Jeton dans X-Jeton : l'en-tête Authorization sert à l'échange Windows (Negotiate), que le navigateur fait seul sur le réseau local.
+v1.MapPost("/session-windows", async (HttpContext http, ServiceAuthentification auth, UtilisateursActifs activite, ILogger<UtilisateursActifs> log) =>
+{
+    if (auth.LireJeton(http.Request.Headers["X-Jeton"]) is not { } u) return Reponses.ConnexionRequise();
+    if (!auth.Options.SessionWindows) return Results.Ok(new { windows = (string?)null, active = false });
+    AuthenticateResult r;
+    try
+    {
+        // Échange en plusieurs allers-retours (NTLM) : le gestionnaire répond lui-même tant que l'échange n'est pas fini.
+        var gestionnaires = http.RequestServices.GetRequiredService<IAuthenticationHandlerProvider>();
+        if (await gestionnaires.GetHandlerAsync(http, NegotiateDefaults.AuthenticationScheme) is IAuthenticationRequestHandler h && await h.HandleRequestAsync())
+            return Results.Empty;
+        r = await http.AuthenticateAsync(NegotiateDefaults.AuthenticationScheme);
+    }
+    catch (Exception e)
+    {
+        log.LogWarning(e, "Authentification Windows impossible");
+        return Results.Ok(new { windows = (string?)null, active = true });
+    }
+    if (!r.Succeeded || r.Principal?.Identity?.Name is not { Length: > 0 } nom)
+        return Results.Challenge(authenticationSchemes: [NegotiateDefaults.AuthenticationScheme]);
+    activite.NoterWindows(u, http, nom);
+    return Results.Ok(new { windows = nom, active = true });
+}).WithTags("Connexion").WithSummary("Session Windows de l'utilisateur connecté (jeton dans X-Jeton), lue par l'authentification Windows intégrée");
 
 // ---------- Lectures (SQL, lecture seule) ----------
 var lectures = v1.MapGroup("").WithTags("Lectures");

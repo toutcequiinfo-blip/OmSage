@@ -20,6 +20,19 @@ const majReglages = (r) => ecrire("tdb.reglages", { ...reglages(), ...r });
 const cleApi = () => reglages().cle || lire("borne.reglages")?.cle || lire("crm.reglages")?.cle || lire("livraison.reglages")?.cle || "";
 const session = () => { const s = lire("tdb.session"); return s && new Date(s.expiration) > new Date() ? s : null; };
 
+// Session Windows du poste, pour la liste des utilisateurs actifs : le navigateur la donne seul sur le réseau local
+// (authentification Windows intégrée). Une fois par connexion ; sans réponse, rien ne change.
+async function identifierWindows() {
+  const s = session();
+  if (!s) return;
+  const cle = `tdb.windows.${s.jeton.slice(-16)}`;
+  try { if (sessionStorage.getItem(cle)) return; sessionStorage.setItem(cle, "1"); } catch { /* navigation privée */ }
+  try {
+    await fetch("/api/v1/session-windows", { method: "POST", cache: "no-store",
+      headers: { "X-Api-Key": cleApi(), "X-Jeton": s.jeton, ...(s.dossier ? { "X-Dossier": s.dossier } : {}) } });
+  } catch { /* poste hors domaine ou serveur injoignable */ }
+}
+
 class ErreurApi extends Error { constructor(message, statut, code) { super(message); this.statut = statut; this.code = code; } }
 
 async function api(chemin, { methode = "GET", corps } = {}) {
@@ -63,9 +76,8 @@ const ONGLETS = {
   production: [
     ["production", "Production", "production"], ["matieres", "Matières", "production"], ["appro", "Approvisionnement", "production"], ["previsions", "Prévisions", "production"],
   ],
+  administration: [["droits", "Droits d'accès"], ["utilisateurs", "Utilisateurs actifs"]],
 };
-// Droit qui ouvre chaque tableau.
-const DROIT_TABLEAU = { compta: "compta", commercial: "commercial", production: "production" };
 const etat = { meta: null, tableau: null, onglet: null, exercice: null, cache: new Map(), explorateurs: {}, genere: null, rendu: 0 };
 
 function bandeau(texte, info = false) {
@@ -300,8 +312,8 @@ async function demarrer() {
   sel.innerHTML = etat.meta.exercices.map((e) => `<option value="${e.cle}">${echapper(e.intitule)}</option>`).join("");
   etat.exercice = etat.meta.exercices.some((e) => e.cle === reglages().exercice) ? reglages().exercice : etat.meta.exerciceCourant;
   sel.value = etat.exercice;
-  const d = etat.meta.droits;
-  for (const b of document.querySelectorAll("[data-tableau]")) b.hidden = !d[DROIT_TABLEAU[b.dataset.tableau]];
+  for (const b of document.querySelectorAll("[data-tableau]")) b.hidden = !ongletsVisibles(b.dataset.tableau).length;
+  identifierWindows();
   if (!etat.meta.genere || etat.meta.enCours) { bandeau("Première lecture de Sage en cours : les écrans se rempliront dès qu'elle sera terminée.", true); setTimeout(suivreEtat, 3000); }
   naviguer(location.hash);
 }
@@ -314,15 +326,15 @@ $("#exercice").addEventListener("change", (e) => {
 });
 
 // ---------- Navigation ----------
+// Onglets ouverts à l'utilisateur : choisis par les administrateurs (profil ou utilisateur), envoyés par /etat.
 function ongletsVisibles(tableau) {
-  const d = etat.meta.droits;
-  return ONGLETS[tableau].filter(([, , droit]) => d[droit]);
+  const permis = new Set(etat.meta.onglets ?? []);
+  return (ONGLETS[tableau] ?? []).filter(([c]) => permis.has(`${tableau}/${c}`));
 }
 function naviguer(hash) {
   const [t, o] = (hash || "").replace(/^#/, "").split("/");
-  const d = etat.meta.droits;
-  const permis = (x) => ONGLETS[x] && d[DROIT_TABLEAU[x]];
-  const tableau = [t, reglages().tableau].find(permis) ?? (d.compta ? "compta" : d.commercial ? "commercial" : "production");
+  const permis = (x) => ongletsVisibles(x).length > 0;
+  const tableau = [t, reglages().tableau].find(permis) ?? Object.keys(ONGLETS).find(permis) ?? "compta";
   const visibles = ongletsVisibles(tableau);
   const onglet = visibles.some(([c]) => c === o) ? o : visibles[0]?.[0];
   etat.tableau = tableau;
@@ -348,6 +360,7 @@ const ECRANS = {
   "commercial/articles": (c) => explorateur(c, "articles"), "commercial/commandes": commandes, "commercial/transformation": (c) => explorateur(c, "transformation"), "commercial/stock": stock,
   "commercial/recouvrement": (c) => recouvrement(c, "clients"), "commercial/achats": (c) => explorateur(c, "achats"), "commercial/objectifs": objectifs,
   "production/production": production, "production/matieres": matieres, "production/appro": appro, "production/previsions": previsions,
+  "administration/droits": droitsAcces, "administration/utilisateurs": utilisateursActifs,
 };
 
 async function afficherOnglet() {
@@ -1322,3 +1335,156 @@ async function objectifs(c) {
 // ---------- Lancement ----------
 if (!cleApi()) ouvrirConnexion(null, true);
 else demarrer();
+
+// ---------- Administration (administrateurs) ----------
+const PROFILS = ["Direction", "Comptable", "Commercial", "Vendeur"];
+const ensemble = (l) => new Set(l ?? []);
+const memes = (a, b) => a.size === b.size && [...a].every((x) => b.has(x));
+
+async function droitsAcces(c) {
+  const r = await api("/tableau-de-bord/administration/droits");
+  let droits = r.droits;
+  const tableaux = droits.tableaux;
+  // Coches en cours, par profil.
+  const coches = Object.fromEntries(droits.profils.map((p) => [p.profil, ensemble(p.onglets)]));
+  const parDefaut = Object.fromEntries(droits.profils.map((p) => [p.profil, ensemble(p.parDefaut)]));
+  const enregistres = () => Object.fromEntries(droits.profils.map((p) => [p.profil, ensemble(p.onglets)]));
+  let initiaux = enregistres();
+
+  const reglageDe = (login) => droits.utilisateurs.find((u) => u.login.toLowerCase() === login.toLowerCase());
+  const logins = () => [...new Map([...r.connus.map((u) => [u.login.toLowerCase(), u.login]), ...droits.utilisateurs.map((u) => [u.login.toLowerCase(), u.login])]).values()]
+    .sort((a, b) => a.localeCompare(b, "fr"));
+  const connu = (login) => r.connus.find((u) => u.login.toLowerCase() === login.toLowerCase());
+
+  const matrice = () => `<div class="table-defile complet"><table class="liste droits"><thead><tr><th>Onglet</th>${PROFILS.map((p) => `<th class="centre">${p}${memes(coches[p], parDefaut[p]) ? "" : ' <span class="discret" title="Différent des onglets par défaut">•</span>'}</th>`).join("")}</tr></thead>
+    <tbody>${tableaux.map((t) => `<tr class="groupe"><td>${echapper(t.intitule)}</td>${PROFILS.map((p) => `<td class="centre"><input type="checkbox" data-groupe="${echapper(t.intitule)}" data-profil="${p}" title="Tout le tableau ${echapper(t.intitule)} pour ${p}" ${t.onglets.every((o) => coches[p].has(o.cle)) ? "checked" : ""}></td>`).join("")}</tr>
+      ${t.onglets.map((o) => `<tr><td class="retrait">${echapper(o.intitule)}</td>${PROFILS.map((p) => `<td class="centre"><input type="checkbox" data-profil="${p}" data-onglet="${o.cle}" ${coches[p].has(o.cle) ? "checked" : ""}></td>`).join("")}</tr>`).join("")}`).join("")}
+    <tr><td></td>${PROFILS.map((p) => `<td class="centre"><button type="button" class="lien" data-defaut="${p}" ${memes(coches[p], parDefaut[p]) ? "disabled" : ""}>Par défaut</button></td>`).join("")}</tr></tbody></table></div>`;
+
+  const lignesUtilisateurs = () => logins().map((login) => {
+    const u = connu(login), reg = reglageDe(login);
+    const auto = u?.profilAuto ?? "Aucun";
+    const adminSage = u?.administrateurSage;
+    return `<tr data-login="${echapper(login)}"><td><b>${echapper(login)}</b></td><td>${echapper(u?.nom ?? "")}</td><td>${echapper(auto)}</td>
+      <td><select data-champ="profil"><option value="">Automatique</option>${[...PROFILS, "Aucun"].map((p) => `<option ${reg?.profil === p ? "selected" : ""}>${p}</option>`).join("")}</select></td>
+      <td><button type="button" class="lien" data-onglets>${reg?.onglets ? `Personnalisés (${reg.onglets.length})` : "Comme le profil"}</button></td>
+      <td class="centre"><input type="checkbox" data-champ="administrateur" ${adminSage || reg?.administrateur ? "checked" : ""} ${adminSage ? 'disabled title="Administrateur Sage"' : ""}></td></tr>`;
+  }).join("") || '<tr><td colspan="6" class="vide">Aucun utilisateur connu : ils apparaissent après leur première connexion, ou ajoutez un login.</td></tr>';
+
+  c.innerHTML = `
+    <article class="carte l12" style="grid-column:1/-1"><h3><span>Onglets par profil</span>
+      <span><span id="dr-etat" class="discret"></span> <button type="button" id="dr-enregistrer" class="principal" disabled>Enregistrer</button></span></h3>
+      <p class="discret" style="margin:0 0 6px">Cochez les onglets que chaque profil peut ouvrir, dans les trois tableaux. Le profil d'un utilisateur vient de sa fiche Sage (onglet Profil du collaborateur), sauf s'il est imposé plus bas.</p>
+      <div id="dr-matrice">${matrice()}</div></article>
+    <article class="carte l12" style="grid-column:1/-1"><h3><span>Utilisateurs</span>
+      <span class="commandes"><input id="dr-login" placeholder="Login Sage" style="width:140px"><button type="button" id="dr-ajouter">Ajouter</button></span></h3>
+      <div class="table-defile"><table class="liste"><thead><tr><th>Login</th><th>Nom</th><th>Profil Sage</th><th>Profil imposé</th><th>Onglets</th><th class="centre">Administrateur</th></tr></thead>
+      <tbody id="dr-utilisateurs">${lignesUtilisateurs()}</tbody></table></div>
+      <p class="discret" style="margin:6px 0 0">Les changements s'appliquent à la prochaine page ouverte par l'utilisateur. Les administrateurs Sage administrent toujours.</p></article>`;
+
+  const majMatrice = () => {
+    $("#dr-matrice", c).innerHTML = matrice();
+    const change = PROFILS.some((p) => !memes(coches[p], initiaux[p]));
+    $("#dr-enregistrer", c).disabled = !change;
+    $("#dr-etat", c).textContent = change ? "Modifications non enregistrées" : "";
+  };
+  $("#dr-matrice", c).addEventListener("change", (e) => {
+    const x = e.target, p = x.dataset.profil;
+    if (x.dataset.onglet) x.checked ? coches[p].add(x.dataset.onglet) : coches[p].delete(x.dataset.onglet);
+    else if (x.dataset.groupe) for (const o of tableaux.find((t) => t.intitule === x.dataset.groupe).onglets) x.checked ? coches[p].add(o.cle) : coches[p].delete(o.cle);
+    majMatrice();
+  });
+  $("#dr-matrice", c).addEventListener("click", (e) => {
+    const b = e.target.closest("[data-defaut]");
+    if (!b) return;
+    coches[b.dataset.defaut] = new Set(parDefaut[b.dataset.defaut]);
+    majMatrice();
+  });
+  $("#dr-enregistrer", c).addEventListener("click", async () => {
+    const bouton = $("#dr-enregistrer", c);
+    bouton.disabled = true;
+    try {
+      for (const p of PROFILS.filter((x) => !memes(coches[x], initiaux[x])))
+        droits = await api("/tableau-de-bord/administration/droits/profil", { methode: "PUT",
+          corps: { profil: p, onglets: memes(coches[p], parDefaut[p]) ? null : [...coches[p]] } });
+      initiaux = enregistres();
+      majMatrice();
+      $("#dr-etat", c).textContent = "Enregistré";
+    } catch (err) { $("#dr-etat", c).textContent = err.message; bouton.disabled = false; }
+  });
+
+  const enregistrerUtilisateur = async (login, changements) => {
+    const reg = reglageDe(login) ?? { login, profil: null, onglets: null, administrateur: false };
+    const corps = { login, profil: reg.profil, onglets: reg.onglets, administrateur: reg.administrateur, ...changements };
+    droits = await api("/tableau-de-bord/administration/droits/utilisateur", { methode: "PUT", corps });
+    $("#dr-utilisateurs", c).innerHTML = lignesUtilisateurs();
+  };
+  $("#dr-utilisateurs", c).addEventListener("change", async (e) => {
+    const tr = e.target.closest("[data-login]");
+    if (!tr) return;
+    const champ = e.target.dataset.champ;
+    try {
+      await enregistrerUtilisateur(tr.dataset.login, champ === "profil" ? { profil: e.target.value || null } : { administrateur: e.target.checked });
+    } catch (err) { alert(err.message); }
+  });
+  $("#dr-utilisateurs", c).addEventListener("click", (e) => {
+    const b = e.target.closest("[data-onglets]");
+    if (!b) return;
+    const login = b.closest("[data-login]").dataset.login;
+    const reg = reglageDe(login);
+    const profil = reg?.profil || connu(login)?.profilAuto || "Aucun";
+    const actuels = ensemble(reg?.onglets ?? droits.profils.find((p) => p.profil === profil)?.onglets ?? []);
+    ouvrirDetail(`Onglets de ${login}`, reg?.onglets ? "Onglets personnalisés" : `Aujourd'hui : ceux du profil ${profil}`, `
+      <div class="onglets-utilisateur">${tableaux.map((t) => `<fieldset><legend>${echapper(t.intitule)}</legend>${t.onglets.map((o) =>
+        `<label><input type="checkbox" value="${o.cle}" ${actuels.has(o.cle) ? "checked" : ""}> ${echapper(o.intitule)}</label>`).join("")}</fieldset>`).join("")}</div>
+      <div class="boutons" style="margin-top:10px"><button type="button" id="ou-profil">Comme le profil</button><button type="button" id="ou-ok" class="principal">Enregistrer</button></div>`);
+    const fermer = async (onglets) => {
+      try { await enregistrerUtilisateur(login, { onglets }); $("#detail").close(); } catch (err) { alert(err.message); }
+    };
+    $("#ou-profil").onclick = () => fermer(null);
+    $("#ou-ok").onclick = () => fermer([...document.querySelectorAll("#detail-corps .onglets-utilisateur input:checked")].map((x) => x.value));
+  });
+  $("#dr-ajouter", c).addEventListener("click", () => {
+    const login = $("#dr-login", c).value.trim();
+    if (!login) return;
+    if (!logins().some((l) => l.toLowerCase() === login.toLowerCase())) r.connus.push({ login, nom: null, profilAuto: null, administrateurSage: false });
+    $("#dr-utilisateurs", c).innerHTML = lignesUtilisateurs();
+    $("#dr-login", c).value = "";
+  });
+  $("#dr-login", c).addEventListener("keydown", (e) => { if (e.key === "Enter") $("#dr-ajouter", c).click(); });
+}
+
+const ilYa = (minutes) => (minutes < 1 ? "à l'instant" : minutes < 60 ? `il y a ${minutes} min` : minutes < 1440 ? `il y a ${Math.floor(minutes / 60)} h ${String(minutes % 60).padStart(2, "0")}` : "hier");
+async function utilisateursActifs(c) {
+  const f = etat.explorateurs.utilisateurs ??= { tous: false };
+  const liste = await api("/tableau-de-bord/administration/utilisateurs");
+  const actifs = liste.filter((u) => u.inactifMinutes < 15);
+  const affiches = f.tous ? liste : actifs;
+  const postes = new Set(actifs.map((u) => u.poste || u.adresse));
+  const point = (u) => (u.inactifMinutes < 5 ? "actif" : u.inactifMinutes < 15 ? "attente" : "inactif");
+  c.innerHTML = `
+    <section class="tuiles">
+      ${tuile({ libelle: "Actifs", valeur: nombre(new Set(actifs.map((u) => u.login.toLowerCase())).size), pied: "utilisateurs, activité depuis 15 min" })}
+      ${tuile({ libelle: "Postes", valeur: nombre(postes.size), pied: "postes et appareils actifs" })}
+      ${tuile({ libelle: "Dernières 24 h", valeur: nombre(new Set(liste.map((u) => u.login.toLowerCase())).size), pied: "utilisateurs connectés" })}
+    </section>
+    <article class="carte l12" style="grid-column:1/-1"><h3><span>Utilisateurs ${f.tous ? "des dernières 24 heures" : "actifs"}</span>
+      <span class="commandes"><label class="case"><input type="checkbox" id="ua-tous" ${f.tous ? "checked" : ""}> Inactifs aussi</label>
+      <button type="button" id="ua-maj">Actualiser</button><button type="button" class="lien" id="ua-csv">Exporter</button></span></h3>
+      <div class="table-defile"><table class="liste"><thead><tr><th></th><th>Utilisateur Sage</th><th>Nom</th><th>Session Windows</th><th>Poste</th><th>Adresse IP</th><th>Société</th><th>Applications</th><th>Connecté depuis</th><th>Dernière activité</th></tr></thead>
+      <tbody>${affiches.map((u) => `<tr><td><span class="pastille ${point(u)}" title="${point(u) === "actif" ? "Actif" : point(u) === "attente" ? "Sans activité depuis 5 min" : "Inactif"}"></span></td>
+        <td><b>${echapper(u.login)}</b>${u.administrateur ? ' <span class="discret" title="Administrateur Sage">admin</span>' : ""}</td><td>${echapper(u.nom ?? "")}</td>
+        <td>${u.sessionWindows ? echapper(u.sessionWindows) : '<span class="discret" title="Le navigateur n\'a pas donné la session Windows (poste hors domaine ou authentification Windows refusée)">–</span>'}</td>
+        <td>${echapper(u.poste ?? "")}</td><td>${echapper(u.adresse)}</td><td>${echapper(u.dossier)}</td><td>${u.applications.map(echapper).join(", ")}</td>
+        <td>${heure(u.debut)}${new Date(u.debut).toDateString() !== new Date().toDateString() ? ` (${date(u.debut)})` : ""}</td><td>${ilYa(u.inactifMinutes)}</td></tr>`).join("")
+        || `<tr><td colspan="10" class="vide">${f.tous ? "Personne ne s'est connecté depuis 24 heures." : "Aucun utilisateur actif."}</td></tr>`}</tbody></table></div>
+      <p class="discret" style="margin:6px 0 0">Une ligne par utilisateur, société et poste. La liste repart à vide au redémarrage du service de l'API. Mise à jour toutes les 30 secondes.</p></article>`;
+  $("#ua-tous", c).addEventListener("change", (e) => { f.tous = e.target.checked; afficherOnglet(); });
+  $("#ua-maj", c).addEventListener("click", () => afficherOnglet());
+  $("#ua-csv", c).addEventListener("click", () => exporterCsv("utilisateurs-actifs", ["Utilisateur", "Nom", "Session Windows", "Poste", "Adresse IP", "Société", "Applications", "Connecté depuis", "Dernière activité"],
+    affiches.map((u) => [u.login, u.nom, u.sessionWindows, u.poste, u.adresse, u.dossier, u.applications.join(", "), new Date(u.debut).toLocaleString("fr-FR"), new Date(u.derniere).toLocaleString("fr-FR")])));
+  const minuterie = setInterval(() => {
+    if (!c.isConnected || etat.onglet !== "utilisateurs") return clearInterval(minuterie);
+    if (!document.hidden && !$("#detail").open) afficherOnglet();
+  }, 30000);
+}

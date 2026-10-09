@@ -110,7 +110,14 @@ public sealed class ServiceAuthentification
     {
         var entete = http.Request.Headers.Authorization.ToString();
         if (!entete.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase)) return null;
-        var jeton = entete["Bearer ".Length..].Trim();
+        return LireJeton(entete["Bearer ".Length..]);
+    }
+
+    /// <summary>Utilisateur d'un jeton, s'il est valide et non expiré.</summary>
+    public Utilisateur? LireJeton(string? jeton)
+    {
+        jeton = jeton?.Trim();
+        if (string.IsNullOrEmpty(jeton)) return null;
         var morceaux = jeton.Split('.');
         if (morceaux.Length != 2) return null;
         try

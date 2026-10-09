@@ -826,7 +826,7 @@ public sealed class ApiTests : IDisposable
                 CommandeWorkerRequest c => Commande(c),
                 EncaissementCommandeRequest p => Encaissement(p),
                 SuppressionWorkerRequest d => new SuppressionResult { IdExterne = d.IdExterne, Piece = "BC00100" },
-                ConnexionRequest l => new UtilisateurVerifie { Utilisateur = l.Utilisateur },
+                ConnexionRequest l => new UtilisateurVerifie { Utilisateur = l.Utilisateur, Administrateur = l.Utilisateur == "ADMIN" },
                 _ => new { sage = true },
             };
             return Task.FromResult(new WorkerResponse { Ok = true, Resultat = JsonSerializer.SerializeToElement(resultat, WorkerProtocol.Json) });

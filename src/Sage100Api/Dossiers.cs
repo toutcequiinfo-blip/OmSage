@@ -178,7 +178,8 @@ public sealed class SocieteDeLaRequete(RequestDelegate suivant, Dossiers dossier
     }
 
     static bool Libre(PathString chemin) =>
-        chemin.StartsWithSegments("/api/v1/sante") || chemin.StartsWithSegments("/api/v1/dossiers") || chemin.StartsWithSegments("/api/v1/connexion");
+        chemin.StartsWithSegments("/api/v1/sante") || chemin.StartsWithSegments("/api/v1/dossiers") || chemin.StartsWithSegments("/api/v1/connexion")
+        || chemin.StartsWithSegments("/api/v1/session-windows");
 
     static Task Refuser(HttpContext http, int statut, string code, string message)
     {
