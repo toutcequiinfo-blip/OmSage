@@ -71,6 +71,10 @@ $config = @{
 }
 $json = Join-Path $Dossier "api\appsettings.Https.json"
 [IO.File]::WriteAllText($json, ($config | ConvertTo-Json -Depth 5), (New-Object Text.UTF8Encoding $false))
+# Chiffrement des secrets et verrou du dossier (securite.ps1 : à côté de ce script une fois installé, deploy\serveur dans le dépôt).
+$securite = @("$PSScriptRoot\securite.ps1", "$PSScriptRoot\serveur\securite.ps1") | Where-Object { Test-Path $_ } | Select-Object -First 1
+if ($securite) { . $securite -Dossier $Dossier }
+if ($securite) { ProtegerSecrets $Dossier }
 
 Write-Host "`nCertificats créés dans $dossierCert" -ForegroundColor Green
 Write-Host "  1. Copiez autorite-sage100api.cer sur chaque tablette et installez-le comme « Certificat CA »."

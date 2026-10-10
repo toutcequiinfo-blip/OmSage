@@ -148,9 +148,17 @@ public sealed class ServiceAuthentification
     {
         if (!string.IsNullOrWhiteSpace(configuree)) return Convert.FromBase64String(configuree);
         var fichier = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(cheminJournal)) ?? ".", "sage100api-jetons.cle");
-        if (File.Exists(fichier)) return Convert.FromBase64String(File.ReadAllText(fichier).Trim());
+        if (File.Exists(fichier))
+        {
+            var texte = File.ReadAllText(fichier).Trim();
+            var lue = Convert.FromBase64String(Secrets.Devoiler(texte));
+            // Clé d'avant le chiffrement : rechiffrée sur place (illisible si le fichier est copié sur un autre serveur).
+            if (!Secrets.EstProtege(texte) && OperatingSystem.IsWindows())
+                try { File.WriteAllText(fichier, Secrets.Proteger(texte)); } catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+            return lue;
+        }
         var cle = RandomNumberGenerator.GetBytes(32);
-        File.WriteAllText(fichier, Convert.ToBase64String(cle));
+        File.WriteAllText(fichier, Secrets.Proteger(Convert.ToBase64String(cle)));
         return cle;
     }
 

@@ -22,6 +22,8 @@ builder.Host.UseWindowsService(o => o.ServiceName = "Sage100Api");
 builder.Configuration.AddJsonFile("appsettings.Local.json", optional: true, reloadOnChange: true);
 // Écrit par deploy/creer-certificats.ps1 : point d'écoute HTTPS (Kestrel) et certificat du serveur.
 builder.Configuration.AddJsonFile("appsettings.Https.json", optional: true, reloadOnChange: false);
+// Mots de passe et clés chiffrés par Windows (« dpapi:… », outils\securite.ps1) : déchiffrés ici, lisibles seulement sur ce serveur.
+Secrets.DevoilerConfiguration(builder.Configuration);
 
 builder.Services.PostConfigure<SageOptions>(o =>
 {
@@ -44,6 +46,9 @@ builder.Services.AddSingleton<JournalOperations>();
 builder.Services.AddSingleton<ControleStock>();
 builder.Services.AddSingleton<ServiceEcritures>();
 builder.Services.AddSingleton<ServiceAuthentification>();
+// Licence de l'installation (serveur et sociétés couverts), vérifiée par la clé publique intégrée à la compilation.
+builder.Services.AddSingleton(ClePubliqueLicence.Integree());
+builder.Services.AddSingleton<ServiceLicence>();
 // Utilisateurs actifs (poste, session Windows) : la session Windows vient de l'authentification Windows intégrée (Negotiate).
 builder.Services.AddSingleton<UtilisateursActifs>();
 builder.Services.AddAuthentication().AddNegotiate();
@@ -83,6 +88,7 @@ app.UseStaticFiles(new StaticFileOptions { ContentTypeProvider = typesFichiers, 
 app.MapGet("/", () => Results.Redirect("/borne/")).ExcludeFromDescription();
 app.UseMiddleware<CleApi>();
 app.UseMiddleware<SocieteDeLaRequete>();
+app.UseMiddleware<ControleLicence>();
 app.UseMiddleware<NoterActivite>();
 // Authentification Windows (Negotiate) seulement pour la route de la session Windows, qui la mène elle-même.
 // La clé empêche ASP.NET d'ajouter l'authentification à toutes les requêtes (les autres routes gardent la clé d'API et le jeton).
@@ -99,6 +105,17 @@ v1.MapGet("/sante", async (IWorkerClient worker, CancellationToken ct) =>
     var ping = await worker.Envoyer(Operations.Ping, null, delai.Token);
     return Results.Ok(new { api = "ok", worker = ping.Ok ? (object?)ping.Resultat : new { erreur = ping.MessageErreur } });
 }).WithTags("Santé");
+
+// ---------- Licence (sans clé d'API : l'identifiant du serveur sert à demander la licence) ----------
+v1.MapGet("/licence", (ServiceLicence licence) =>
+{
+    var e = licence.Etat();
+    return Results.Ok(new
+    {
+        valide = e.Valide, controlee = e.Controlee, message = e.Message, identifiantServeur = e.IdentifiantServeur, nomServeur = Environment.MachineName,
+        client = e.Contenu?.Client, bases = e.Contenu?.Bases, expiration = e.Contenu?.Expiration,
+    });
+}).WithTags("Santé").WithSummary("État de la licence et identifiant de ce serveur (à donner à l'éditeur pour obtenir la licence)");
 
 // ---------- Sociétés (bases Sage) servies par l'installation, pour l'écran de connexion ----------
 v1.MapGet("/dossiers", async (Dossiers dossiers, ILecturesSage lectures) =>

@@ -32,6 +32,9 @@ param(
 
 $ErrorActionPreference = "Stop"
 $utf8 = New-Object System.Text.UTF8Encoding $false
+# Chiffrement des secrets et verrou du dossier (securite.ps1 : à côté de ce script une fois installé, deploy\serveur dans le dépôt).
+$securite = @("$PSScriptRoot\securite.ps1", "$PSScriptRoot\serveur\securite.ps1") | Where-Object { Test-Path $_ } | Select-Object -First 1
+if ($securite) { . $securite -Dossier $Dossier }
 function LireJson($chemin) { if (Test-Path $chemin) { Get-Content $chemin -Raw -Encoding UTF8 | ConvertFrom-Json } else { $null } }
 function EcrireJson($chemin, $objet) { [IO.File]::WriteAllText($chemin, ($objet | ConvertTo-Json -Depth 20), $utf8) }
 function Propriete($objet, $nom, $valeur) { $objet | Add-Member -NotePropertyName $nom -NotePropertyValue $valeur -Force }
@@ -67,7 +70,8 @@ if ($Societe) {
         Propriete $d "motDePasse" $MotDePasse
     }
     EcrireJson $cheminWorker $w
-    Write-Host "Utilisateur Sage de $Societe : $Utilisateur (enregistré dans $cheminWorker)." -ForegroundColor Green
+    if ($securite) { ProtegerSecrets $Dossier }
+    Write-Host "Utilisateur Sage de $Societe : $Utilisateur (enregistré, mot de passe chiffré, dans $cheminWorker)." -ForegroundColor Green
     if (-not $SansRedemarrer -and (Get-Service "Sage100Api.Worker" -ErrorAction SilentlyContinue)) {
         Restart-Service "Sage100Api.Worker"
         Write-Host "  Service Sage100Api.Worker redémarré"
@@ -109,9 +113,10 @@ foreach ($f in @($cheminApi, "$depot\src\Sage100Api\appsettings.Local.json") | W
     if (-not $a.Sage) { Propriete $a "Sage" ([pscustomobject]@{}) }
     if ($a.Sage.ChaineSql) {
         # PSBase : sans lui, PowerShell prend « $b.InitialCatalog = ... » pour une clé du dictionnaire.
-        $b = New-Object System.Data.SqlClient.SqlConnectionStringBuilder $a.Sage.ChaineSql
+        $protegee = "$($a.Sage.ChaineSql)".StartsWith("dpapi:")
+        $b = New-Object System.Data.SqlClient.SqlConnectionStringBuilder (DevoilerTexte $a.Sage.ChaineSql)
         $b.PSBase.InitialCatalog = $societes[0].baseCial
-        Propriete $a.Sage "ChaineSql" $b.PSBase.ConnectionString
+        Propriete $a.Sage "ChaineSql" $(if ($protegee) { ProtegerTexte $b.PSBase.ConnectionString } else { $b.PSBase.ConnectionString })
     }
     if ($societes.Count -gt 1) {
         $anciens = @($a.Sage.Dossiers | Where-Object { $_ })
@@ -130,6 +135,9 @@ foreach ($f in @($cheminApi, "$depot\src\Sage100Api\appsettings.Local.json") | W
 
 if ($societes.Count -gt 1) { Write-Host "Sociétés servies : $($listeBases -join ', ') (la société se choisit à la connexion des applications)." -ForegroundColor Green }
 else { Write-Host "Une seule société : $($listeBases[0])." -ForegroundColor Green }
+
+# Mot de passe saisi : chiffré dans worker.json avant le redémarrage.
+if ($securite) { ProtegerSecrets $Dossier }
 
 if (-not $SansRedemarrer) {
     foreach ($nom in "Sage100Api.Worker", "Sage100Api") {

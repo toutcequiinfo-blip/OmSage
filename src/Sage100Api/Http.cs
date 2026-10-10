@@ -18,7 +18,7 @@ public sealed class CleApi(RequestDelegate suivant, IOptionsMonitor<SageOptions>
     public async Task InvokeAsync(HttpContext http)
     {
         var chemin = http.Request.Path;
-        if (!chemin.StartsWithSegments("/api") || chemin.StartsWithSegments("/api/v1/sante"))
+        if (!chemin.StartsWithSegments("/api") || chemin.StartsWithSegments("/api/v1/sante") || chemin.StartsWithSegments("/api/v1/licence"))
         {
             await suivant(http);
             return;

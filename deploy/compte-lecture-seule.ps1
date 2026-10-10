@@ -22,6 +22,10 @@ param(
 
 $ErrorActionPreference = "Stop"
 $depot = Split-Path -Parent $PSScriptRoot
+# Chiffrement des secrets et verrou du dossier (securite.ps1 : à côté de ce script une fois installé, deploy\serveur dans le dépôt).
+$securite = @("$PSScriptRoot\securite.ps1", "$PSScriptRoot\serveur\securite.ps1") | Where-Object { Test-Path $_ } | Select-Object -First 1
+if ($securite) { . $securite -Dossier $Dossier }
+if (-not $securite) { function DevoilerTexte([string]$t) { $t } }
 $fichiers = @("$Dossier\api\appsettings.Local.json", "$depot\src\Sage100Api\appsettings.Local.json") | Where-Object { Test-Path $_ }
 if (-not $fichiers) { throw "appsettings.Local.json introuvable dans $Dossier\api ni dans le dépôt : lancez d'abord deploy\installer.ps1." }
 
@@ -32,7 +36,7 @@ foreach ($f in $fichiers + "$Dossier\api\appsettings.json") {
     if (-not (Test-Path $f)) { continue }
     $json = Get-Content $f -Raw -Encoding UTF8 | ConvertFrom-Json
     if ($json.Sage -and $json.Sage.ChaineSql) {
-        $chaine = $json.Sage.ChaineSql
+        $chaine = DevoilerTexte $json.Sage.ChaineSql
         $bases = @($json.Sage.Dossiers | Where-Object { $_ -and $_.Base } | ForEach-Object { "$($_.Base)".Trim() })
         break
     }
@@ -120,7 +124,7 @@ foreach ($bd in $bases) {
 # La chaîne vise la base principale ; l'API la fait pointer vers la base de chaque société.
 $lecture.PSBase.InitialCatalog = $base
 
-# Déclaration à l'API (fichiers non versionnés). Rechargés à chaud : pas de redémarrage nécessaire.
+# Déclaration à l'API (fichiers non versionnés).
 foreach ($f in $fichiers) {
     $json = Get-Content $f -Raw -Encoding UTF8 | ConvertFrom-Json
     if (-not $json.TableauDeBord) { $json | Add-Member -NotePropertyName TableauDeBord -NotePropertyValue ([pscustomobject]@{}) }
@@ -128,4 +132,7 @@ foreach ($f in $fichiers) {
     [System.IO.File]::WriteAllText($f, ($json | ConvertTo-Json -Depth 20), (New-Object System.Text.UTF8Encoding $false))
     Write-Host "  TableauDeBord:ChaineSql écrite dans $f"
 }
+# Mot de passe du compte chiffré par Windows ; l'API relit les secrets à son démarrage.
+if ($securite) { ProtegerSecrets $Dossier }
+if ((Get-Service Sage100Api -ErrorAction SilentlyContinue).Status -eq "Running") { Restart-Service Sage100Api; Write-Host "  Service Sage100Api redémarré" }
 Write-Host "`nTerminé. Les tableaux de bord liront Sage avec $Login à la prochaine actualisation (bouton ↻)." -ForegroundColor Green

@@ -13,6 +13,7 @@
   <ItemGroup>
     <ProjectReference Include="..\Sage100Api.Contracts\Sage100Api.Contracts.csproj" />
     <Reference Include="System.Data" />
+    <Reference Include="System.Security" />
   </ItemGroup>
   <ItemGroup>
     <None Update="worker.json" CopyToOutputDirectory="PreserveNewest" />
