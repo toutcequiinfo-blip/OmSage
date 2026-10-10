@@ -56,6 +56,7 @@ public sealed class ReglagesTableauDeBord
     readonly BaseLocale _base;
     readonly Dossiers _dossiers;
     readonly ConcurrentDictionary<string, DocumentsCa> _cache = new(StringComparer.OrdinalIgnoreCase);
+    readonly ConcurrentDictionary<string, string> _cout = new(StringComparer.OrdinalIgnoreCase);
 
     public ReglagesTableauDeBord(IOptions<SageOptions> options, Dossiers dossiers)
     {
@@ -82,6 +83,23 @@ public sealed class ReglagesTableauDeBord
         return new DocumentsCa(Lire("livraisons", d.Livraisons), Lire("retours", d.Retours), Lire("avoirsFinanciers", d.AvoirsFinanciers),
             Lire("factures", d.Factures), Lire("facturesRetour", d.FacturesRetour), Lire("facturesAvoir", d.FacturesAvoir));
     });
+
+    /// <summary>Méthode de valorisation du tableau Production (<see cref="MethodeCout"/>) : prix de revient par défaut.</summary>
+    public string CoutProduction() => _cout.GetOrAdd(_dossiers.Code, _ =>
+    {
+        using var c = _base.Ouvrir();
+        return MethodeCout.Normaliser(c.QueryFirstOrDefault<string>("SELECT valeur FROM reglages_tableau_de_bord WHERE cle = 'coutProduction'"));
+    });
+
+    public void EnregistrerCoutProduction(string methode, string? utilisateur)
+    {
+        var m = MethodeCout.Normaliser(methode);
+        using (var c = _base.Ouvrir())
+            c.Execute("INSERT INTO reglages_tableau_de_bord (cle, valeur, utilisateur, maj_le) VALUES ('coutProduction', @m, @utilisateur, @maj) " +
+                "ON CONFLICT (cle) DO UPDATE SET valeur = excluded.valeur, utilisateur = excluded.utilisateur, maj_le = excluded.maj_le",
+                new { m, utilisateur, maj = DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture) });
+        _cout[_dossiers.Code] = m;
+    }
 
     public void Enregistrer(DocumentsCa d, string? utilisateur)
     {

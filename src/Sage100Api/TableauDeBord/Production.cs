@@ -26,6 +26,12 @@ public sealed class FaitMouvement
     public bool Composant => Fabrication && !Produit;
     /// <summary>Mouvement de sortie hors fabrication (consommation diverse, perte...).</summary>
     public bool AutreSortie => Type == 21 && !Entree;
+
+    /// <summary>Même ligne, valorisée autrement (méthode de coût choisie dans les réglages).</summary>
+    public FaitMouvement Valorisee(decimal valeur) => new()
+    {
+        Type = Type, Date = Date, Piece = Piece, Compose = Compose, Article = Article, Depot = Depot, Entree = Entree, Quantite = Quantite, Valeur = valeur,
+    };
 }
 
 /// <summary>Composant d'une nomenclature (F_NOMENCLAT). Variable : par quantité de composition du composé ; fixe : par fabrication.</summary>
@@ -71,11 +77,41 @@ public sealed class RefArticleProduction
     /// <summary>AR_Nomencl : 0 aucune, 1 fabrication, 2 commerciale/composé, 3 commerciale/composant, 4 article lié.</summary>
     public int Nomenclature { get; init; }
     public decimal PrixAchat { get; init; }
+    /// <summary>Dernier prix d'achat (AR_PUNet).</summary>
+    public decimal DernierPrix { get; init; }
     public int DelaiFabrication { get; init; }
+    /// <summary>Nature pour la gestion de production (AR_Nature) : voir <see cref="NatureArticle"/>.</summary>
+    public int Nature { get; init; }
 }
 
+/// <summary>Nature de l'article (AR_Nature, fiche article > Paramètres > Gestion de production). « Non gérée » : hors de l'analyse de production.</summary>
+public static class NatureArticle
+{
+    public const int Composant = 0, PieceDetachee = 1, ProduitFini = 2, SemiFini = 3, NonGeree = 4;
+
+    public static string Libelle(int nature) => nature switch
+    {
+        PieceDetachee => "Pièce détachée", ProduitFini => "Produit fini", SemiFini => "Produit semi-fini", NonGeree => "Non gérée", _ => "Composant",
+    };
+}
+
+/// <summary>Valorisation des quantités du tableau Production, choisie dans les réglages de la société.</summary>
+public static class MethodeCout
+{
+    public const string Revient = "revient", PrixAchat = "achat", DernierPrix = "dernier", Cmup = "cmup";
+    public static readonly string[] Toutes = [Revient, PrixAchat, DernierPrix, Cmup];
+
+    public static string Normaliser(string? m) => Toutes.FirstOrDefault(x => x.Equals(m?.Trim(), StringComparison.OrdinalIgnoreCase)) ?? Revient;
+
+    public static string Libelle(string m) => Normaliser(m) switch
+    {
+        PrixAchat => "prix d'achat", DernierPrix => "dernier prix d'achat", Cmup => "CMUP", _ => "prix de revient",
+    };
+}
+
+/// <summary>Nature : « 0 » à « 3 » (voir <see cref="NatureArticle"/>), vide = toutes. Cout : méthode de valorisation (sinon celle des réglages).</summary>
 public sealed record RequeteProduction(string? Du, string? Au, int? Depot, string? Famille, string? Statut, string? Vue,
-    int? Jours, int? Delai, int? Securite, int? Couverture);
+    int? Jours, int? Delai, int? Securite, int? Couverture, string? Nature = null, string? Cout = null);
 
 /// <summary>
 /// Tableau de bord fabrication et approvisionnement, calculé sur l'instantané (lecture seule) :
@@ -94,7 +130,7 @@ public static class Production
     /// Nomenclature de chaque composé. Un article à gammes a une nomenclature par combinaison : la première est retenue.
     /// </summary>
     public static IReadOnlyDictionary<string, IReadOnlyList<Composant>> Nomenclatures(Instantane i) =>
-        i.Nomenclatures.GroupBy(n => n.Compose, Ref).ToDictionary(g => g.Key, g =>
+        i.Nomenclatures.Where(n => Gere(i, n.Compose) && Gere(i, n.Composant)).GroupBy(n => n.Compose, Ref).ToDictionary(g => g.Key, g =>
         {
             var premiere = g.OrderBy(n => n.Gamme1).ThenBy(n => n.Gamme2).First();
             return (IReadOnlyList<Composant>)g.Where(n => n.Gamme1 == premiere.Gamme1 && n.Gamme2 == premiere.Gamme2)
@@ -113,13 +149,42 @@ public static class Production
 
     static string? Designation(Instantane i, string article) => i.Articles.TryGetValue(article, out var a) ? a.Designation?.Trim() : null;
 
-    /// <summary>Prix unitaire d'une matière : valeur moyenne de ses sorties sur la période, sinon prix du fournisseur principal ou prix d'achat.</summary>
-    static Func<string, decimal> Prix(Instantane i, IEnumerable<FaitMouvement> sorties)
+    public static int Nature(Instantane i, string article) => i.ArticlesProduction.TryGetValue(article, out var a) ? a.Nature : NatureArticle.Composant;
+
+    /// <summary>Article suivi par la production : tous sauf la nature « Non gérée ».</summary>
+    public static bool Gere(Instantane i, string article) => Nature(i, article) != NatureArticle.NonGeree;
+
+    /// <summary>Filtres famille et nature de la barre.</summary>
+    static bool Retenu(Instantane i, RequeteProduction r, string article) =>
+        (r.Famille == null || i.Famille(article) == r.Famille)
+        && (!int.TryParse(r.Nature, out var n) || Nature(i, article) == n);
+
+    /// <summary>Prix unitaire de la méthode choisie (0 = inconnu : la valeur de Sage, prix de revient de la ligne, est gardée).</summary>
+    public static Func<string, decimal> PrixMethode(Instantane i, string? methode, int? depot)
+    {
+        switch (MethodeCout.Normaliser(methode))
+        {
+            case MethodeCout.PrixAchat: return a => i.ArticlesProduction.TryGetValue(a, out var x) ? x.PrixAchat : 0;
+            case MethodeCout.DernierPrix: return a => i.ArticlesProduction.TryGetValue(a, out var x) ? x.DernierPrix : 0;
+            case MethodeCout.Cmup:
+                var cmup = i.Stock.Where(s => depot == null || s.Depot == depot).GroupBy(s => s.Article, Ref)
+                    .Where(g => g.Sum(s => s.Quantite) > 0 && g.Sum(s => s.Valeur) > 0)
+                    .ToDictionary(g => g.Key, g => g.Sum(s => s.Valeur) / g.Sum(s => s.Quantite), Ref);
+                return a => cmup.GetValueOrDefault(a);
+            default: return _ => 0;
+        }
+    }
+
+    /// <summary>Prix unitaire d'une matière : valeur moyenne de ses sorties sur la période (déjà valorisées par la méthode choisie),
+    /// sinon prix de la méthode, prix du fournisseur principal ou prix d'achat.</summary>
+    static Func<string, decimal> Prix(Instantane i, RequeteProduction r, IEnumerable<FaitMouvement> sorties)
     {
         var moyens = sorties.GroupBy(m => m.Article, Ref).Where(g => g.Sum(m => m.Quantite) > 0)
             .ToDictionary(g => g.Key, g => g.Sum(m => m.Valeur) / g.Sum(m => m.Quantite), Ref);
+        var methode = PrixMethode(i, r.Cout, r.Depot);
         var fournisseurs = Fournisseurs(i);
         return a => moyens.TryGetValue(a, out var p) ? p
+            : methode(a) is > 0 and var pm ? pm
             : fournisseurs.TryGetValue(a, out var f) && f.Prix > 0 ? f.Prix
             : i.ArticlesProduction.TryGetValue(a, out var x) ? x.PrixAchat : 0;
     }
@@ -152,8 +217,16 @@ public static class Production
         return lignes.Select(x => new Consommation(x.Key.Item1, x.Key.Item2, x.Value.Reelle, x.Value.Theorique, x.Value.Valeur)).ToList();
     }
 
-    static List<FaitMouvement> Mouvements(Instantane i, RequeteProduction r, DateTime du, DateTime au) =>
-        i.Mouvements.Where(m => m.Date.Date >= du.Date && m.Date.Date <= au.Date && (r.Depot == null || m.Depot == r.Depot)).ToList();
+    /// <summary>Mouvements de la période, sans les articles « Non gérée », valorisés par la méthode choisie (sinon valeur de Sage).</summary>
+    static List<FaitMouvement> Mouvements(Instantane i, RequeteProduction r, DateTime du, DateTime au)
+    {
+        var prix = PrixMethode(i, r.Cout, r.Depot);
+        return i.Mouvements.Where(m => m.Date.Date >= du.Date && m.Date.Date <= au.Date && (r.Depot == null || m.Depot == r.Depot)
+                && Gere(i, m.Article) && (m.Compose == null || Gere(i, m.Compose)))
+            .Select(m => prix(m.Article) is > 0 and var p ? m.Valorisee(Math.Round(m.Quantite * p, 2)) : m).ToList();
+    }
+
+    static object Cout(RequeteProduction r) => new { methode = MethodeCout.Normaliser(r.Cout), libelle = MethodeCout.Libelle(r.Cout ?? "") };
 
     static decimal? Pourcent(decimal ecart, decimal reference) => reference == 0 ? null : Math.Round(ecart / reference * 100, 1);
 
@@ -164,8 +237,8 @@ public static class Production
         var (du, au) = Plage(i, r, aujourdhui);
         var nomenclatures = Nomenclatures(i);
         var mouvements = Mouvements(i, r, du, au);
-        var fabrication = mouvements.Where(m => m.Fabrication && (r.Famille == null || i.Famille(m.Compose ?? m.Article) == r.Famille)).ToList();
-        var prix = Prix(i, mouvements.Where(m => m.Composant || m.AutreSortie));
+        var fabrication = mouvements.Where(m => m.Fabrication && Retenu(i, r, m.Compose ?? m.Article)).ToList();
+        var prix = Prix(i, r, mouvements.Where(m => m.Composant || m.AutreSortie));
         var conso = Consommations(fabrication, nomenclatures);
         var parProduit = conso.GroupBy(c => c.Compose).ToDictionary(g => g.Key, g => (
             Reelle: g.Sum(c => c.ValeurReelle),
@@ -178,7 +251,7 @@ public static class Production
             return new
             {
                 article = g.First().Article, designation = Designation(i, g.First().Article), famille = i.Famille(g.First().Article),
-                quantite, bons = g.Select(m => m.Piece).Distinct().Count(), valeur = g.Sum(m => m.Valeur),
+                nature = NatureArticle.Libelle(Nature(i, g.First().Article)), quantite, bons = g.Select(m => m.Piece).Distinct().Count(), valeur = g.Sum(m => m.Valeur),
                 matieres = v.Reelle, theorique = Math.Round(v.Theorique, 2), ecart = Math.Round(v.Reelle - v.Theorique, 2),
                 ecartPourcent = Pourcent(v.Reelle - v.Theorique, v.Theorique),
                 coutUnitaire = quantite > 0 ? Math.Round(v.Reelle / quantite, 4) : (decimal?)null,
@@ -202,7 +275,7 @@ public static class Production
         var autres = mouvements.Where(m => m.AutreSortie).ToList();
         return new
         {
-            du, au,
+            du, au, cout = Cout(r),
             totaux = new
             {
                 bons = fabrication.Where(m => m.Produit).Select(m => m.Piece).Distinct().Count(),
@@ -222,7 +295,7 @@ public static class Production
         var (du, au) = Plage(i, r, aujourdhui);
         var mouvements = Mouvements(i, r, du, au);
         var fabrication = mouvements.Where(m => m.Fabrication && string.Equals(m.Compose ?? m.Article, article, StringComparison.OrdinalIgnoreCase)).ToList();
-        var prix = Prix(i, mouvements.Where(m => m.Composant || m.AutreSortie));
+        var prix = Prix(i, r, mouvements.Where(m => m.Composant || m.AutreSortie));
         var conso = Consommations(fabrication, Nomenclatures(i));
         return new
         {
@@ -246,7 +319,7 @@ public static class Production
     {
         var (du, au) = Plage(i, r, aujourdhui);
         var mouvements = Mouvements(i, r, du, au);
-        var prix = Prix(i, mouvements.Where(m => m.Composant || m.AutreSortie));
+        var prix = Prix(i, r, mouvements.Where(m => m.Composant || m.AutreSortie));
         var conso = Consommations(mouvements.Where(m => m.Fabrication).ToList(), Nomenclatures(i));
         var autres = mouvements.Where(m => m.AutreSortie).GroupBy(m => m.Article.ToUpperInvariant())
             .ToDictionary(g => g.Key, g => (Quantite: g.Sum(m => m.Quantite), Valeur: g.Sum(m => m.Valeur)));
@@ -262,15 +335,15 @@ public static class Production
                 return new
                 {
                     article = reference, designation = Designation(i, reference), famille = i.Famille(reference),
-                    reelle, theorique = Math.Round(theorique, 4), ecart = Math.Round(reelle - theorique, 4), ecartPourcent = Pourcent(reelle - theorique, theorique),
+                    nature = NatureArticle.Libelle(Nature(i, reference)), reelle, theorique = Math.Round(theorique, 4), ecart = Math.Round(reelle - theorique, 4), ecartPourcent = Pourcent(reelle - theorique, theorique),
                     valeur = c.Sum(x => x.ValeurReelle), ecartValeur = Math.Round((reelle - theorique) * p, 2), prixUnitaire = Math.Round(p, 4),
                     autresSorties = autre.Quantite, valeurAutresSorties = autre.Valeur,
                     produits = c.Where(x => x.Compose != "").Select(x => x.Compose).Distinct().Count(),
                 };
-            }).Where(a => r.Famille == null || a.famille == r.Famille).ToList();
+            }).Where(a => Retenu(i, r, a.article)).ToList();
         return new
         {
-            du, au,
+            du, au, cout = Cout(r),
             totaux = new
             {
                 matieres = articles.Count, valeur = articles.Sum(a => a.valeur), ecartValeur = articles.Sum(a => a.ecartValeur),
@@ -286,7 +359,8 @@ public static class Production
 
     public sealed record LigneAppro(string Article, string? Designation, string? Famille, decimal Stock, decimal Reserve, decimal Commande,
         decimal BesoinFabrication, decimal Disponible, decimal ConsoJour, int Delai, string SourceDelai, decimal Seuil, int? CouvertureJours,
-        decimal AProposer, string? Fournisseur, string? IntituleFournisseur, decimal Prix, decimal Valeur, decimal Colisage, decimal QteMini, string Statut);
+        decimal AProposer, string? Fournisseur, string? IntituleFournisseur, decimal Prix, decimal Valeur, decimal Colisage, decimal QteMini, string Statut,
+        string Nature = "Composant", bool Fabrique = false);
 
     /// <summary>
     /// Pour chaque matière : stock, réservé (commandes clients), commandé (fournisseurs), besoin des produits finis à fabriquer
@@ -308,7 +382,7 @@ public static class Production
         decimal Disponible(string a) => stocks.TryGetValue(a.ToUpperInvariant(), out var s) ? s.Quantite - s.Reserve : 0;
 
         // Consommation : matières des bons de fabrication, sorties diverses et ventes de la période de référence.
-        var sorties = i.Mouvements.Where(m => m.Date >= depuis && (m.Composant || m.AutreSortie) && (r.Depot == null || m.Depot == r.Depot))
+        var sorties = i.Mouvements.Where(m => m.Date >= depuis && (m.Composant || m.AutreSortie) && (r.Depot == null || m.Depot == r.Depot) && Gere(i, m.Article))
             .Select(m => (m.Article, m.Quantite))
             .Concat(i.Lignes.Where(l => l.Domaine == 0 && l.Date >= depuis && (r.Depot == null || l.Depot == r.Depot)).Select(l => (l.Article, l.Quantite)))
             .GroupBy(x => x.Article.ToUpperInvariant()).ToDictionary(g => g.Key, g => g.Sum(x => x.Quantite) / jours);
@@ -343,17 +417,21 @@ public static class Production
         var univers = matieres.Concat(tous ? fournisseurs.Keys.Select(k => k.ToUpperInvariant()) : []).Concat(besoins.Keys.Select(k => k.ToUpperInvariant()))
             .Distinct().ToList();
         var lignes = new List<LigneAppro>();
+        var prixMethode = PrixMethode(i, r.Cout, r.Depot);
         foreach (var a in univers)
         {
             var reference = i.Articles.Keys.FirstOrDefault(k => Ref.Equals(k, a)) ?? a;
-            if (r.Famille != null && i.Famille(reference) != r.Famille) continue;
+            if (!Gere(i, reference) || !Retenu(i, r, reference)) continue;
             var s = stocks.GetValueOrDefault(a);
             var besoin = Math.Round(besoins.GetValueOrDefault(a), 4);
             var conso = Math.Round(sorties.GetValueOrDefault(a), 4);
             if (s.Quantite == 0 && s.Reserve == 0 && s.Commande == 0 && besoin == 0 && conso == 0) continue;
             fournisseurs.TryGetValue(a, out var f);
             i.ArticlesProduction.TryGetValue(reference, out var ap);
-            var (delai, source) = f?.Delai > 0 ? (f.Delai, "fiche")
+            // Fabriqué chez soi (semi-fini, produit fini avec nomenclature) : à fabriquer, pas à acheter.
+            var fabrique = nomenclatures.ContainsKey(a) && Nature(i, reference) is NatureArticle.ProduitFini or NatureArticle.SemiFini;
+            var (delai, source) = fabrique && ap?.DelaiFabrication > 0 ? (ap.DelaiFabrication, "fabrication")
+                : f?.Delai > 0 ? (f.Delai, "fiche")
                 : delaisReels.TryGetValue(a, out var reel) ? (reel, "historique")
                 : ap?.DelaiFabrication > 0 && nomenclatures.ContainsKey(a) ? (ap.DelaiFabrication, "fabrication")
                 : (delaiDefaut, "defaut");
@@ -365,12 +443,13 @@ public static class Production
                 : conso > 0 && projete < conso * delai ? "urgent"
                 : projete < seuil || projete < 0 ? "commander"
                 : "ok";
-            var proposer = statut == "ok" ? 0 : Arrondir(cible - projete, f?.Colisage ?? 0, f?.QteMini ?? 0);
-            var prix = f?.Prix > 0 ? f.Prix : ap?.PrixAchat ?? 0;
+            var proposer = statut == "ok" ? 0 : fabrique ? Arrondir(cible - projete, 0, 0) : Arrondir(cible - projete, f?.Colisage ?? 0, f?.QteMini ?? 0);
+            // Achat : prix du fournisseur ; fabrication : coût de la méthode choisie.
+            var prix = fabrique && prixMethode(reference) > 0 ? prixMethode(reference) : f?.Prix > 0 ? f.Prix : ap?.PrixAchat ?? 0;
             lignes.Add(new LigneAppro(reference, Designation(i, reference), i.Famille(reference), s.Quantite, s.Reserve, s.Commande, besoin, Math.Round(disponible, 4),
                 conso, delai, source, Math.Round(seuil, 4), conso > 0 ? (int)Math.Min(9999, Math.Max(0, Math.Floor(disponible / conso))) : null,
                 proposer, f?.Fournisseur, f == null ? null : i.IntituleTiers(f.Fournisseur), prix, Math.Round(proposer * prix, 2),
-                f?.Colisage ?? 0, f?.QteMini ?? 0, statut));
+                f?.Colisage ?? 0, f?.QteMini ?? 0, statut, NatureArticle.Libelle(Nature(i, reference)), fabrique));
         }
         return lignes;
     }
@@ -386,14 +465,16 @@ public static class Production
     public static object Appro(Instantane i, RequeteProduction r, DateTime aujourdhui)
     {
         var lignes = Lignes(i, r, aujourdhui);
-        var aCommander = lignes.Where(l => l.AProposer > 0).ToList();
+        var aCommander = lignes.Where(l => l.AProposer > 0 && !l.Fabrique).ToList();
         return new
         {
+            cout = Cout(r),
             parametres = new { jours = Math.Clamp(r.Jours ?? 90, 7, 730), delai = Math.Clamp(r.Delai ?? 15, 0, 365), securite = Math.Clamp(r.Securite ?? 7, 0, 365), couverture = Math.Clamp(r.Couverture ?? 30, 0, 365) },
             totaux = new
             {
                 articles = lignes.Count, ruptures = lignes.Count(l => l.Statut == "rupture"), urgents = lignes.Count(l => l.Statut == "urgent"),
                 aCommander = aCommander.Count, valeur = aCommander.Sum(l => l.Valeur),
+                aFabriquer = lignes.Count(l => l.AProposer > 0 && l.Fabrique),
                 sansDelai = lignes.Count(l => l.SourceDelai == "defaut"),
                 besoinsFabrication = lignes.Count(l => l.BesoinFabrication > 0),
             },
@@ -419,14 +500,17 @@ public static class Production
         var moisCourant = Periodes.DebutMois(aujourdhui);
         var prochain = moisCourant.AddMonths(1);
         var debut = moisCourant.AddMonths(-24);
-        var produitsFabriques = i.Mouvements.Where(m => m.Produit).Select(m => m.Article.ToUpperInvariant()).ToHashSet();
+        var produitsFabriques = i.Mouvements.Where(m => m.Produit && Gere(i, m.Article)).Select(m => m.Article.ToUpperInvariant()).ToHashSet();
         var finis = nomenclatures.Keys.Where(k => produitsFabriques.Contains(k.ToUpperInvariant())
-                || (i.ArticlesProduction.TryGetValue(k, out var a) && a.Nomenclature == 1))
+                || (i.ArticlesProduction.TryGetValue(k, out var a) && (a.Nomenclature == 1 || a.Nature is NatureArticle.ProduitFini or NatureArticle.SemiFini)))
             .Select(k => k.ToUpperInvariant()).Concat(produitsFabriques).Distinct().ToList();
 
         var ventes = i.Lignes.Where(l => l.Domaine == 0 && l.Date >= debut && (r.Depot == null || l.Depot == r.Depot))
             .GroupBy(l => (l.Article.ToUpperInvariant(), Periodes.DebutMois(l.Date))).ToDictionary(g => g.Key, g => g.Sum(l => l.Quantite));
         var production = i.Mouvements.Where(m => m.Produit && m.Date >= debut && (r.Depot == null || m.Depot == r.Depot))
+            .GroupBy(m => (m.Article.ToUpperInvariant(), Periodes.DebutMois(m.Date))).ToDictionary(g => g.Key, g => g.Sum(m => m.Quantite));
+        // Semi-fini : consommé aussi par la fabrication d'autres produits.
+        var consommation = i.Mouvements.Where(m => m.Composant && m.Date >= debut && (r.Depot == null || m.Depot == r.Depot))
             .GroupBy(m => (m.Article.ToUpperInvariant(), Periodes.DebutMois(m.Date))).ToDictionary(g => g.Key, g => g.Sum(m => m.Quantite));
         var stocks = i.Stock.Where(s => r.Depot == null || s.Depot == r.Depot).GroupBy(s => s.Article.ToUpperInvariant())
             .ToDictionary(g => g.Key, g => (Quantite: g.Sum(s => s.Quantite), Reserve: g.Sum(s => s.Reserve)));
@@ -441,7 +525,8 @@ public static class Production
             var moyenneN1 = anneePassee.Average();
             var memeMoisN1 = ventes.GetValueOrDefault((a, prochain.AddYears(-1)));
             var saison = moyenneN1 > 0 && memeMoisN1 > 0 ? Math.Clamp(memeMoisN1 / moyenneN1, 0.5m, 2m) : 1m;
-            var prevision = Math.Round(moyenne3 * saison, 2);
+            var consommation3 = Enumerable.Range(1, 3).Sum(n => consommation.GetValueOrDefault((a, moisCourant.AddMonths(-n)))) / 3;
+            var prevision = Math.Round(moyenne3 * saison + consommation3, 2);
             var s = stocks.GetValueOrDefault(a);
             var aProduire = Math.Max(0, Math.Round(prevision + s.Reserve - s.Quantite, 2));
             // Fabricable : composant le plus limitant (stock disponible / quantité par unité).
@@ -456,13 +541,14 @@ public static class Production
             return new
             {
                 article = reference, designation = Designation(i, reference), famille = i.Famille(reference),
+                nature = NatureArticle.Libelle(Nature(i, reference)), consommation3 = Math.Round(consommation3, 2),
                 ventes = douze, ventes12 = douze.Sum(), moyenne3 = Math.Round(moyenne3, 2), saisonnalite = Math.Round(saison, 2), prevision,
                 production3 = Math.Round(Enumerable.Range(1, 3).Sum(n => production.GetValueOrDefault((a, moisCourant.AddMonths(-n)))) / 3, 2),
                 stock = s.Quantite, reserve = s.Reserve, aProduire, fabricable, bloquant,
                 designationBloquant = bloquant == null ? null : Designation(i, bloquant),
                 manque = fabricable != null && fabricable < aProduire,
             };
-        }).Where(x => (r.Famille == null || x.famille == r.Famille) && (x.ventes12 > 0 || x.stock != 0 || x.reserve > 0 || x.production3 > 0)).ToList();
+        }).Where(x => Retenu(i, r, x.article) && (x.ventes12 > 0 || x.consommation3 > 0 || x.stock != 0 || x.reserve > 0 || x.production3 > 0)).ToList();
 
         return new
         {

@@ -54,21 +54,25 @@ public static class Routes
                 axesVentes = Commercial.Axes(i).Values.Select(a => new { a.Code, a.Libelle }),
                 seuils = c.Options.Seuils,
                 documents = i.Documents,
+                coutProduction = c.Reglages.CoutProduction(),
             });
         }).WithSummary("État de la dernière actualisation, droits de l'utilisateur, exercices et listes des filtres");
 
         g.MapGet("/reglages", (Contexte c) =>
         {
             if (c.Refus(p => p.Onglets.Count > 0 || p.Administre) is { } refus) return refus;
-            return Results.Ok(new { documents = c.Reglages.Documents() });
-        }).WithSummary("Réglages de la société : documents comptés dans le CA");
+            return Results.Ok(new { documents = c.Reglages.Documents(), coutProduction = c.Reglages.CoutProduction() });
+        }).WithSummary("Réglages de la société : documents comptés dans le CA, valorisation du tableau Production");
 
         g.MapPut("/reglages", (Contexte c, ReglagesRequete r) =>
         {
             if (c.Refus(p => p.Profil == Perimetre.Direction) is { } refus) return refus;
-            c.Reglages.Enregistrer(r.Documents ?? DocumentsCa.Defaut, c.Perimetre.Utilisateur);
-            return Results.Ok(new { documents = c.Reglages.Documents() });
-        }).WithSummary("Change les documents comptés dans le CA (Direction) : factures, factures de retour et d'avoir, bons de livraison, de retour, d'avoir financier");
+            if (r.CoutProduction != null && !MethodeCout.Toutes.Contains(r.CoutProduction.Trim().ToLowerInvariant()))
+                return Reponses.Invalide([$"Méthode de coût inconnue : {r.CoutProduction} ({string.Join(", ", MethodeCout.Toutes)})."]);
+            if (r.Documents != null || r.CoutProduction == null) c.Reglages.Enregistrer(r.Documents ?? DocumentsCa.Defaut, c.Perimetre.Utilisateur);
+            if (r.CoutProduction != null) c.Reglages.EnregistrerCoutProduction(r.CoutProduction, c.Perimetre.Utilisateur);
+            return Results.Ok(new { documents = c.Reglages.Documents(), coutProduction = c.Reglages.CoutProduction() });
+        }).WithSummary("Change les réglages (Direction) : documents comptés dans le CA ; coût du tableau Production (revient, achat, dernier, cmup)");
 
         g.MapPost("/actualiser", (Contexte c) =>
         {
@@ -178,23 +182,23 @@ public static class Routes
 
         // ---------- Tableau Production ----------
         g.MapGet("/production/synthese", (Contexte c, [AsParameters] RequeteProduction r) =>
-            c.Refus(p => p.Peut("production/production")) ?? Results.Ok(Production.Synthese(c.Instantane, r, DateTime.Today)))
+            c.Refus(p => p.Peut("production/production")) ?? Results.Ok(Production.Synthese(c.Instantane, c.Production(r), DateTime.Today)))
             .WithSummary("Production réalisée (bons de fabrication) : valeur, matières consommées face à la nomenclature, par mois et par produit");
 
         g.MapGet("/production/produit/{article}", (Contexte c, string article, [AsParameters] RequeteProduction r) =>
-            c.Refus(p => p.Peut("production/production", "production/previsions")) ?? Results.Ok(Production.DetailProduit(c.Instantane, article, r, DateTime.Today)))
+            c.Refus(p => p.Peut("production/production", "production/previsions")) ?? Results.Ok(Production.DetailProduit(c.Instantane, article, c.Production(r), DateTime.Today)))
             .WithSummary("Matières d'un produit fabriqué : consommation réelle face à la nomenclature, et ses bons de fabrication");
 
         g.MapGet("/production/matieres", (Contexte c, [AsParameters] RequeteProduction r) =>
-            c.Refus(p => p.Peut("production/matieres")) ?? Results.Ok(Production.Matieres(c.Instantane, r, DateTime.Today)))
+            c.Refus(p => p.Peut("production/matieres")) ?? Results.Ok(Production.Matieres(c.Instantane, c.Production(r), DateTime.Today)))
             .WithSummary("Consommation des matières : réelle, théorique (nomenclature), écarts, sorties hors fabrication");
 
         g.MapGet("/production/appro", (Contexte c, [AsParameters] RequeteProduction r) =>
-            c.Refus(p => p.Peut("production/appro")) ?? Results.Ok(Production.Appro(c.Instantane, r, DateTime.Today)))
+            c.Refus(p => p.Peut("production/appro")) ?? Results.Ok(Production.Appro(c.Instantane, c.Production(r), DateTime.Today)))
             .WithSummary("Aide à l'approvisionnement : besoins des fabrications, couverture, point de commande, quantité proposée par fournisseur");
 
         g.MapGet("/production/previsions", (Contexte c, [AsParameters] RequeteProduction r) =>
-            c.Refus(p => p.Peut("production/previsions")) ?? Results.Ok(Production.Previsions(c.Instantane, r, DateTime.Today)))
+            c.Refus(p => p.Peut("production/previsions")) ?? Results.Ok(Production.Previsions(c.Instantane, c.Production(r), DateTime.Today)))
             .WithSummary("Prévisions : ventes prévues des produits finis, quantité à produire, quantité fabricable avec le stock des composants");
 
         g.MapGet("/objectifs", (Contexte c, Objectifs o, string? du, string? au) =>
@@ -298,6 +302,9 @@ public sealed class Contexte
         });
     }
 
+    /// <summary>Requête du tableau Production avec la méthode de coût des réglages (sauf si la requête en donne une).</summary>
+    public RequeteProduction Production(RequeteProduction r) => r with { Cout = MethodeCout.Normaliser(r.Cout ?? Reglages.CoutProduction()) };
+
     /// <summary>401 sans connexion, 403 si le profil n'a pas ce droit, null si l'accès est permis.</summary>
     public IResult? Refus(Func<Perimetre, bool> droit)
     {
@@ -324,4 +331,4 @@ public sealed class Contexte
     }
 }
 
-public sealed record ReglagesRequete(DocumentsCa? Documents);
+public sealed record ReglagesRequete(DocumentsCa? Documents, string? CoutProduction = null);
