@@ -509,7 +509,7 @@ public sealed class LecturesTableauDeBordSql(Dossiers dossiers, IOptionsMonitor<
 
     public Task<IReadOnlyList<RefArticleProduction>> ArticlesProduction() => Lire<RefArticleProduction>(
         "SELECT AR_Ref AS Reference, CAST(AR_Nomencl AS int) AS Nomenclature, CAST(AR_PrixAch AS decimal(18,4)) AS PrixAchat, " +
-        "CAST(AR_DelaiFabrication AS int) AS DelaiFabrication FROM F_ARTICLE");
+        "CAST(AR_PUNet AS decimal(18,4)) AS DernierPrix, CAST(AR_DelaiFabrication AS int) AS DelaiFabrication, CAST(AR_Nature AS int) AS Nature FROM F_ARTICLE");
 
     public Task<IReadOnlyList<DetailEcriture>> DetailCompta(FiltreDetailCompta f)
     {

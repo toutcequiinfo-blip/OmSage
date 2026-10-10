@@ -238,6 +238,13 @@ const DOCUMENTS = [
   ["facturesRetour", "Factures de retour", "en négatif"],
   ["facturesAvoir", "Factures d'avoir", "en négatif"],
 ];
+const COUTS = [
+  ["revient", "Prix de revient", "celui que Sage a mis sur la ligne du bon"],
+  ["achat", "Prix d'achat", "fiche article"],
+  ["dernier", "Dernier prix d'achat", "fiche article"],
+  ["cmup", "CMUP", "valeur du stock ÷ quantité en stock"],
+];
+const libelleCout = (m) => (COUTS.find(([k]) => k === m) ?? COUTS[0])[1];
 const texteDocuments = (d) => DOCUMENTS.filter(([cle]) => d?.[cle] ?? ["factures", "facturesRetour", "facturesAvoir"].includes(cle)).map(([, libelle]) => libelle).join(", ") || "aucun document";
 
 $("#btn-reglages").addEventListener("click", () => {
@@ -248,17 +255,20 @@ $("#btn-reglages").addEventListener("click", () => {
       ${DOCUMENTS.map(([cle, libelle, note]) => `<label class="case"><input type="checkbox" name="${cle}" ${d[cle] ? "checked" : ""}> ${libelle} <span class="discret">(${note})</span></label>`).join("")}
       <p class="discret">Les bons ont déjà fait bouger le stock. Pas de double compte : un bon transformé en facture n'existe plus comme bon dans Sage.
         Le rapprochement avec la comptabilité ne compte que les factures.</p>
+      <p><b>Coût du tableau Production</b> (matières, produits, semi-finis)</p>
+      ${COUTS.map(([cle, libelle, note]) => `<label class="case"><input type="radio" name="coutProduction" value="${cle}" ${(etat.meta.coutProduction ?? "revient") === cle ? "checked" : ""}> ${libelle} <span class="discret">(${note})</span></label>`).join("")}
+      <p class="discret">Article sans ce prix : son prix de revient Sage est gardé.</p>
       <div class="boutons"><button type="submit" class="principal">Enregistrer</button></div>
     </form>`);
   $("#form-reglages").addEventListener("submit", async (e) => {
     e.preventDefault();
     const f = e.target;
     try {
-      await api("/tableau-de-bord/reglages", { methode: "PUT", corps: { documents: Object.fromEntries(DOCUMENTS.map(([cle]) => [cle, f[cle].checked])) } });
+      await api("/tableau-de-bord/reglages", { methode: "PUT", corps: { documents: Object.fromEntries(DOCUMENTS.map(([cle]) => [cle, f[cle].checked])), coutProduction: f.coutProduction.value } });
       etat.meta = await api("/tableau-de-bord/etat");
       etat.cache.clear();
       $("#detail").close();
-      bandeau(`CA calculé sur : ${texteDocuments(etat.meta.documents)}.`, true);
+      bandeau(`CA calculé sur : ${texteDocuments(etat.meta.documents)}. Coût de production : ${libelleCout(etat.meta.coutProduction)}.`, true);
       afficherOnglet();
     } catch (err) { bandeau(err.message); }
   });
@@ -269,7 +279,7 @@ $("#btn-etat").addEventListener("click", () => {
   ouvrirDetail("Actualisation des données", "", `
     <p>Dernière lecture de Sage : <b>${m.genere ? new Date(m.genere).toLocaleString("fr-FR") : "pas encore faite"}</b>${m.dureeSecondes ? ` en ${nombre(m.dureeSecondes, 1)} s` : ""}.</p>
     <p>Prochaine actualisation automatique : ${m.prochaine ? new Date(m.prochaine).toLocaleString("fr-FR") : "–"}.</p>
-    <p>Documents comptés dans le CA : ${echapper(texteDocuments(m.documents))}.</p>
+    <p>Documents comptés dans le CA : ${echapper(texteDocuments(m.documents))}. Coût de production : ${echapper(libelleCout(m.coutProduction))}.</p>
     ${m.erreurs?.length ? `<p class="erreur">Parties non relues (version précédente gardée) :</p><ul>${m.erreurs.map((x) => `<li>${echapper(x)}</li>`).join("")}</ul>` : "<p>Toutes les parties ont été lues.</p>"}
     <p class="discret">Profil : ${echapper(m.profil)}${m.utilisateur ? ` (${echapper(m.utilisateur)})` : ""}. Lecture seule : rien n'est écrit dans Sage.</p>`);
 });
@@ -1121,22 +1131,25 @@ function filtresProduction(nom) {
   const e = exercice();
   const aujourdhui = new Date().toLocaleDateString("sv-SE");
   const auDefaut = jourDe(e.fin) < aujourdhui ? jourDe(e.fin) : aujourdhui;
-  const f = etat.explorateurs[nom] ??= { du: jourDe(e.debut), au: auDefaut, depot: "", famille: "" };
+  const f = etat.explorateurs[nom] ??= { du: jourDe(e.debut), au: auDefaut, depot: "", famille: "", nature: "" };
   return f;
 }
+const NATURES = [["2", "Produit fini"], ["3", "Produit semi-fini"], ["0", "Composant"], ["1", "Pièce détachée"]];
+const badgeNature = (n) => (n === "Produit semi-fini" ? ' <span class="badge">semi-fini</span>' : "");
 function barreProduction(f, { periode = true, extra = "" } = {}) {
   return `<div class="commandes">
     ${periode ? `<label>Du ${champDate("p-du", f.du)}</label><label>Au ${champDate("p-au", f.au)}</label>` : ""}
     ${etat.meta.depots.length > 1 ? `<label>Dépôt <select id="p-depot"><option value="">Tous</option>${etat.meta.depots.map((d) => `<option value="${d.numero}" ${String(f.depot) === String(d.numero) ? "selected" : ""}>${echapper(d.intitule)}</option>`).join("")}</select></label>` : ""}
     <label>Famille <select id="p-famille"><option value="">Toutes</option>${etat.meta.familles.map((x) => `<option value="${echapper(x.code)}" ${f.famille === x.code ? "selected" : ""}>${echapper(x.intitule ?? x.code)}</option>`).join("")}</select></label>
-    ${extra}</div>`;
+    <label title="Nature de la fiche article (Paramètres > Gestion de production). Les articles « Non gérée » sont toujours exclus.">Nature <select id="p-nature"><option value="">Toutes</option>${NATURES.map(([k, n]) => `<option value="${k}" ${String(f.nature ?? "") === k ? "selected" : ""}>${n}</option>`).join("")}</select></label>
+    ${extra}<span class="discret" title="À changer dans Réglages (Direction)">Coût : ${echapper(libelleCout(etat.meta.coutProduction))}</span></div>`;
 }
 function relierFiltres(c, nom, lireExtra = () => ({})) {
   c.querySelectorAll(".commandes select, .commandes input").forEach((x) => x.addEventListener("change", () => {
     // Un champ retiré pendant le rechargement émet encore « change » : l'écran est déjà en train de se refaire.
     if (!c.isConnected) return;
     const f = etat.explorateurs[nom];
-    Object.assign(f, { du: lireDate("#p-du", c) || f.du, au: lireDate("#p-au", c) || f.au, depot: $("#p-depot", c)?.value ?? "", famille: $("#p-famille", c)?.value ?? "" }, lireExtra());
+    Object.assign(f, { du: lireDate("#p-du", c) || f.du, au: lireDate("#p-au", c) || f.au, depot: $("#p-depot", c)?.value ?? "", famille: $("#p-famille", c)?.value ?? "", nature: $("#p-nature", c)?.value ?? "" }, lireExtra());
     afficherOnglet();
   }));
 }
@@ -1148,7 +1161,7 @@ async function production(c) {
   const t = s.totaux;
   c.innerHTML = `${barreProduction(f)}
     <section class="tuiles">
-      ${tuile({ libelle: "Production", valeur: montant(t.valeur), pied: `${nombre(t.bons)} bons · ${nombre(t.produits)} produits`, titre: "Valeur des produits entrés en stock par les bons de fabrication" })}
+      ${tuile({ libelle: "Production", valeur: montant(t.valeur), pied: `${nombre(t.bons)} bons · ${nombre(t.produits)} produits`, titre: `Produits entrés en stock par les bons de fabrication, au ${s.cout.libelle}` })}
       ${tuile({ libelle: "Matières consommées", valeur: montant(t.matieres), pied: `nomenclature : ${montant(t.theorique)}` })}
       ${tuile({ libelle: "Écart matières", valeur: `${t.ecart > 0 ? "+" : ""}${montant(t.ecart)}`, pied: t.ecartPourcent == null ? "" : `${t.ecartPourcent > 0 ? "+" : ""}${nombre(t.ecartPourcent, 1)} % de la nomenclature`,
         niveau: t.ecartPourcent > 5 ? "attention" : "", vers: "production/matieres", titre: "Matières réellement sorties moins matières prévues par la nomenclature (positif = surconsommation)" })}
@@ -1161,16 +1174,16 @@ async function production(c) {
       <article class="carte l12"><h3><span>Produits fabriqués</span><button type="button" class="lien" id="csv-pr">Exporter</button></h3>
         <div class="table-defile"><table class="liste"><thead><tr><th>Produit</th><th class="num">Qté fabriquée</th><th class="num">Bons</th><th class="num">Valeur</th>
           <th class="num">Matières réelles</th><th class="num">Nomenclature</th><th class="num">Écart</th><th class="num">Coût matière / unité</th><th>Dernier bon</th></tr></thead>
-        <tbody>${s.produits.map((p) => `<tr class="cliquable" data-article="${echapper(p.article)}"><td>${libelleArticle(p.article, p.designation)}${p.nomenclature ? "" : ' <span class="statut sousMini">sans nomenclature</span>'}</td>
+        <tbody>${s.produits.map((p) => `<tr class="cliquable" data-article="${echapper(p.article)}"><td>${libelleArticle(p.article, p.designation)}${badgeNature(p.nature)}${p.nomenclature ? "" : ' <span class="statut sousMini">sans nomenclature</span>'}</td>
           <td class="num">${qte(p.quantite)}</td><td class="num">${nombre(p.bons)}</td><td class="num">${montant(p.valeur)}</td><td class="num">${montant(p.matieres)}</td>
           <td class="num">${p.nomenclature ? montant(p.theorique) : ""}</td><td class="num">${p.nomenclature ? `${montant(p.ecart)} ${ecartBadge(p.ecartPourcent)}` : ""}</td>
           <td class="num">${p.coutUnitaire == null ? "" : nombre(p.coutUnitaire, 2)}</td><td>${date(p.derniere)}</td></tr>`).join("") || '<tr><td colspan="9" class="vide">Aucun bon de fabrication sur la période.</td></tr>'}</tbody></table></div>
-        <p class="discret" style="margin:6px 0 0">Cliquez un produit pour voir ses matières, réel face à la nomenclature.</p></article>
+        <p class="discret" style="margin:6px 0 0">Cliquez un produit pour voir ses matières, réel face à la nomenclature. Valeurs au ${echapper(s.cout.libelle)}.</p></article>
     </section>`;
   relierFiltres(c, "production");
   c.querySelector("tbody").addEventListener("click", (e) => { const tr = e.target.closest("[data-article]"); if (tr) detailProduit(tr.dataset.article, f); });
-  $("#csv-pr", c).addEventListener("click", () => exporterCsv("production", ["Produit", "Désignation", "Qté fabriquée", "Bons", "Valeur", "Matières réelles", "Nomenclature", "Écart", "Écart %", "Coût matière / unité", "Dernier bon"],
-    s.produits.map((p) => [p.article, p.designation, p.quantite, p.bons, p.valeur, p.matieres, p.theorique, p.ecart, p.ecartPourcent, p.coutUnitaire, date(p.derniere)])));
+  $("#csv-pr", c).addEventListener("click", () => exporterCsv("production", ["Produit", "Désignation", "Nature", "Qté fabriquée", "Bons", "Valeur", "Matières réelles", "Nomenclature", "Écart", "Écart %", "Coût matière / unité", "Dernier bon"],
+    s.produits.map((p) => [p.article, p.designation, p.nature, p.quantite, p.bons, p.valeur, p.matieres, p.theorique, p.ecart, p.ecartPourcent, p.coutUnitaire, date(p.derniere)])));
   c.addEventListener("affiche", () => {
     barres($("#g-pr-mois"), { categories: s.mois.map((m) => moisCourt(m.mois)), series: [
       { nom: "Production", valeurs: s.mois.map((m) => m.production), couleur: "var(--c1)" }, { nom: "Matières", valeurs: s.mois.map((m) => m.matieres), couleur: "var(--c4)" }] });
@@ -1208,20 +1221,20 @@ async function matieres(c) {
       <article class="carte l12"><h3><span>Matières, de la plus grosse dérive à la plus petite</span><button type="button" class="lien" id="csv-ma">Exporter</button></h3>
         <div class="table-defile"><table class="liste"><thead><tr><th>Matière</th><th class="num">Réel</th><th class="num">Nomenclature</th><th class="num">Écart</th>
           <th class="num">Prix unitaire</th><th class="num">Valeur réelle</th><th class="num">Écart valeur</th><th class="num">Sorties hors fab.</th><th class="num">Produits</th></tr></thead>
-        <tbody>${s.matieres.map((m) => `<tr><td>${libelleArticle(m.article, m.designation)}</td><td class="num">${qte(m.reelle)}</td><td class="num">${qte(m.theorique)}</td>
+        <tbody>${s.matieres.map((m) => `<tr><td>${libelleArticle(m.article, m.designation)}${badgeNature(m.nature)}</td><td class="num">${qte(m.reelle)}</td><td class="num">${qte(m.theorique)}</td>
           <td class="num">${qte(m.ecart)} ${ecartBadge(m.ecartPourcent)}</td><td class="num">${nombre(m.prixUnitaire, 2)}</td><td class="num">${montant(m.valeur)}</td>
           <td class="num">${montant(m.ecartValeur)}</td><td class="num">${m.autresSorties ? qte(m.autresSorties) : ""}</td><td class="num">${nombre(m.produits)}</td></tr>`).join("") || '<tr><td colspan="9" class="vide">Aucune consommation sur la période.</td></tr>'}</tbody></table></div>
-        <p class="discret" style="margin:6px 0 0">Nomenclature = quantité fabriquée × composition de la fiche article. Prix unitaire : valeur moyenne des sorties de la période.</p></article>
+        <p class="discret" style="margin:6px 0 0">Nomenclature = quantité fabriquée × composition de la fiche article. Prix unitaire : ${echapper(s.cout.libelle)} (choisi dans Réglages), sinon prix de revient Sage.</p></article>
     </section>`;
   relierFiltres(c, "matieres");
-  $("#csv-ma", c).addEventListener("click", () => exporterCsv("matieres", ["Matière", "Désignation", "Réel", "Nomenclature", "Écart", "Écart %", "Prix unitaire", "Valeur réelle", "Écart valeur", "Sorties hors fabrication", "Produits"],
-    s.matieres.map((m) => [m.article, m.designation, m.reelle, m.theorique, m.ecart, m.ecartPourcent, m.prixUnitaire, m.valeur, m.ecartValeur, m.autresSorties, m.produits])));
+  $("#csv-ma", c).addEventListener("click", () => exporterCsv("matieres", ["Matière", "Désignation", "Nature", "Réel", "Nomenclature", "Écart", "Écart %", "Prix unitaire", "Valeur réelle", "Écart valeur", "Sorties hors fabrication", "Produits"],
+    s.matieres.map((m) => [m.article, m.designation, m.nature, m.reelle, m.theorique, m.ecart, m.ecartPourcent, m.prixUnitaire, m.valeur, m.ecartValeur, m.autresSorties, m.produits])));
 }
 
 const STATUTS_APPRO = { rupture: "Rupture", urgent: "Urgent", commander: "À commander", ok: "Couvert" };
 const SOURCES_DELAI = { fiche: "fiche fournisseur", historique: "délai réel des réceptions", fabrication: "délai de fabrication", defaut: "délai par défaut" };
 async function appro(c) {
-  const f = etat.explorateurs.appro ??= { depot: "", famille: "", statut: "", vue: "", ...(lire("tdb.appro") ?? { jours: 90, delai: 15, securite: 7, couverture: 30 }) };
+  const f = etat.explorateurs.appro ??= { depot: "", famille: "", nature: "", statut: "", vue: "", ...(lire("tdb.appro") ?? { jours: 90, delai: 15, securite: 7, couverture: 30 }) };
   const s = await lireCache(`/tableau-de-bord/production/appro?${qs(f)}`);
   const t = s.totaux;
   const nombreChamp = (id, libelle, v, titre) => `<label class="nb" title="${titre}">${libelle} <input id="${id}" type="number" min="0" max="730" value="${v}"></label>`;
@@ -1237,6 +1250,7 @@ async function appro(c) {
       ${tuile({ libelle: "Urgents", valeur: nombre(t.urgents), niveau: t.urgents ? "attention" : "", pied: "épuisés avant la livraison" })}
       ${tuile({ libelle: "À commander", valeur: nombre(t.aCommander), pied: `${nombre(t.articles)} articles suivis` })}
       ${tuile({ libelle: "Commande proposée", valeur: montant(t.valeur), pied: "au prix d'achat" })}
+      ${t.aFabriquer ? tuile({ libelle: "À fabriquer", valeur: nombre(t.aFabriquer), pied: "semi-finis et produits finis" }) : ""}
       ${tuile({ libelle: "Besoins des fabrications", valeur: nombre(t.besoinsFabrication), pied: "matières pour les commandes clients" })}
       ${t.sansDelai ? tuile({ libelle: "Sans délai connu", valeur: nombre(t.sansDelai), pied: `délai par défaut de ${f.delai} j appliqué` }) : ""}
     </section>
@@ -1246,14 +1260,15 @@ async function appro(c) {
         <b>Disponible</b> = stock − réservé par les clients − matières des produits finis réservés au-delà de leur stock (nomenclature éclatée sur tous ses niveaux).
         <b>Point de commande</b> = consommation par jour × (délai + sécurité), au moins le stock minimum de Sage. <b>Urgent</b> : même avec les commandes fournisseurs en cours, le stock ne tient pas jusqu'à la livraison.
         <b>Quantité proposée</b> : de quoi revenir au point de commande plus ${f.couverture} jours, arrondie au colisage et à la quantité minimale du fournisseur.
-        Consommation = matières des bons de fabrication, sorties diverses et ventes des ${f.jours} derniers jours. Délai : fiche fournisseur, sinon délai réel des réceptions, sinon délai de fabrication, sinon ${f.delai} jours.</p></article>
+        Consommation = matières des bons de fabrication, sorties diverses et ventes des ${f.jours} derniers jours. Délai : fiche fournisseur, sinon délai réel des réceptions, sinon délai de fabrication, sinon ${f.delai} jours.
+        Semi-finis et produits finis avec nomenclature : <b>à fabriquer</b> (délai de fabrication, valeur au ${echapper(s.cout.libelle)}), hors commande fournisseur.</p></article>
       <article class="carte l12"><h3><span>Articles</span><button type="button" class="lien" id="csv-ap">Exporter</button></h3>
         <div class="table-defile"><table class="liste"><thead><tr><th>Article</th><th class="num">Stock</th><th class="num">Réservé</th><th class="num">Besoin fab.</th><th class="num">Commandé</th>
-          <th class="num">Conso / jour</th><th class="num">Couverture</th><th class="num">Délai</th><th class="num">Point de cde</th><th class="num">À commander</th><th>Fournisseur</th><th class="num">Valeur</th><th>Statut</th></tr></thead>
-        <tbody>${s.lignes.map((l) => `<tr><td>${libelleArticle(l.article, l.designation)}</td><td class="num">${qte(l.stock)}</td><td class="num">${l.reserve ? qte(l.reserve) : ""}</td>
+          <th class="num">Conso / jour</th><th class="num">Couverture</th><th class="num">Délai</th><th class="num">Point de cde</th><th class="num">À commander / fabriquer</th><th>Fournisseur</th><th class="num">Valeur</th><th>Statut</th></tr></thead>
+        <tbody>${s.lignes.map((l) => `<tr><td>${libelleArticle(l.article, l.designation)}${badgeNature(l.nature)}</td><td class="num">${qte(l.stock)}</td><td class="num">${l.reserve ? qte(l.reserve) : ""}</td>
           <td class="num">${l.besoinFabrication ? qte(l.besoinFabrication) : ""}</td><td class="num">${l.commande ? qte(l.commande) : ""}</td><td class="num">${l.consoJour ? nombre(l.consoJour, 3) : ""}</td>
           <td class="num">${l.couvertureJours == null ? "" : `${nombre(l.couvertureJours)} j`}</td><td class="num" title="${SOURCES_DELAI[l.sourceDelai]}">${l.delai} j${l.sourceDelai === "defaut" ? "*" : ""}</td>
-          <td class="num">${l.seuil ? qte(l.seuil) : ""}</td><td class="num"><b>${l.aProposer ? qte(l.aProposer) : ""}</b></td><td>${echapper(l.intituleFournisseur ?? l.fournisseur ?? "")}</td>
+          <td class="num">${l.seuil ? qte(l.seuil) : ""}</td><td class="num"><b>${l.aProposer ? qte(l.aProposer) : ""}</b></td><td>${l.fabrique ? '<i>fabriqué</i>' : echapper(l.intituleFournisseur ?? l.fournisseur ?? "")}</td>
           <td class="num">${l.valeur ? montant(l.valeur) : ""}</td><td><span class="statut ${l.statut}">${STATUTS_APPRO[l.statut]}</span></td></tr>`).join("") || '<tr><td colspan="13" class="vide">Aucun article.</td></tr>'}</tbody></table></div>
         <p class="discret" style="margin:6px 0 0">* délai par défaut : renseignez le délai d'appro dans la fiche fournisseur de l'article (Sage) pour un calcul exact.</p></article>
     </section>`;
@@ -1263,18 +1278,18 @@ async function appro(c) {
     ecrire("tdb.appro", p);
     return { ...p, statut: $("#p-statut", c).value, vue: $("#p-vue", c).value };
   });
-  $("#csv-ap", c).addEventListener("click", () => exporterCsv("approvisionnement", ["Article", "Désignation", "Stock", "Réservé", "Besoin fabrication", "Commandé", "Disponible", "Conso / jour", "Couverture (j)", "Délai (j)", "Origine du délai", "Point de commande", "À commander", "Colisage", "Qté mini", "Fournisseur", "Intitulé fournisseur", "Prix", "Valeur", "Statut"],
-    s.lignes.map((l) => [l.article, l.designation, l.stock, l.reserve, l.besoinFabrication, l.commande, l.disponible, l.consoJour, l.couvertureJours, l.delai, SOURCES_DELAI[l.sourceDelai], l.seuil, l.aProposer, l.colisage, l.qteMini, l.fournisseur, l.intituleFournisseur, l.prix, l.valeur, STATUTS_APPRO[l.statut]])));
+  $("#csv-ap", c).addEventListener("click", () => exporterCsv("approvisionnement", ["Article", "Désignation", "Nature", "Action", "Stock", "Réservé", "Besoin fabrication", "Commandé", "Disponible", "Conso / jour", "Couverture (j)", "Délai (j)", "Origine du délai", "Point de commande", "À commander", "Colisage", "Qté mini", "Fournisseur", "Intitulé fournisseur", "Prix", "Valeur", "Statut"],
+    s.lignes.map((l) => [l.article, l.designation, l.nature, l.fabrique ? "Fabriquer" : "Acheter", l.stock, l.reserve, l.besoinFabrication, l.commande, l.disponible, l.consoJour, l.couvertureJours, l.delai, SOURCES_DELAI[l.sourceDelai], l.seuil, l.aProposer, l.colisage, l.qteMini, l.fournisseur, l.intituleFournisseur, l.prix, l.valeur, STATUTS_APPRO[l.statut]])));
   c.addEventListener("affiche", () => barresH($("#g-ap-four"), s.parFournisseur.slice(0, 10).map((x) => ({ libelle: x.intitule, valeur: x.valeur, detail: `${x.articles} articles` })), { couleur: "var(--c2)" }));
 }
 
 async function previsions(c) {
-  const f = etat.explorateurs.previsions ??= { depot: "", famille: "" };
+  const f = etat.explorateurs.previsions ??= { depot: "", famille: "", nature: "" };
   const s = await lireCache(`/tableau-de-bord/production/previsions?${qs(f)}`);
   const t = s.totaux;
   c.innerHTML = `${barreProduction(f, { periode: false })}
     <section class="tuiles">
-      ${tuile({ libelle: "Produits finis", valeur: nombre(t.produits), pied: "fabriqués ou avec nomenclature de fabrication" })}
+      ${tuile({ libelle: "Produits finis et semi-finis", valeur: nombre(t.produits), pied: "fabriqués ou avec nomenclature de fabrication" })}
       ${tuile({ libelle: "À produire", valeur: nombre(t.aProduire), pied: `pour ${moisCourt(s.prochain)} et les commandes en cours` })}
       ${tuile({ libelle: "Matières insuffisantes", valeur: nombre(t.manques), niveau: t.manques ? "attention" : "", pied: "stock des composants trop court", vers: "production/appro" })}
       ${tuile({ libelle: "Sans vente sur 12 mois", valeur: nombre(t.sansVente) })}
@@ -1282,18 +1297,19 @@ async function previsions(c) {
     <section class="grille">
       <article class="carte l12"><h3><span>Plan de production proposé</span><button type="button" class="lien" id="csv-pv">Exporter</button></h3>
         <div class="table-defile"><table class="liste"><thead><tr><th>Produit</th><th>Ventes 12 mois</th><th class="num">Total</th><th class="num">Moy. 3 mois</th><th class="num">Saison</th>
-          <th class="num">Prévision ${moisCourt(s.prochain)}</th><th class="num">Production / mois</th><th class="num">Stock</th><th class="num">Réservé</th><th class="num">À produire</th><th class="num">Fabricable</th><th>Matière limitante</th></tr></thead>
-        <tbody>${s.lignes.map((l) => `<tr><td>${libelleArticle(l.article, l.designation)}</td><td title="${s.mois.map((m, k) => `${moisCourt(m)} : ${qte(l.ventes[k])}`).join("\n")}">${miniCourbe(l.ventes)}</td>
-          <td class="num">${qte(l.ventes12)}</td><td class="num">${qte(l.moyenne3)}</td><td class="num">${l.saisonnalite === 1 ? "" : `×${nombre(l.saisonnalite, 2)}`}</td><td class="num">${qte(l.prevision)}</td>
+          <th class="num" title="Consommé par la fabrication d'autres produits, moyenne des 3 derniers mois">Conso. fab. / mois</th><th class="num">Prévision ${moisCourt(s.prochain)}</th><th class="num">Production / mois</th><th class="num">Stock</th><th class="num">Réservé</th><th class="num">À produire</th><th class="num">Fabricable</th><th>Matière limitante</th></tr></thead>
+        <tbody>${s.lignes.map((l) => `<tr><td>${libelleArticle(l.article, l.designation)}${badgeNature(l.nature)}</td><td title="${s.mois.map((m, k) => `${moisCourt(m)} : ${qte(l.ventes[k])}`).join("\n")}">${miniCourbe(l.ventes)}</td>
+          <td class="num">${qte(l.ventes12)}</td><td class="num">${qte(l.moyenne3)}</td><td class="num">${l.saisonnalite === 1 ? "" : `×${nombre(l.saisonnalite, 2)}`}</td><td class="num">${l.consommation3 ? qte(l.consommation3) : ""}</td><td class="num">${qte(l.prevision)}</td>
           <td class="num">${l.production3 ? qte(l.production3) : ""}</td><td class="num">${qte(l.stock)}</td><td class="num">${l.reserve ? qte(l.reserve) : ""}</td>
           <td class="num"><b>${l.aProduire ? qte(l.aProduire) : ""}</b></td><td class="num">${l.fabricable == null ? "" : `${l.manque ? '<span class="statut rupture">' : ""}${qte(l.fabricable)}${l.manque ? "</span>" : ""}`}</td>
-          <td>${l.bloquant ? libelleArticle(l.bloquant, l.designationBloquant) : ""}</td></tr>`).join("") || '<tr><td colspan="12" class="vide">Aucun produit fini.</td></tr>'}</tbody></table></div>
-        <p class="discret" style="margin:6px 0 0">Prévision = moyenne des ventes des 3 derniers mois complets × saisonnalité (même mois l'an dernier face à la moyenne de l'an dernier, bornée entre ×0,5 et ×2).
+          <td>${l.bloquant ? libelleArticle(l.bloquant, l.designationBloquant) : ""}</td></tr>`).join("") || '<tr><td colspan="13" class="vide">Aucun produit fini.</td></tr>'}</tbody></table></div>
+        <p class="discret" style="margin:6px 0 0">Prévision = moyenne des ventes des 3 derniers mois complets × saisonnalité (même mois l'an dernier face à la moyenne de l'an dernier, bornée entre ×0,5 et ×2),
+          plus ce que la fabrication d'autres produits consomme (semi-finis).
           À produire = prévision + réservé − stock. Fabricable = ce que permet le stock disponible du composant le plus limitant.</p></article>
     </section>`;
   relierFiltres(c, "previsions");
-  $("#csv-pv", c).addEventListener("click", () => exporterCsv("previsions", ["Produit", "Désignation", ...s.mois, "Total 12 mois", "Moyenne 3 mois", "Saisonnalité", "Prévision", "Production / mois", "Stock", "Réservé", "À produire", "Fabricable", "Matière limitante"],
-    s.lignes.map((l) => [l.article, l.designation, ...l.ventes, l.ventes12, l.moyenne3, l.saisonnalite, l.prevision, l.production3, l.stock, l.reserve, l.aProduire, l.fabricable, l.bloquant])));
+  $("#csv-pv", c).addEventListener("click", () => exporterCsv("previsions", ["Produit", "Désignation", "Nature", ...s.mois, "Total 12 mois", "Moyenne 3 mois", "Saisonnalité", "Conso. fabrication / mois", "Prévision", "Production / mois", "Stock", "Réservé", "À produire", "Fabricable", "Matière limitante"],
+    s.lignes.map((l) => [l.article, l.designation, l.nature, ...l.ventes, l.ventes12, l.moyenne3, l.saisonnalite, l.consommation3, l.prevision, l.production3, l.stock, l.reserve, l.aProduire, l.fabricable, l.bloquant])));
 }
 
 async function objectifs(c) {
