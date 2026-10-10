@@ -28,6 +28,7 @@ namespace Sage100Api.Worker
             var chemin = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "worker.json");
             var config = JsonSerializer.Deserialize<WorkerConfig>(File.ReadAllText(chemin), WorkerProtocol.Json)
                          ?? throw new InvalidOperationException("worker.json illisible.");
+            config.DevoilerSecrets();
 
             if (service)
             {
@@ -90,6 +91,18 @@ namespace Sage100Api.Worker
         /// Vide : une seule société, BaseCial. Utilisateur, mot de passe et journaux absents : ceux du haut du fichier.
         /// </summary>
         public List<DossierWorker> Dossiers { get; set; } = new List<DossierWorker>();
+
+        /// <summary>Mots de passe et chaînes SQL chiffrés par Windows (« dpapi:… », outils\securite.ps1) : déchiffrés au démarrage.</summary>
+        public void DevoilerSecrets()
+        {
+            MotDePasse = Secrets.Devoiler(MotDePasse);
+            ChaineSql = Secrets.Devoiler(ChaineSql);
+            foreach (var d in Dossiers)
+            {
+                if (d.MotDePasse != null) d.MotDePasse = Secrets.Devoiler(d.MotDePasse);
+                if (d.ChaineSql != null) d.ChaineSql = Secrets.Devoiler(d.ChaineSql);
+            }
+        }
 
         readonly Dictionary<string, WorkerConfig> _parSociete = new Dictionary<string, WorkerConfig>(StringComparer.OrdinalIgnoreCase);
 

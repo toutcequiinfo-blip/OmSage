@@ -9,3 +9,5 @@ appsettings.Local.json
 deploy/sortie/
 # DLL Objets Métiers Sage (fichier de Sage, jamais dans Git)
 lib/sage-v9/
+# Clés des licences (la clé privée signe les licences des clients : à sauvegarder, jamais dans Git)
+lib/licence/

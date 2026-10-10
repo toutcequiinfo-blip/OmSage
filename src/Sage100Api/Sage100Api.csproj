@@ -16,6 +16,11 @@
     <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.10" />
     <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="8.0.1" />
     <PackageReference Include="Swashbuckle.AspNetCore" Version="6.9.0" />
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="8.0.0" />
+  </ItemGroup>
+  <!-- Clé publique des licences, créée par deploy\licence\generer-licence.ps1 sur le poste de développement (jamais dans Git). -->
+  <ItemGroup Condition="Exists('$(MSBuildThisFileDirectory)..\..\lib\licence\cle-publique.xml')">
+    <EmbeddedResource Include="$(MSBuildThisFileDirectory)..\..\lib\licence\cle-publique.xml" LogicalName="Sage100Api.cle-publique-licence.xml" />
   </ItemGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="Sage100Api.Tests" />

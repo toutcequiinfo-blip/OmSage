@@ -129,6 +129,19 @@ if (-not (Get-NetFirewallRule -Name "Sage100Api" -ErrorAction SilentlyContinue))
     New-NetFirewallRule -Name "Sage100Api" -DisplayName "Sage 100 API" -Direction Inbound -Protocol TCP -LocalPort $PortHttp, $PortHttps -Action Allow -Profile Any | Out-Null
 }
 
+Etape "Protection : secrets chiffrés, dossier réservé aux administrateurs et au compte des services"
+. "$PSScriptRoot\serveur\securite.ps1" -Dossier $Dossier
+try { ProtegerSecrets $Dossier } catch { Write-Host "  Chiffrement des secrets impossible : $($_.Exception.Message)" -ForegroundColor Yellow }
+try { VerrouillerDossier $Dossier } catch { Write-Host "  Verrouillage du dossier impossible : $($_.Exception.Message)" -ForegroundColor Yellow }
+
+# Licence : contrôlée dès que les clés existent (generer-licence.ps1 -CreerCles). Celle de ce PC est faite ici s'il n'en a pas.
+$identifiant = IdentifiantServeur
+if ((Test-Path "$depot\lib\licence\cle-privee.xml") -and -not (Test-Path "$Dossier\licence.lic")) {
+    & "$depot\deploy\licence\generer-licence.ps1" -Client "Développement $env:COMPUTERNAME" -Serveur $identifiant -NomServeur $env:COMPUTERNAME -Bases "*" -Sortie "$Dossier\licence.lic"
+}
+elseif (-not (Test-Path "$depot\lib\licence\cle-publique.xml")) { Write-Host "  Licence non contrôlée sur ce PC (pas encore de clés : deploy\licence\generer-licence.ps1 -CreerCles)." }
+Write-Host "  Identifiant de ce serveur pour la licence : $identifiant"
+
 Etape "Démarrage"
 foreach ($s in $services) {
     try { Start-Service -Name $s.Nom; Write-Host "  $($s.Nom) démarré" -ForegroundColor Green }

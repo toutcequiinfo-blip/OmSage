@@ -41,6 +41,11 @@ if (-not $iscc) {
     throw "Inno Setup introuvable. Installez-le (https://jrsoftware.org/isdl.php ou « winget install JRSoftware.InnoSetup »), puis relancez ce script."
 }
 
+# Licence : sans la clé publique, l'API livrée ne contrôlerait aucune licence.
+if (-not (Test-Path "$depot\lib\licence\cle-publique.xml")) {
+    throw "Clé de licence introuvable (lib\licence\cle-publique.xml). Créez les clés une fois : powershell -ExecutionPolicy Bypass -File $depot\deploy\licence\generer-licence.ps1 -CreerCles"
+}
+
 Etape "Préparation du paquet $Version"
 if (Test-Path $paquet) { Remove-Item $paquet -Recurse -Force }
 New-Item -ItemType Directory -Force "$paquet\api", "$paquet\worker", "$paquet\outils" | Out-Null
@@ -84,7 +89,7 @@ $modele = [ordered]@{ serveur = ""; baseCial = ""; baseCpta = ""; utilisateur = 
 [IO.File]::WriteAllText("$paquet\worker\worker.json", ($modele | ConvertTo-Json -Depth 5), $utf8)
 
 Etape "Outils de configuration du serveur"
-Copy-Item "$PSScriptRoot\serveur\configurer.ps1", "$PSScriptRoot\serveur\societes.ps1", "$PSScriptRoot\creer-certificats.ps1", "$PSScriptRoot\compte-lecture-seule.ps1" "$paquet\outils"
+Copy-Item "$PSScriptRoot\serveur\configurer.ps1", "$PSScriptRoot\serveur\societes.ps1", "$PSScriptRoot\serveur\securite.ps1", "$PSScriptRoot\creer-certificats.ps1", "$PSScriptRoot\compte-lecture-seule.ps1" "$paquet\outils"
 
 Etape "Fabrication de Setup.exe avec $iscc"
 & $iscc "/DVersion=$Version" "/DPaquet=$paquet" "/DSortie=$sortie" "/DSageVersion=$VersionSage" "$PSScriptRoot\installateur\Sage100Api.iss"
@@ -94,4 +99,5 @@ $setup = Join-Path $sortie "Sage100Api-Setup-$Version$(if ($VersionSage -ne 'V12
 Write-Host "`nTerminé : $setup" -ForegroundColor Green
 Write-Host "  Copiez ce fichier sur le serveur du client et lancez-le (clic droit > Exécuter en tant qu'administrateur si Windows le demande)."
 Write-Host "  Pour une mise à jour, relancez simplement un Setup plus récent : la configuration du serveur est gardée."
+Write-Host "  Licence du client : identifiant dans son LISEZMOI-installation.txt, puis deploy\licence\generer-licence.ps1."
 Start-Process explorer.exe "/select,`"$setup`""

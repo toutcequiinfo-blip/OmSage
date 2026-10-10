@@ -45,6 +45,15 @@ function Aleatoire($longueur) {
     -join ($octets | ForEach-Object { $car[$_ % $car.Length] })
 }
 
+. "$PSScriptRoot\securite.ps1" -Dossier $Dossier
+
+# Secrets chiffrés (illisibles copiés ailleurs) et dossier réservé aux administrateurs et au compte des services.
+function Proteger {
+    try { ProtegerSecrets $Dossier *>&1 | ForEach-Object { Ecrire "$_" } } catch { Ecrire "Chiffrement des secrets impossible : $($_.Exception.Message)" Yellow }
+    try { VerrouillerDossier $Dossier *>&1 | ForEach-Object { Ecrire "$_" } } catch { Ecrire "Verrouillage du dossier impossible : $($_.Exception.Message)" Yellow }
+    try { Ecrire "Identifiant de ce serveur pour la licence : $(IdentifiantServeur)" Cyan } catch { }
+}
+
 function ArreterServices {
     foreach ($s in $services) {
         $existant = Get-Service -Name $s.Nom -ErrorAction SilentlyContinue
@@ -126,6 +135,7 @@ try {
 
     if ($MiseAJour) {
         Ecrire "Mise à jour : configuration gardée."
+        Proteger
         DemarrerServices
         return
     }
@@ -217,9 +227,12 @@ try {
         catch { Ecrire "Compte lecture seule non créé : $($_.Exception.Message). Les tableaux de bord liront avec le compte des services." Yellow }
     }
 
+    # 7. Protection : secrets chiffrés, dossier verrouillé.
+    Proteger
+
     DemarrerServices
 
-    # 7. Vérification : l'API répond et le worker a ouvert Sage.
+    # 8. Vérification : l'API répond et le worker a ouvert Sage.
     Start-Sleep -Seconds 5
     try {
         $sante = Invoke-RestMethod -Uri "http://localhost:$($p.portHttp)/api/v1/sante" -TimeoutSec 20
@@ -227,7 +240,7 @@ try {
     }
     catch { Ecrire "L'API ne répond pas encore ($($_.Exception.Message)) : voir $Dossier\worker\logs et l'Observateur d'événements." Yellow }
 
-    # 8. Récapitulatif pour l'installateur et pour l'administrateur.
+    # 9. Récapitulatif pour l'installateur et pour l'administrateur.
     $https = Test-Path "$Dossier\api\appsettings.Https.json"
     $base = if ($https) { "https://$($env:COMPUTERNAME):$($p.portHttps)" } else { "http://$($env:COMPUTERNAME):$($p.portHttp)" }
     $recap = @"
@@ -241,12 +254,17 @@ Tableaux de bord    : $base/tableau-de-bord/
 Lecture documents   : $base/ocr/
 Documentation API   : http://localhost:$($p.portHttp)/swagger
 
-Clé d'API de la borne : $($a.Sage.ClesApi.borne)
+Clé d'API de la borne : $(DevoilerTexte "$($a.Sage.ClesApi.borne)")
 (à saisir au premier lancement de la borne et des applications ; gardée dans $cheminApi)
 
 $(if ($https) { "Tablettes : installez une fois $Dossier\certificats\autorite-sage100api.cer comme « Certificat CA »." } else { "HTTPS non configuré : la borne hors ligne exige le HTTPS sur les tablettes." })
 Journaux par mode de règlement : $cheminWorker (journauxParMode), puis Restart-Service Sage100Api.Worker
 Journal de l'installation : $journal
+
+Licence : identifiant de ce serveur = $(IdentifiantServeur)
+Envoyez-le à l'éditeur, puis déposez le fichier licence.lic reçu dans $Dossier (pris en compte sans redémarrer).
+État de la licence : http://localhost:$($p.portHttp)/api/v1/licence
+Mots de passe chiffrés par Windows (lisibles seulement sur ce serveur) ; dossier réservé aux administrateurs et au compte des services.
 "@
     [IO.File]::WriteAllText("$Dossier\LISEZMOI-installation.txt", $recap, $utf8)
     Ecrire "Terminé." Green
